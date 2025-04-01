@@ -1,0 +1,136 @@
+# PageIndex
+
+### **Document Index System for Reasoning-Based RAG**
+
+Traditional vector-based retrieval relies heavily on semantic similarity. But when working with professional documents that require domain expertise and multi-step reasoning, similarity search often falls short.
+
+**Reasoning-Based RAG** offers a better alternative: enabling LLMs to *think* and *reason* their way to the most relevant document sections. Inspired by **AlphaGo**, we leverage **tree search** to perform structured document retrieval.
+
+**PageIndex** is an indexing system that builds search trees from long documents, making them ready for reasoning-based RAG.
+
+Built by [Vectify AI](https://vectify.ai/pageindex)
+
+---
+
+## 🔍 What is PageIndex?
+
+**PageIndex** transforms lengthy PDF documents into a semantic **tree structure**, similar to a "table of contents" but optimized for use with Large Language Models (LLMs).
+It’s ideal for: financial reports, regulatory filings, academic textbooks, legal or technical manuals or any document that exceeds LLM context limits.
+
+### ✅ Key Features
+
+- **Scales to Massive Documents**  
+  Designed to handle hundreds or even thousands of pages with ease.
+    
+- **Hierarchical Tree Structure**  
+  Enables LLMs to traverse documents logically—like an intelligent, LLM-optimized table of contents.
+
+- **Precise Page Referencing**  
+  Every node contains its own summary and start/end page physical index, allowing pinpoint retrieval.
+
+- **Chunk-Free Segmentation**  
+  No arbitrary chunking. Nodes follow the natural structure of the document.
+
+---
+
+## 📦 PageIndex Format
+
+Here is an example output. See more [example documents](https://github.com/VectifyAI/PageIndex/tree/main/docs) and [generated trees](https://github.com/VectifyAI/PageIndex/tree/main/results).
+
+```json
+{
+  "title": "Financial Stability",
+  "node_id": "0006",
+  "start_index": 21,
+  "end_index": 22,
+  "summary": "The Federal Reserve ...",
+  "child_nodes": [
+    {
+      "title": "Monitoring Financial Vulnerabilities",
+      "node_id": "0007",
+      "start_index": 22,
+      "end_index": 28,
+      "summary": "The Federal Reserve's monitoring ..."
+    },
+    {
+      "title": "Domestic and International Cooperation and Coordination",
+      "node_id": "0008",
+      "start_index": 28,
+      "end_index": 31,
+      "summary": "In 2023, the Federal Reserve collaborated ..."
+    }
+  ]
+}
+
+```
+Notice: the node_id and summary generation function will be added soon.
+
+## 🧠 Reasoning-Based RAG with PageIndex
+
+Use PageIndex to build **reasoning-based retrieval systems** without relying on semantic similarity. Great for domain-specific tasks where nuance matters.
+
+### 🛠️ Example Prompt
+
+```python
+prompt = f"""
+You are given a question and a tree structure of a document.
+You need to find all nodes that are likely to contain the answer.
+
+Question: {question}
+
+Document tree structure: {structure}
+
+Reply in the following JSON format:
+{{
+  "thinking": <reasoning about where to look>,
+  "node_list": [node_id1, node_id2, ...]
+}}
+"""
+```
+
+## 🚀 Usage
+
+Follow these steps to generate a PageIndex tree from a PDF document.
+
+### 1. Install dependencies
+
+```bash
+pip3 install -r requirements.txt
+```
+
+### 2. Set your OpenAI API key
+
+Create a `.env` file in the root directory and add your API key:
+
+```bash
+CHATGPT_API_KEY=your_openai_key_here
+```
+
+### 3. Run PageIndex on your PDF
+
+```bash
+python3 page_index.py --pdf_path /path/to/your/document.pdf
+```
+
+The results will be saved in the `./results/` directory.
+
+## 🛤 Roadmap
+
+- [ ]  Add node summary and document selection
+- [ ]  Technical report on PageIndex design
+- [ ]  Efficient tree search algorithms for large documents
+- [ ]  Integration with vector-based semantic retrieval
+
+## 📈 Case Study: Mafin 2.5
+
+[Mafin 2.5](https://vectify.ai/blog/Mafin2.5) is a state-of-the-art reasoning-based RAG model designed specifically for financial document analysis. Built on top of **PageIndex**, it achieved an impressive **98.7% accuracy** on the [FinanceBench](https://github.com/VectifyAI/Mafin2.5-FinanceBench) benchmark—significantly outperforming traditional vector-based RAG systems.
+
+PageIndex’s hierarchical indexing enabled precise navigation and extraction of relevant content from complex financial reports, such as SEC filings and earnings disclosures.
+
+👉 See full [benchmark results](https://github.com/VectifyAI/Mafin2.5-FinanceBench) for detailed comparisons and performance metrics.
+
+## 📬 Contact Us
+
+Need customized support for your documents or reasoning-based RAG system?
+
+👉 [Contact us here](https://ii2abc2jejf.typeform.com/to/meB40zV0)
