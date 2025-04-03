@@ -10,7 +10,11 @@ import copy
 import asyncio
 import pymupdf
 from io import BytesIO
+from dotenv import load_dotenv
+load_dotenv()
 import logging
+
+CHATGPT_API_KEY = os.getenv("CHATGPT_API_KEY")
 
 
 def count_tokens(text, model):
@@ -18,7 +22,7 @@ def count_tokens(text, model):
     tokens = enc.encode(text)
     return len(tokens)
 
-def ChatGPT_API_with_finish_reason(model, prompt, api_key, chat_history=None):
+def ChatGPT_API_with_finish_reason(model, prompt, api_key=CHATGPT_API_KEY, chat_history=None):
     max_retries = 10
     client = openai.OpenAI(api_key=api_key)
     for i in range(max_retries):
@@ -50,7 +54,7 @@ def ChatGPT_API_with_finish_reason(model, prompt, api_key, chat_history=None):
 
 
 
-def ChatGPT_API(model, prompt, api_key, chat_history=None):
+def ChatGPT_API(model, prompt, api_key=CHATGPT_API_KEY, chat_history=None):
     max_retries = 10
     client = openai.OpenAI(api_key=api_key)
     for i in range(max_retries):
@@ -78,7 +82,7 @@ def ChatGPT_API(model, prompt, api_key, chat_history=None):
                 return "Error"
             
 
-async def ChatGPT_API_async(model, prompt, api_key):
+async def ChatGPT_API_async(model, prompt, api_key=CHATGPT_API_KEY):
     max_retries = 10
     client = openai.AsyncOpenAI(api_key=api_key)
     for i in range(max_retries):
@@ -151,7 +155,7 @@ def write_node_id(data, node_id=0):
         data['node_id'] = str(node_id).zfill(4)
         node_id += 1
         for key in list(data.keys()):
-            if 'child_nodes' in key:
+            if 'nodes' in key:
                 node_id = write_node_id(data[key], node_id)
     elif isinstance(data, list):
         for index in range(len(data)):
@@ -161,10 +165,10 @@ def write_node_id(data, node_id=0):
 def get_nodes(structure):
     if isinstance(structure, dict):
         structure_node = copy.deepcopy(structure)
-        structure_node.pop('child_nodes', None)
+        structure_node.pop('nodes', None)
         nodes = [structure_node]
         for key in list(structure.keys()):
-            if 'child_nodes' in key:
+            if 'nodes' in key:
                 nodes.extend(get_nodes(structure[key]))
         return nodes
     elif isinstance(structure, list):
@@ -177,8 +181,8 @@ def structure_to_list(structure):
     if isinstance(structure, dict):
         nodes = []
         nodes.append(structure)
-        if 'child_nodes' in structure:
-            nodes.extend(structure_to_list(structure['child_nodes']))
+        if 'nodes' in structure:
+            nodes.extend(structure_to_list(structure['nodes']))
         return nodes
     elif isinstance(structure, list):
         nodes = []
@@ -189,14 +193,14 @@ def structure_to_list(structure):
     
 def get_leaf_nodes(structure):
     if isinstance(structure, dict):
-        if not structure['child_nodes']:
+        if not structure['nodes']:
             structure_node = copy.deepcopy(structure)
-            structure_node.pop('child_nodes', None)
+            structure_node.pop('nodes', None)
             return [structure_node]
         else:
             leaf_nodes = []
             for key in list(structure.keys()):
-                if 'child_nodes' in key:
+                if 'nodes' in key:
                     leaf_nodes.extend(get_leaf_nodes(structure[key]))
             return leaf_nodes
     elif isinstance(structure, list):
@@ -212,7 +216,7 @@ def is_leaf_node(data, node_id):
             if data.get('node_id') == node_id:
                 return data
             for key in data.keys():
-                if 'child_nodes' in key:
+                if 'nodes' in key:
                     result = find_node(data[key], node_id)
                     if result:
                         return result
@@ -227,7 +231,7 @@ def is_leaf_node(data, node_id):
     node = find_node(data, node_id)
 
     # Check if the node is a leaf node
-    if node and not node.get('child_nodes'):
+    if node and not node.get('nodes'):
         return True
     return False
 
@@ -353,7 +357,7 @@ def list_to_tree(data):
             'title': item.get('title'),
             'start_index': item.get('start_index'),
             'end_index': item.get('end_index'),
-            'child_nodes': []
+            'nodes': []
         }
         
         nodes[structure] = node
@@ -364,7 +368,7 @@ def list_to_tree(data):
         if parent_structure:
             # Add as child to parent if parent exists
             if parent_structure in nodes:
-                nodes[parent_structure]['child_nodes'].append(node)
+                nodes[parent_structure]['nodes'].append(node)
             else:
                 root_nodes.append(node)
         else:
@@ -373,10 +377,10 @@ def list_to_tree(data):
     
     # Helper function to clean empty children arrays
     def clean_node(node):
-        if not node['child_nodes']:
-            del node['child_nodes']
+        if not node['nodes']:
+            del node['nodes']
         else:
-            for child in node['child_nodes']:
+            for child in node['nodes']:
                 clean_node(child)
         return node
     
@@ -424,7 +428,7 @@ def get_page_tokens(pdf_path, model="gpt-4o-2024-11-20", pdf_parser="PyPDF2"):
 def get_text_of_pdf_pages(pdf_pages, start_page, end_page):
     text = ""
     for page_num in range(start_page-1, end_page):
-        text += pdf_pages[page_num]
+        text += pdf_pages[page_num][0]
     return text
 
 def get_number_of_pages(pdf_path):
@@ -460,8 +464,8 @@ def clean_structure_post(data):
         data.pop('page_number', None)
         data.pop('start_index', None)
         data.pop('end_index', None)
-        if 'child_nodes' in data:
-            clean_structure_post(data['child_nodes'])
+        if 'nodes' in data:
+            clean_structure_post(data['nodes'])
     elif isinstance(data, list):
         for section in data:
             clean_structure_post(section)
@@ -471,8 +475,8 @@ def clean_structure_post(data):
 def remove_structure_text(data):
     if isinstance(data, dict):
         data.pop('text', None)
-        if 'child_nodes' in data:
-            remove_structure_text(data['child_nodes'])
+        if 'nodes' in data:
+            remove_structure_text(data['nodes'])
     elif isinstance(data, list):
         for item in data:
             remove_structure_text(item)
@@ -522,3 +526,60 @@ def convert_page_to_int(data):
                 # Keep original value if conversion fails
                 pass
     return data
+
+def write_node_id(data, node_id=0):
+    if isinstance(data, dict):
+        data['node_id'] = str(node_id).zfill(4)
+        node_id += 1
+        for key in list(data.keys()):
+            if 'nodes' in key:
+                node_id = write_node_id(data[key], node_id)
+    elif isinstance(data, list):
+        for index in range(len(data)):
+            node_id = write_node_id(data[index], node_id)
+    return node_id
+
+
+def add_node_text(node, pdf_pages):
+    if isinstance(node, dict):
+        start_page = node.get('start_index')
+        end_page = node.get('end_index')
+        node['text'] = get_text_of_pdf_pages(pdf_pages, start_page, end_page)
+        if 'nodes' in node:
+            add_node_text(node['nodes'], pdf_pages)
+    elif isinstance(node, list):
+        for index in range(len(node)):
+            add_node_text(node[index], pdf_pages)
+    return
+
+async def generate_node_summary(node, model=None):
+    prompt = f"""You are given a part of a document, your task is to generate a description of the partial document about what are main points covered in the partial document.
+
+    Partial Document Text: {node['text']}
+    
+    Directly return the description, do not include any other text.
+    """
+    response = await ChatGPT_API_async(model, prompt)
+    return response
+
+
+async def generate_summaries_for_structure(structure, model=None):
+    nodes = structure_to_list(structure)
+    tasks = [generate_node_summary(node, model=model) for node in nodes]
+    summaries = await asyncio.gather(*tasks)
+    
+    for node, summary in zip(nodes, summaries):
+        node['summary'] = summary
+    return structure
+
+
+def generate_doc_description(structure, model=None):
+    prompt = f"""Your are an expert in generating descriptions for a document.
+    You are given a structure of a document. Your task is to generate a one-sentence description for the document, which makes it easy to distinguish the document from other documents.
+        
+    Document Structure: {structure}
+    
+    Directly return the description, do not include any other text.
+    """
+    response = ChatGPT_API(model, prompt)
+    return response

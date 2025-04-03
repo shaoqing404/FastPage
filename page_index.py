@@ -9,12 +9,9 @@ import re
 from utils import *
 import os
 from types import SimpleNamespace as config
-from dotenv import load_dotenv
-load_dotenv()
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
 
-CHATGPT_API_KEY = os.getenv("CHATGPT_API_KEY")
 
 ################### check title in page #########################################################
 def check_title_appearance(item, page_list, start_index=1, model=None):    
@@ -43,7 +40,7 @@ def check_title_appearance(item, page_list, start_index=1, model=None):
     }}
     Directly return the final JSON structure. Do not output anything else."""
 
-    response = ChatGPT_API(model=model, prompt=prompt, api_key=CHATGPT_API_KEY)
+    response = ChatGPT_API(model=model, prompt=prompt)
     response = extract_json(response)
     if 'answer' in response:
         answer = response['answer']
@@ -71,7 +68,7 @@ def check_title_appearance_in_start(title, page_text, model=None, logger=None):
     }}
     Directly return the final JSON structure. Do not output anything else."""
 
-    response = ChatGPT_API(model=model, prompt=prompt, api_key=CHATGPT_API_KEY)
+    response = ChatGPT_API(model=model, prompt=prompt)
     response = extract_json(response)
     if logger:
         logger.info(f"Response: {response}")
@@ -119,7 +116,7 @@ def toc_detector_single_page(content, model=None):
     Directly return the final JSON structure. Do not output anything else.
     Please note: abstract,summary, notation list, figure list, table list, etc. are not table of contents."""
 
-    response = ChatGPT_API(model=model, prompt=prompt, api_key=CHATGPT_API_KEY)
+    response = ChatGPT_API(model=model, prompt=prompt)
     # print('response', response)
     json_content = extract_json(response)    
     return json_content['toc_detected']
@@ -138,7 +135,7 @@ def check_if_toc_extraction_is_complete(content, toc, model=None):
     Directly return the final JSON structure. Do not output anything else."""
 
     prompt = prompt + '\n Document:\n' + content + '\n Table of contents:\n' + toc
-    response = ChatGPT_API(model=model, prompt=prompt, api_key=CHATGPT_API_KEY)
+    response = ChatGPT_API(model=model, prompt=prompt)
     json_content = extract_json(response)
     return json_content['completed']
 
@@ -156,7 +153,7 @@ def check_if_toc_transformation_is_complete(content, toc, model=None):
     Directly return the final JSON structure. Do not output anything else."""
 
     prompt = prompt + '\n Raw Table of contents:\n' + content + '\n Cleaned Table of contents:\n' + toc
-    response = ChatGPT_API(model=model, prompt=prompt, api_key=CHATGPT_API_KEY)
+    response = ChatGPT_API(model=model, prompt=prompt)
     json_content = extract_json(response)
     return json_content['completed']
 
@@ -168,7 +165,7 @@ def extract_toc_content(content, model=None):
 
     Directly return the full table of contents content. Do not output anything else."""
 
-    response, finish_reason = ChatGPT_API_with_finish_reason(model=model, prompt=prompt, api_key=CHATGPT_API_KEY)
+    response, finish_reason = ChatGPT_API_with_finish_reason(model=model, prompt=prompt)
     
     if_complete = check_if_toc_transformation_is_complete(content, response, model)
     if if_complete == "yes" and finish_reason == "finished":
@@ -179,7 +176,7 @@ def extract_toc_content(content, model=None):
         {"role": "assistant", "content": response},    
     ]
     prompt = f"""please continue the generation of table of contents , directly output the remaining part of the structure"""
-    new_response, finish_reason = ChatGPT_API_with_finish_reason(model=model, prompt=prompt, api_key=CHATGPT_API_KEY, chat_history=chat_history)
+    new_response, finish_reason = ChatGPT_API_with_finish_reason(model=model, prompt=prompt, chat_history=chat_history)
     response = response + new_response
     if_complete = check_if_toc_transformation_is_complete(content, response)
     
@@ -189,7 +186,7 @@ def extract_toc_content(content, model=None):
             {"role": "assistant", "content": response},    
         ]
         prompt = f"""please continue the generation of table of contents , directly output the remaining part of the structure"""
-        new_response, finish_reason = ChatGPT_API_with_finish_reason(model=model, prompt=prompt, api_key=CHATGPT_API_KEY, chat_history=chat_history)
+        new_response, finish_reason = ChatGPT_API_with_finish_reason(model=model, prompt=prompt, chat_history=chat_history)
         response = response + new_response
         if_complete = check_if_toc_transformation_is_complete(content, response)
         
@@ -214,7 +211,7 @@ def detect_page_index(toc_content, model=None):
     }}
     Directly return the final JSON structure. Do not output anything else."""
 
-    response = ChatGPT_API(model=model, prompt=prompt, api_key=CHATGPT_API_KEY)
+    response = ChatGPT_API(model=model, prompt=prompt)
     json_content = extract_json(response)
     return json_content['page_index_given_in_toc']
 
@@ -263,7 +260,7 @@ def toc_index_extractor(toc, content, model=None):
     Directly return the final JSON structure. Do not output anything else."""
 
     prompt = tob_extractor_prompt + '\nTable of contents:\n' + str(toc) + '\nDocument pages:\n' + content
-    response = ChatGPT_API(model=model, prompt=prompt, api_key=CHATGPT_API_KEY)
+    response = ChatGPT_API(model=model, prompt=prompt)
     json_content = extract_json(response)    
     return json_content
 
@@ -291,7 +288,7 @@ def toc_transformer(toc_content, model=None):
     Directly return the final JSON structure, do not output anything else. """
 
     prompt = init_prompt + '\n Given table of contents\n:' + toc_content
-    last_complete, finish_reason = ChatGPT_API_with_finish_reason(model=model, prompt=prompt, api_key=CHATGPT_API_KEY)
+    last_complete, finish_reason = ChatGPT_API_with_finish_reason(model=model, prompt=prompt)
     if_complete = check_if_toc_transformation_is_complete(toc_content, last_complete, model)
     if if_complete == "yes" and finish_reason == "finished":
         last_complete = extract_json(last_complete)
@@ -315,7 +312,7 @@ def toc_transformer(toc_content, model=None):
 
         Please continue the json structure, directly output the remaining part of the json structure."""
 
-        new_complete, finish_reason = ChatGPT_API_with_finish_reason(model=model, prompt=prompt, api_key=CHATGPT_API_KEY)
+        new_complete, finish_reason = ChatGPT_API_with_finish_reason(model=model, prompt=prompt)
 
         if new_complete.startswith('```json'):
             new_complete =  get_json_content(new_complete)
@@ -363,7 +360,7 @@ def remove_page_number(data):
     if isinstance(data, dict):
         data.pop('page_number', None)  
         for key in list(data.keys()):
-            if 'child_nodes' in key:
+            if 'nodes' in key:
                 remove_page_number(data[key])
     elif isinstance(data, list):
         for item in data:
@@ -476,7 +473,7 @@ def add_page_number_to_toc(part, structure, model=None):
     Directly return the final JSON structure. Do not output anything else."""
 
     prompt = fill_prompt_seq + f"\n\nCurrent Partial Document:\n{part}\n\nGiven Structure\n{json.dumps(structure, indent=2)}\n"
-    current_json_raw = ChatGPT_API(model=model, prompt=prompt, api_key=CHATGPT_API_KEY)
+    current_json_raw = ChatGPT_API(model=model, prompt=prompt)
     json_result = extract_json(current_json_raw)
     
     for item in json_result:
@@ -525,7 +522,7 @@ def generate_toc_continue(toc_content, part, model="gpt-4o-2024-11-20"):
     Directly return the additional part of the final JSON structure. Do not output anything else."""
 
     prompt = prompt + '\nGiven text\n:' + part + '\nPrevious tree structure\n:' + json.dumps(toc_content, indent=2)
-    response, finish_reason = ChatGPT_API_with_finish_reason(model=model, prompt=prompt, api_key=CHATGPT_API_KEY)
+    response, finish_reason = ChatGPT_API_with_finish_reason(model=model, prompt=prompt)
     if finish_reason == 'finished':
         return extract_json(response)
     else:
@@ -557,7 +554,7 @@ def generate_toc_init(part, model=None):
     Directly return the final JSON structure. Do not output anything else."""
 
     prompt = prompt + '\nGiven text\n:' + part
-    response, finish_reason = ChatGPT_API_with_finish_reason(model=model, prompt=prompt, api_key=CHATGPT_API_KEY)
+    response, finish_reason = ChatGPT_API_with_finish_reason(model=model, prompt=prompt)
 
     if finish_reason == 'finished':
          return extract_json(response)
@@ -738,7 +735,7 @@ def single_toc_item_index_fixer(section_title, content, model="gpt-4o-2024-11-20
     Directly return the final JSON structure. Do not output anything else."""
 
     prompt = tob_extractor_prompt + '\nSection Title:\n' + str(section_title) + '\nDocument pages:\n' + content
-    response = ChatGPT_API(model=model, prompt=prompt, api_key=CHATGPT_API_KEY)
+    response = ChatGPT_API(model=model, prompt=prompt)
     json_content = extract_json(response)    
     return convert_physical_index_to_int(json_content['physical_index'])
 
@@ -965,14 +962,14 @@ def process_large_node_recursively(node, page_list, opt=None, logger=None):
         node_toc_tree = check_title_appearance_in_start_parallel(node_toc_tree, page_list, model=opt.model, logger=logger)
         
         if node['title'].strip() == node_toc_tree[0]['title'].strip():
-            node['child_nodes'] = post_processing(node_toc_tree[1:], node['end_index'])
+            node['nodes'] = post_processing(node_toc_tree[1:], node['end_index'])
             node['end_index'] = node_toc_tree[1]['start_index']
         else:
-            node['child_nodes'] = post_processing(node_toc_tree, node['end_index'])
+            node['nodes'] = post_processing(node_toc_tree, node['end_index'])
             node['end_index'] = node_toc_tree[0]['start_index']
         
-    if 'child_nodes' in node and node['child_nodes']:
-        for child_node in node['child_nodes']:
+    if 'nodes' in node and node['nodes']:
+        for child_node in node['nodes']:
             process_large_node_recursively(child_node, page_list, opt, logger=logger)
     
     return node
@@ -1033,7 +1030,23 @@ def page_index_main(doc, opt=None):
     logger.info({'total_token': sum([page[1] for page in page_list])})
     
     structure = tree_parser(page_list, opt, logger=logger)
-    return structure
+    if opt.if_add_node_id == 'yes':
+        write_node_id(structure)    
+    if opt.if_add_node_summary == 'yes':
+        add_node_text(structure, page_list)
+        asyncio.run(generate_summaries_for_structure(structure, model=opt.model))
+        remove_structure_text(structure)  
+        if opt.if_add_doc_description == 'yes':
+            doc_description = generate_doc_description(structure, model=opt.model)
+            return {
+                'doc_name': os.path.basename(doc),
+                'doc_description': doc_description,
+                'structure': structure,
+            }
+    return {
+        'doc_name': os.path.basename(doc),
+        'structure': structure,
+    }
 
 
 
@@ -1048,15 +1061,23 @@ if __name__ == "__main__":
                       help='Maximum number of pages per node')
     parser.add_argument('--max-tokens-per-node', type=int, default=20000,
                       help='Maximum number of tokens per node')
-    
+    parser.add_argument('--if-add-node-id', type=str, default='yes',
+                      help='Whether to add node id to the node')
+    parser.add_argument('--if-add-node-summary', type=str, default='no',
+                      help='Whether to add summary to the node')
+    parser.add_argument('--if-add-doc-description', type=str, default='yes',
+                      help='Whether to add doc description to the doc')
     args = parser.parse_args()
-    
-    # Configure options
+        
+        # Configure options
     opt = config(
         model=args.model,
         toc_check_page_num=args.toc_check_pages,
         max_page_num_each_node=args.max_pages_per_node,
         max_token_num_each_node=args.max_tokens_per_node,
+        if_add_node_id=args.if_add_node_id,
+        if_add_node_summary=args.if_add_node_summary,
+        if_add_doc_description=args.if_add_doc_description
     )
 
     # Process the PDF

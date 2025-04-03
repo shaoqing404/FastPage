@@ -1,12 +1,13 @@
 # PageIndex
 
 ### **Document Index System for Reasoning-Based RAG**
+Frustrated with vector database retrieval accuracy for long professional documents? You need a reasoning-based native index for your RAG system.
 
 Traditional vector-based retrieval relies heavily on semantic similarity. But when working with professional documents that require domain expertise and multi-step reasoning, similarity search often falls short.
 
 **Reasoning-Based RAG** offers a better alternative: enabling LLMs to *think* and *reason* their way to the most relevant document sections. Inspired by **AlphaGo**, we leverage **tree search** to perform structured document retrieval.
 
-**PageIndex** is an indexing system that builds search trees from long documents, making them ready for reasoning-based RAG.
+**[PageIndex](https://vectify.ai/pageindex)** is an indexing system that builds search trees from long documents, making them ready for reasoning-based RAG.
 
 Built by [Vectify AI](https://vectify.ai/pageindex)
 
@@ -44,7 +45,7 @@ Here is an example output. See more [example documents](https://github.com/Vecti
   "start_index": 21,
   "end_index": 22,
   "summary": "The Federal Reserve ...",
-  "child_nodes": [
+  "nodes": [
     {
       "title": "Monitoring Financial Vulnerabilities",
       "node_id": "0007",
@@ -111,12 +112,21 @@ CHATGPT_API_KEY=your_openai_key_here
 ```bash
 python3 page_index.py --pdf_path /path/to/your/document.pdf
 ```
+You can customize the processing with additional optional arguments:
 
-The results will be saved in the `./results/` directory.
+```bash
+--model                 OpenAI model to use (default: gpt-4o-2024-11-20)
+--toc-check-pages       Pages to check for table of contents (default: 20)
+--max-pages-per-node    Max pages per node (default: 10)
+--max-tokens-per-node   Max tokens per node (default: 20000)
+--if-add-node-id        Add node ID (yes/no, default: yes)
+--if-add-node-summary   Add node summary (yes/no, default: no)
+--if-add-doc-description Add doc description (yes/no, default: yes)
+```
 
 ## 🛤 Roadmap
 
-- [ ]  Add node summary and document selection
+- [ ]  Document-level retrieval
 - [ ]  Technical report on PageIndex design
 - [ ]  Efficient tree search algorithms for large documents
 - [ ]  Integration with vector-based semantic retrieval
