@@ -133,4 +133,6 @@ PageIndex’s hierarchical indexing enabled precise navigation and extraction of
 
 Need customized support for your documents or reasoning-based RAG system?
 
-👉 [Contact us here](https://ii2abc2jejf.typeform.com/to/meB40zV0)
+:loudspeaker: [Join our Discord](https://discord.com/invite/nnyyEdT2RG)
+
+:envelope: [Leave us a Message](https://ii2abc2jejf.typeform.com/to/meB40zV0)
