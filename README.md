@@ -139,6 +139,14 @@ PageIndex’s hierarchical indexing enabled precise navigation and extraction of
 
 👉 See full [benchmark results](https://github.com/VectifyAI/Mafin2.5-FinanceBench) for detailed comparisons and performance metrics.
 
+## 🚧 Notice
+
+This project is in its early beta development, and all progress will remain open and transparent.  
+Due to the non-deterministic nature of large language models (LLMs) and the diverse structures of PDF documents, you may encounter bugs or instability during usage.
+
+We welcome you to raise issues, reach out with questions, or contribute directly to the project.  
+Together, let's push forward the revolution of reasoning-based RAG systems.
+
 ## 📬 Contact Us
 
 Need customized support for your documents or reasoning-based RAG system?
