@@ -1,9 +1,9 @@
 # PageIndex
 
 ### **Document Index System for Reasoning-Based RAG**
-Frustrated with vector database retrieval accuracy for long professional documents? You need a reasoning-based native index for your RAG system.
+Are you frustrated with vector database retrieval accuracy for long professional documents? You need a reasoning-based native index for your RAG system.
 
-Traditional vector-based retrieval relies heavily on semantic similarity. But when working with professional documents that require domain expertise and multi-step reasoning, similarity search often falls short.
+Traditional vector-based retrieval relies heavily on semantic similarity. However, when working with professional documents that require domain expertise and multi-step reasoning, similarity search often falls short.
 
 **Reasoning-Based RAG** offers a better alternative: enabling LLMs to *think* and *reason* their way to the most relevant document sections. Inspired by **AlphaGo**, we leverage **tree search** to perform structured document retrieval.
 
@@ -27,7 +27,7 @@ It’s ideal for: financial reports, regulatory filings, academic textbooks, leg
   Enables LLMs to traverse documents logically—like an intelligent, LLM-optimized table of contents.
 
 - **Precise Page Referencing**  
-  Every node contains its own summary and start/end page physical index, allowing pinpoint retrieval.
+  Every node contains its summary and start/end page physical index, allowing pinpoint retrieval.
 
 - **Chunk-Free Segmentation**  
   No arbitrary chunking. Nodes follow the natural structure of the document.
@@ -139,10 +139,18 @@ PageIndex’s hierarchical indexing enabled precise navigation and extraction of
 
 👉 See full [benchmark results](https://github.com/VectifyAI/Mafin2.5-FinanceBench) for detailed comparisons and performance metrics.
 
+## 🚧 Notice
+
+This project is in its early beta development, and all progress will remain open and transparent.  
+Due to the non-deterministic nature of large language models (LLMs) and the diverse structures of PDF documents, you may encounter bugs or instability during usage.
+
+We welcome you to raise issues, reach out with questions, or contribute directly to the project.  
+Together, let's push forward the revolution of reasoning-based RAG systems.
+
 ## 📬 Contact Us
 
 Need customized support for your documents or reasoning-based RAG system?
 
 :loudspeaker: [Join our Discord](https://discord.com/invite/nnyyEdT2RG)
 
-:envelope: [Leave us a Message](https://ii2abc2jejf.typeform.com/to/meB40zV0)
+:envelope: [Leave us a message](https://ii2abc2jejf.typeform.com/to/meB40zV0)
