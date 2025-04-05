@@ -64,8 +64,6 @@ Here is an example output. See more [example documents](https://github.com/Vecti
 }
 
 ```
-Notice: the node_id and summary generation function will be added soon.
-
 ## 🧠 Reasoning-Based RAG with PageIndex
 
 Use PageIndex to build **reasoning-based retrieval systems** without relying on semantic similarity. Great for domain-specific tasks where nuance matters.
