@@ -108,7 +108,7 @@ CHATGPT_API_KEY=your_openai_key_here
 ### 3. Run PageIndex on your PDF
 
 ```bash
-python3 page_index.py --pdf_path /path/to/your/document.pdf
+python3 run_pageindex.py --pdf_path /path/to/your/document.pdf
 ```
 You can customize the processing with additional optional arguments:
 
