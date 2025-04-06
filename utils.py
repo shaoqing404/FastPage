@@ -492,24 +492,25 @@ def check_token_limit(structure, limit=110000):
             print("Start Index:", node['start_index'])
             print("End Index:", node['end_index'])
             print("Title:", node['title'])
-            # print(node['text'])
             print("\n")
 
 
 def convert_physical_index_to_int(data):
     if isinstance(data, list):
         for i in range(len(data)):
-            if isinstance(data[i]['physical_index'], str):
-                if data[i]['physical_index'].startswith('<physical_index_'):
-                    data[i]['physical_index'] = int(data[i]['physical_index'].split('_')[-1].rstrip('>').strip())
-                elif data[i]['physical_index'].startswith('physical_index_'):
-                    data[i]['physical_index'] = int(data[i]['physical_index'].split('_')[-1].strip())
+            # Check if item is a dictionary and has 'physical_index' key
+            if isinstance(data[i], dict) and 'physical_index' in data[i]:
+                if isinstance(data[i]['physical_index'], str):
+                    if data[i]['physical_index'].startswith('<physical_index_'):
+                        data[i]['physical_index'] = int(data[i]['physical_index'].split('_')[-1].rstrip('>').strip())
+                    elif data[i]['physical_index'].startswith('physical_index_'):
+                        data[i]['physical_index'] = int(data[i]['physical_index'].split('_')[-1].strip())
     elif isinstance(data, str):
         if data.startswith('<physical_index_'):
             data = int(data.split('_')[-1].rstrip('>').strip())
         elif data.startswith('physical_index_'):
             data = int(data.split('_')[-1].strip())
-        ###check data is int
+        # Check data is int
         if isinstance(data, int):
             return data
         else:

@@ -27,7 +27,7 @@ def check_title_appearance(item, page_list, start_index=1, model=None):
     prompt = f"""
     Your job is to check if the given section appears or starts in the given page_text.
 
-    Note: ignore any space inconsistency in the page_text.
+    Note: do fuzzy matching, ignore any space inconsistency in the page_text.
 
     The given section title is {title}.
     The given page_text is {page_text}.
@@ -178,7 +178,7 @@ def extract_toc_content(content, model=None):
     prompt = f"""please continue the generation of table of contents , directly output the remaining part of the structure"""
     new_response, finish_reason = ChatGPT_API_with_finish_reason(model=model, prompt=prompt, chat_history=chat_history)
     response = response + new_response
-    if_complete = check_if_toc_transformation_is_complete(content, response)
+    if_complete = check_if_toc_transformation_is_complete(content, response, model)
     
     while not (if_complete == "yes" and finish_reason == "finished"):
         chat_history = [
@@ -188,7 +188,7 @@ def extract_toc_content(content, model=None):
         prompt = f"""please continue the generation of table of contents , directly output the remaining part of the structure"""
         new_response, finish_reason = ChatGPT_API_with_finish_reason(model=model, prompt=prompt, chat_history=chat_history)
         response = response + new_response
-        if_complete = check_if_toc_transformation_is_complete(content, response)
+        if_complete = check_if_toc_transformation_is_complete(content, response, model)
         
         # Optional: Add a maximum retry limit to prevent infinite loops
         if len(chat_history) > 5:  # Arbitrary limit of 10 attempts
@@ -207,6 +207,7 @@ def detect_page_index(toc_content, model=None):
 
     Reply format:
     {{
+        "thinking": <why do you think there are page numbers/indices given within the table of contents>
         "page_index_given_in_toc": "<yes or no>"
     }}
     Directly return the final JSON structure. Do not output anything else."""
@@ -318,7 +319,7 @@ def toc_transformer(toc_content, model=None):
             new_complete =  get_json_content(new_complete)
             last_complete = last_complete+new_complete
 
-        if_complete = check_if_toc_transformation_is_complete(toc_content, last_complete)
+        if_complete = check_if_toc_transformation_is_complete(toc_content, last_complete, model)
         
 
     last_complete = json.loads(last_complete)
@@ -615,7 +616,7 @@ def process_toc_with_page_numbers(toc_content, toc_page_list, page_list, model=N
     
     start_page_index = toc_page_list[-1] + 1
     main_content = ""
-    for page_index in range(start_page_index, start_page_index + 20):
+    for page_index in range(start_page_index, min(start_page_index + opt.toc_check_page_num, len(page_list))):
         main_content += f"<physical_index_{page_index+1}>\n{page_list[page_index][0]}\n<physical_index_{page_index+1}>\n\n"
 
     toc_with_physical_index = toc_index_extractor(toc_no_page_number, main_content, model)
@@ -784,10 +785,7 @@ def fix_incorrect_toc(toc_with_page_number, page_list, incorrect_results, start_
             page_contents.append(page_text)
         content_range = ''.join(page_contents)
         
-        physical_index = single_toc_item_index_fixer(incorrect_item['title'], content_range, model)
-        
-        # Convert to int for checking
-        physical_index_int = convert_physical_index_to_int(physical_index)
+        physical_index_int = single_toc_item_index_fixer(incorrect_item['title'], content_range, model)
         
         # Check if the result is correct
         check_item = incorrect_item.copy()
@@ -978,33 +976,23 @@ def tree_parser(page_list, opt, logger=None):
     check_toc_result = check_toc(page_list, opt)    
     logger.info(check_toc_result)
 
-    if check_toc_result['toc_content'] is None:
+    if check_toc_result['toc_content'] is not None and check_toc_result['page_index_given_in_toc'] == 'yes':
+        toc_with_page_number = meta_processor(
+            page_list, 
+            mode='process_toc_with_page_numbers', 
+            start_index=1, 
+            toc_content=check_toc_result['toc_content'], 
+            toc_page_list=check_toc_result['toc_page_list'], 
+            opt=opt,
+            logger=logger)
+    else:
         toc_with_page_number = meta_processor(
             page_list, 
             mode='process_no_toc', 
             start_index=1, 
             opt=opt,
             logger=logger)
-    else:
-        if check_toc_result['page_index_given_in_toc'] == 'yes':
-            toc_with_page_number = meta_processor(
-                page_list, 
-                mode='process_toc_with_page_numbers', 
-                start_index=1, 
-                toc_content=check_toc_result['toc_content'], 
-                toc_page_list=check_toc_result['toc_page_list'], 
-                opt=opt,
-                logger=logger)
-        else:
-            toc_with_page_number = meta_processor(
-                page_list, 
-                mode='process_toc_no_page_numbers',
-                start_index=1,
-                toc_content=check_toc_result['toc_content'],
-                toc_page_list=check_toc_result['toc_page_list'], 
-                opt=opt,
-                logger=logger)
-    
+
     toc_with_page_number = add_preface_if_needed(toc_with_page_number)
     toc_with_page_number = check_title_appearance_in_start_parallel(toc_with_page_number, page_list, model=opt.model, logger=logger)
     toc_tree = post_processing(toc_with_page_number, len(page_list))
@@ -1026,6 +1014,12 @@ def page_index_main(doc, opt=None):
 
     print('Parsing PDF...')
     page_list = get_page_tokens(doc)
+    ### store text in page_list to file with their physical index
+    with open(f'./logs/{os.path.basename(doc)}_page_list.txt', 'w', encoding='utf-8') as f:
+        for page_index, page_text in enumerate(page_list):
+            page_text = f"<physical_index_{page_index+1}>\n{page_text[0]}\n<physical_index_{page_index+1}>\n\n"
+            f.write(page_text)
+
     logger.info({'total_page_number': len(page_list)})
     logger.info({'total_token': sum([page[1] for page in page_list])})
     
