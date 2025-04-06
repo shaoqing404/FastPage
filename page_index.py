@@ -605,7 +605,7 @@ def process_toc_no_page_numbers(toc_content, toc_page_list, page_list,  model=No
 
 
 
-def process_toc_with_page_numbers(toc_content, toc_page_list, page_list, model=None, logger=None):
+def process_toc_with_page_numbers(toc_content, toc_page_list, page_list, toc_check_page_num=None, model=None, logger=None):
     toc_with_page_number = toc_transformer(toc_content, model)
     logger.info(f'toc_with_page_number: {toc_with_page_number}')
 
@@ -613,7 +613,7 @@ def process_toc_with_page_numbers(toc_content, toc_page_list, page_list, model=N
     
     start_page_index = toc_page_list[-1] + 1
     main_content = ""
-    for page_index in range(start_page_index, min(start_page_index + opt.toc_check_page_num, len(page_list))):
+    for page_index in range(start_page_index, min(start_page_index + toc_check_page_num, len(page_list))):
         main_content += f"<physical_index_{page_index+1}>\n{page_list[page_index][0]}\n<physical_index_{page_index+1}>\n\n"
 
     toc_with_physical_index = toc_index_extractor(toc_no_page_number, main_content, model)
@@ -838,9 +838,7 @@ def fix_incorrect_toc_with_retries(toc_with_page_number, page_list, incorrect_re
         print(f"Fixing {len(current_incorrect)} incorrect results")
         
         current_toc, current_incorrect = fix_incorrect_toc(current_toc, page_list, current_incorrect, start_index, model, logger)
-        
-        logger.info({'current_toc': current_toc})  
-        
+                
         fix_attempt += 1
         if fix_attempt >= max_attempts:
             logger.info("Maximum fix attempts reached")
@@ -918,7 +916,7 @@ def meta_processor(page_list, mode=None, toc_content=None, toc_page_list=None, s
     print(f'start_index: {start_index}')
     
     if mode == 'process_toc_with_page_numbers':
-        toc_with_page_number = process_toc_with_page_numbers(toc_content, toc_page_list, page_list, model=opt.model, logger=logger)
+        toc_with_page_number = process_toc_with_page_numbers(toc_content, toc_page_list, page_list, toc_check_page_num=opt.toc_check_page_num, model=opt.model, logger=logger)
     elif mode == 'process_toc_no_page_numbers':
         toc_with_page_number = process_toc_no_page_numbers(toc_content, toc_page_list, page_list, model=opt.model, logger=logger)
     else:
