@@ -13,6 +13,8 @@ from io import BytesIO
 from dotenv import load_dotenv
 load_dotenv()
 import logging
+import yaml
+from pathlib import Path
 from types import SimpleNamespace as config
 
 CHATGPT_API_KEY = os.getenv("CHATGPT_API_KEY")
@@ -589,32 +591,35 @@ def generate_doc_description(structure, model=None):
     return response
 
 
-def get_default_opt():
-    return {
-        'model': 'gpt-4o-2024-11-20',
-        'toc_check_page_num': 20,
-        'max_page_num_each_node': 10,
-        'max_token_num_each_node': 20000,
-        'if_add_node_id': 'yes',
-        'if_add_node_summary': 'no',
-        'if_add_doc_description': 'yes'
-    }
+class ConfigLoader:
+    def __init__(self, default_path: str = None):
+        if default_path is None:
+            default_path = Path(__file__).parent / "config.yaml"
+        self._default_dict = self._load_yaml(default_path)
 
-def validate_config_keys(user_opt_dict, default_keys):
-    unknown_keys = set(user_opt_dict) - set(default_keys)
-    if unknown_keys:
-        raise ValueError(f"Unknown config keys: {unknown_keys}")
+    @staticmethod
+    def _load_yaml(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
 
-def merge_config(user_opt, default_opt):
+    def _validate_keys(self, user_dict):
+        unknown_keys = set(user_dict) - set(self._default_dict)
+        if unknown_keys:
+            raise ValueError(f"Unknown config keys: {unknown_keys}")
 
-    if isinstance(user_opt, config):
-        user_opt = vars(user_opt)
-    elif user_opt is None:
-        user_opt = {}
-    elif not isinstance(user_opt, dict):
-        raise TypeError("opt must be dict, SimpleNamespace or None")
+    def load(self, user_opt=None) -> config:
+        """
+        Load the configuration, merging user options with default values.
+        """
+        if user_opt is None:
+            user_dict = {}
+        elif isinstance(user_opt, config):
+            user_dict = vars(user_opt)
+        elif isinstance(user_opt, dict):
+            user_dict = user_opt
+        else:
+            raise TypeError("user_opt must be dict, config(SimpleNamespace) or None")
 
-    validate_config_keys(user_opt, default_opt)
-
-    merged = {**default_opt, **user_opt}
-    return config(**merged)
+        self._validate_keys(user_dict)
+        merged = {**self._default_dict, **user_dict}
+        return config(**merged)

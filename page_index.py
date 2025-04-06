@@ -4,7 +4,7 @@ import copy
 import math
 import random
 import re
-from .utils import *
+from utils import *
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
@@ -1012,8 +1012,6 @@ def tree_parser(page_list, opt, logger=None):
 
 
 def page_index_main(doc, opt=None):
-    opt = merge_config(opt, get_default_opt())
-
     logger = JsonLogger(doc)
     
     is_valid_pdf = (
@@ -1047,6 +1045,16 @@ def page_index_main(doc, opt=None):
         'structure': structure,
     }
 
+
+def page_index(doc, model=None, toc_check_page_num=None, max_page_num_each_node=None, max_token_num_each_node=None,
+               f_add_node_id=None, if_add_node_summary=None, if_add_doc_description=None):
+    
+    user_opt = {
+        arg: value for arg, value in locals().items()
+        if arg != "doc" and value is not None
+    }
+    opt = ConfigLoader().load(user_opt)
+    return page_index_main(doc, opt)
 
 
 if __name__ == "__main__":
