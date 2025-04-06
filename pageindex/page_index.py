@@ -4,7 +4,7 @@ import copy
 import math
 import random
 import re
-from utils import *
+from .utils import *
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
@@ -327,7 +327,7 @@ def toc_transformer(toc_content, model=None):
 
 
 
-def find_toc_pages(start_page_index, page_list,opt, logger=None):
+def find_toc_pages(start_page_index, page_list, opt, logger=None):
     print('start find_toc_pages')
     last_page_is_yes = False
     toc_page_list = []
@@ -1009,11 +1009,6 @@ def page_index_main(doc, opt=None):
 
     print('Parsing PDF...')
     page_list = get_page_tokens(doc)
-    ### store text in page_list to file with their physical index
-    with open(f'./logs/{os.path.basename(doc)}_page_list.txt', 'w', encoding='utf-8') as f:
-        for page_index, page_text in enumerate(page_list):
-            page_text = f"<physical_index_{page_index+1}>\n{page_text[0]}\n<physical_index_{page_index+1}>\n\n"
-            f.write(page_text)
 
     logger.info({'total_page_number': len(page_list)})
     logger.info({'total_token': sum([page[1] for page in page_list])})
@@ -1049,45 +1044,5 @@ def page_index(doc, model=None, toc_check_page_num=None, max_page_num_each_node=
     return page_index_main(doc, opt)
 
 
-if __name__ == "__main__":
-    # Set up argument parser
-    parser = argparse.ArgumentParser(description='Process PDF document and generate structure')
-    parser.add_argument('--pdf_path', type=str, help='Path to the PDF file')
-    parser.add_argument('--model', type=str, default='gpt-4o-2024-11-20', help='Model to use')
-    parser.add_argument('--toc-check-pages', type=int, default=20, 
-                      help='Number of pages to check for table of contents')
-    parser.add_argument('--max-pages-per-node', type=int, default=10,
-                      help='Maximum number of pages per node')
-    parser.add_argument('--max-tokens-per-node', type=int, default=20000,
-                      help='Maximum number of tokens per node')
-    parser.add_argument('--if-add-node-id', type=str, default='yes',
-                      help='Whether to add node id to the node')
-    parser.add_argument('--if-add-node-summary', type=str, default='no',
-                      help='Whether to add summary to the node')
-    parser.add_argument('--if-add-doc-description', type=str, default='yes',
-                      help='Whether to add doc description to the doc')
-    args = parser.parse_args()
-        
-        # Configure options
-    opt = config(
-        model=args.model,
-        toc_check_page_num=args.toc_check_pages,
-        max_page_num_each_node=args.max_pages_per_node,
-        max_token_num_each_node=args.max_tokens_per_node,
-        if_add_node_id=args.if_add_node_id,
-        if_add_node_summary=args.if_add_node_summary,
-        if_add_doc_description=args.if_add_doc_description
-    )
-
-    # Process the PDF
-    toc_with_page_number = page_index_main(args.pdf_path, opt)
-    print('Parsing done, saving to file...')
-    
-    # Save results
-    pdf_name = os.path.splitext(os.path.basename(args.pdf_path))[0]    
-    os.makedirs('./results', exist_ok=True)
-    
-    with open(f'./results/{pdf_name}_structure.json', 'w', encoding='utf-8') as f:
-        json.dump(toc_with_page_number, f, indent=2)
 
     
