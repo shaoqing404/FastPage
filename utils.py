@@ -13,6 +13,9 @@ from io import BytesIO
 from dotenv import load_dotenv
 load_dotenv()
 import logging
+import yaml
+from pathlib import Path
+from types import SimpleNamespace as config
 
 CHATGPT_API_KEY = os.getenv("CHATGPT_API_KEY")
 
@@ -284,24 +287,27 @@ def get_last_start_page_from_text(text):
     return start_page
 
 
-
-
 def sanitize_filename(filename, replacement='-'):
     # In Linux, only '/' and '\0' (null) are invalid in filenames.
     # Null can't be represented in strings, so we only handle '/'.
     return filename.replace('/', replacement)
 
+def get_pdf_name(pdf_path):
+    # Extract PDF name
+    if isinstance(pdf_path, str):
+        pdf_name = os.path.basename(pdf_path)
+    elif isinstance(pdf_path, BytesIO):
+        pdf_reader = PyPDF2.PdfReader(pdf_path)
+        meta = pdf_reader.metadata
+        pdf_name = meta.title if meta.title else 'Untitled'
+        pdf_name = sanitize_filename(pdf_name)
+    return pdf_name
+
+
 class JsonLogger:
     def __init__(self, file_path):
-        # Extract PDF name without extension for logger name and filename
-        # pdf_name = os.path.splitext(os.path.basename(file_path))[0]
-        if isinstance(file_path, str):
-            pdf_name = os.path.splitext(os.path.basename(file_path))[0]
-        elif isinstance(file_path, BytesIO):
-            pdf_reader = PyPDF2.PdfReader(file_path)
-            meta = pdf_reader.metadata
-            pdf_name = meta.title if meta.title else 'Untitled'
-            pdf_name = sanitize_filename(pdf_name)
+        # Extract PDF name for logger name
+        pdf_name = get_pdf_name(file_path)
             
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.filename = f"{pdf_name}_{current_time}.json"
@@ -584,3 +590,37 @@ def generate_doc_description(structure, model=None):
     """
     response = ChatGPT_API(model, prompt)
     return response
+
+
+class ConfigLoader:
+    def __init__(self, default_path: str = None):
+        if default_path is None:
+            default_path = Path(__file__).parent / "config.yaml"
+        self._default_dict = self._load_yaml(default_path)
+
+    @staticmethod
+    def _load_yaml(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+
+    def _validate_keys(self, user_dict):
+        unknown_keys = set(user_dict) - set(self._default_dict)
+        if unknown_keys:
+            raise ValueError(f"Unknown config keys: {unknown_keys}")
+
+    def load(self, user_opt=None) -> config:
+        """
+        Load the configuration, merging user options with default values.
+        """
+        if user_opt is None:
+            user_dict = {}
+        elif isinstance(user_opt, config):
+            user_dict = vars(user_opt)
+        elif isinstance(user_opt, dict):
+            user_dict = user_opt
+        else:
+            raise TypeError("user_opt must be dict, config(SimpleNamespace) or None")
+
+        self._validate_keys(user_dict)
+        merged = {**self._default_dict, **user_dict}
+        return config(**merged)

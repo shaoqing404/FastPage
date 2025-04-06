@@ -2,13 +2,10 @@ import os
 import json
 import copy
 import math
-import sys
 import random
-sys.path.append('../..')
 import re
 from utils import *
 import os
-from types import SimpleNamespace as config
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
 
@@ -1033,15 +1030,25 @@ def page_index_main(doc, opt=None):
         if opt.if_add_doc_description == 'yes':
             doc_description = generate_doc_description(structure, model=opt.model)
             return {
-                'doc_name': os.path.basename(doc),
+                'doc_name': get_pdf_name(doc),
                 'doc_description': doc_description,
                 'structure': structure,
             }
     return {
-        'doc_name': os.path.basename(doc),
+        'doc_name': get_pdf_name(doc),
         'structure': structure,
     }
 
+
+def page_index(doc, model=None, toc_check_page_num=None, max_page_num_each_node=None, max_token_num_each_node=None,
+               f_add_node_id=None, if_add_node_summary=None, if_add_doc_description=None):
+    
+    user_opt = {
+        arg: value for arg, value in locals().items()
+        if arg != "doc" and value is not None
+    }
+    opt = ConfigLoader().load(user_opt)
+    return page_index_main(doc, opt)
 
 
 if __name__ == "__main__":
