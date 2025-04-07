@@ -237,11 +237,11 @@ def toc_extractor(page_list, toc_page_list, model):
 def toc_index_extractor(toc, content, model=None):
     print('start toc_index_extractor')
     tob_extractor_prompt = """
-    You are given a table of contents in a json format and serveral pages of a document, your job is to add the physical_index to the table of contents in the json format.
+    You are given a table of contents in a json format and several pages of a document, your job is to add the physical_index to the table of contents in the json format.
 
     The provided pages contains tags like <physical_index_X> and <physical_index_X> to indicate the physical location of the page X.
 
-    The structure variable is the numeric system which represents the index of the heirachy section in the table of contents. For example, the first section has structure index 1, the first subsection has structure index 1.1, the second subsection has structure index 1.2, etc.
+    The structure variable is the numeric system which represents the index of the hierarchy section in the table of contents. For example, the first section has structure index 1, the first subsection has structure index 1.1, the second subsection has structure index 1.2, etc.
 
     The response should be in the following JSON format: 
     [
@@ -269,7 +269,7 @@ def toc_transformer(toc_content, model=None):
     init_prompt = """
     You are given a table of contents, You job is to transform the whole table of content into a JSON format included table_of_contents.
 
-    structure is the numeric system which represents the index of the heirachy section in the table of contents. For example, the first section has structure index 1, the first subsection has structure index 1.1, the second subsection has structure index 1.2, etc.
+    structure is the numeric system which represents the index of the hierarchy section in the table of contents. For example, the first section has structure index 1, the first subsection has structure index 1.1, the second subsection has structure index 1.2, etc.
 
     The response should be in the following JSON format: 
     {
@@ -449,7 +449,7 @@ def page_list_to_group_text(page_contents, token_lengths, max_tokens=20000, over
 
 def add_page_number_to_toc(part, structure, model=None):
     fill_prompt_seq = """
-    You are given an JSON structure of a document and a patial part of the document. Your task is to check if the title that is described in the structure is started the partial given document.
+    You are given an JSON structure of a document and a partial part of the document. Your task is to check if the title that is described in the structure is started in the partial given document.
 
     The provided text contains tags like <physical_index_X> and <physical_index_X> to indicate the physical location of the page X. 
 
@@ -492,7 +492,7 @@ def remove_first_physical_index_section(text):
         return text.replace(match.group(0), '', 1)
     return text
 
-### add verify completness
+### add verify completeness
 def generate_toc_continue(toc_content, part, model="gpt-4o-2024-11-20"):
     print('start generate_toc_continue')
     prompt = """
@@ -500,7 +500,7 @@ def generate_toc_continue(toc_content, part, model="gpt-4o-2024-11-20"):
     You are given a tree structure of the previous part and the text of the current part.
     Your task is to continue the tree structure from the previous part to include the current part.
 
-    The structure variable is the numeric system which represents the index of the heirachy section in the table of contents. For example, the first section has structure index 1, the first subsection has structure index 1.1, the second subsection has structure index 1.2, etc.
+    The structure variable is the numeric system which represents the index of the hierarchy section in the table of contents. For example, the first section has structure index 1, the first subsection has structure index 1.1, the second subsection has structure index 1.2, etc.
 
     For the title, you need to extract the original title from the text, only fix the space inconsistency.
 
@@ -526,13 +526,13 @@ def generate_toc_continue(toc_content, part, model="gpt-4o-2024-11-20"):
     else:
         raise Exception(f'finish reason: {finish_reason}')
     
-### add verify completness
+### add verify completeness
 def generate_toc_init(part, model=None):
     print('start generate_toc_init')
     prompt = """
     You are an expert in extracting hierarchical tree structure, your task is to generate the tree structure of the document.
 
-    The structure variable is the numeric system which represents the index of the heirachy section in the table of contents. For example, the first section has structure index 1, the first subsection has structure index 1.1, the second subsection has structure index 1.2, etc.
+    The structure variable is the numeric system which represents the index of the hierarchy section in the table of contents. For example, the first section has structure index 1, the first subsection has structure index 1.1, the second subsection has structure index 1.2, etc.
 
     For the title, you need to extract the original title from the text, only fix the space inconsistency.
 
@@ -720,8 +720,7 @@ def check_toc(page_list, opt=None):
 ################### fix incorrect toc #########################################################
 def single_toc_item_index_fixer(section_title, content, model="gpt-4o-2024-11-20"):
     tob_extractor_prompt = """
-    You are given a section title and serveral pages of a document, your job is to 
-    give find the physical index of the start page of the section in the partial document.
+    You are given a section title and several pages of a document, your job is to find the physical index of the start page of the section in the partial document.
 
     The provided pages contains tags like <physical_index_X> and <physical_index_X> to indicate the physical location of the page X.
 
