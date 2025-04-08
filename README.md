@@ -121,6 +121,10 @@ You can customize the processing with additional optional arguments:
 --if-add-node-summary   Add node summary (yes/no, default: no)
 --if-add-doc-description Add doc description (yes/no, default: yes)
 ```
+## ☁️ Hosted API (Beta)
+Please try our [hosted API for PageIndex](https://pageindex.vectify.ai/).
+The hosted version uses our custom OCR model to recognize PDFs more accurately, providing a better tree structure for complex documents.
+Leave your email in [this form](https://ii2abc2jejf.typeform.com/to/meB40zV0) to receive 1,000 pages for free.
 
 ## 🛤 Roadmap
 
@@ -144,6 +148,8 @@ Due to the non-deterministic nature of large language models (LLMs) and the dive
 
 We welcome you to raise issues, reach out with questions, or contribute directly to the project.  
 Together, let's push forward the revolution of reasoning-based RAG systems.
+
+
 
 ## 📬 Contact Us
 
