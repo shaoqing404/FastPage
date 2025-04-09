@@ -1,5 +1,7 @@
 # PageIndex
 
+
+
 ### **Document Index System for Reasoning-Based RAG**
 Are you frustrated with vector database retrieval accuracy for long professional documents? You need a reasoning-based native index for your RAG system.
 
@@ -10,6 +12,11 @@ Traditional vector-based retrieval relies heavily on semantic similarity. Howeve
 **[PageIndex](https://vectify.ai/pageindex)** is an indexing system that builds search trees from long documents, making them ready for reasoning-based RAG.
 
 Built by [Vectify AI](https://vectify.ai/pageindex)
+
+## ☁️ Hosted API (Beta)
+Please try our [hosted API for PageIndex](https://pageindex.vectify.ai/).
+The hosted version uses our custom OCR model to recognize PDFs more accurately, providing a better tree structure for complex documents.
+Leave your email in [this form](https://ii2abc2jejf.typeform.com/to/meB40zV0) to receive 1,000 pages for free.
 
 ---
 
@@ -121,10 +128,7 @@ You can customize the processing with additional optional arguments:
 --if-add-node-summary   Add node summary (yes/no, default: no)
 --if-add-doc-description Add doc description (yes/no, default: yes)
 ```
-## ☁️ Hosted API (Beta)
-Please try our [hosted API for PageIndex](https://pageindex.vectify.ai/).
-The hosted version uses our custom OCR model to recognize PDFs more accurately, providing a better tree structure for complex documents.
-Leave your email in [this form](https://ii2abc2jejf.typeform.com/to/meB40zV0) to receive 1,000 pages for free.
+
 
 ## 🛤 Roadmap
 
