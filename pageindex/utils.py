@@ -254,7 +254,7 @@ def extract_text_from_pdf(pdf_path):
 def get_pdf_title(pdf_path):
     pdf_reader = PyPDF2.PdfReader(pdf_path)
     meta = pdf_reader.metadata
-    title = meta.title
+    title = meta.title if meta and meta.title else 'Untitled'
     return title
 
 def get_text_of_pages(pdf_path, start_page, end_page, tag=True):
@@ -299,7 +299,7 @@ def get_pdf_name(pdf_path):
     elif isinstance(pdf_path, BytesIO):
         pdf_reader = PyPDF2.PdfReader(pdf_path)
         meta = pdf_reader.metadata
-        pdf_name = meta.title if meta.title else 'Untitled'
+        pdf_name = meta.title if meta and meta.title else 'Untitled'
         pdf_name = sanitize_filename(pdf_name)
     return pdf_name
 
