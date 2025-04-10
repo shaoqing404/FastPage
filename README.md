@@ -106,6 +106,8 @@ Reply in the following JSON format:
 }}
 """
 ```
+For more examples, see the [API dashboard](https://pageindex.vectify.ai/).
+
 ---
 # 🚀 Package Usage
 
