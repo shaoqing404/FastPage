@@ -7,13 +7,13 @@ Traditional vector-based retrieval relies heavily on semantic similarity. Howeve
 
 **[PageIndex](https://vectify.ai/pageindex)** is an indexing system that builds search trees from long documents, making them ready for reasoning-based RAG. 
 
-## ☁️ Cloud API (Beta)
+### ☁️ Cloud API (Beta)
 Please try our [hosted API for PageIndex](https://pageindex.vectify.ai/).
 The hosted version uses our custom OCR model to recognize PDFs more accurately, providing a better tree structure for complex documents.
 Leave your email in [this form](https://ii2abc2jejf.typeform.com/to/meB40zV0) to receive 1,000 pages for free.
 
 
-## **⭐ What is PageIndex**
+# **⭐ What is PageIndex**
 
 PageIndex can transform lengthy PDF documents into a semantic **tree structure**, similar to a "table of contents" but optimized for use with Large Language Models (LLMs).
 It’s ideal for: financial reports, regulatory filings, academic textbooks, legal or technical manuals or any document that exceeds LLM context limits.
