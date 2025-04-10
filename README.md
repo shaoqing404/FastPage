@@ -64,16 +64,16 @@ Here is an example output. See more [example documents](https://github.com/Vecti
 
 ---
 
-## 🧠 Reasoning-Based RAG with PageIndex
+# 🧠 Reasoning-Based RAG with PageIndex
 
 Use PageIndex to build **reasoning-based retrieval systems** without relying on semantic similarity. Great for domain-specific tasks where nuance matters.
 
-### Preprocessing Workflow Example
+### 🔖 Preprocessing Workflow Example
 1. Process documents using PageIndex to generate tree structures.
 2. Store the tree structures and their corresponding document IDs in a database table.
 3. Store the contents of each node in a separate table, indexed by node ID and tree ID.
 
-### Reasoning-Based RAG Framework Example
+### 🔖 Reasoning-Based RAG Framework Example
 1. Query Preprocessing:
     - Analyze the query to identify the required knowledge
 2. Document Selection: 
@@ -88,7 +88,7 @@ Use PageIndex to build **reasoning-based retrieval systems** without relying on 
     - Generate contextually informed responses
 
 
-### Example Prompt for Node Selection
+### 🔖 Example Prompt for Node Selection
 
 ```python
 prompt = f"""
@@ -107,7 +107,7 @@ Reply in the following JSON format:
 """
 ```
 ---
-## 🚀 Package Usage
+# 🚀 Package Usage
 
 Follow these steps to generate a PageIndex tree from a PDF document.
 
@@ -143,7 +143,7 @@ You can customize the processing with additional optional arguments:
 ```
 
 ---
-## 🛤 Roadmap
+# 🛤 Roadmap
 
 - [ ]  Detailed examples of document selection, node selection, and RAG pipelines (due 2025/04/14)
 - [ ]  Integration of reasoning-based retrieval and semantic-based retrieval (due 2025/04/21)
@@ -151,7 +151,7 @@ You can customize the processing with additional optional arguments:
 - [ ]  Technical report on the design of PageIndex
 
 ---
-## 📈 Case Study: Mafin 2.5
+# 📈 Case Study: Mafin 2.5
 
 [Mafin 2.5](https://vectify.ai/blog/Mafin2.5) is a state-of-the-art reasoning-based RAG model designed specifically for financial document analysis. Built on top of **PageIndex**, it achieved an impressive **98.7% accuracy** on the [FinanceBench](https://github.com/VectifyAI/Mafin2.5-FinanceBench) benchmark—significantly outperforming traditional vector-based RAG systems.
 
@@ -160,7 +160,7 @@ PageIndex’s hierarchical indexing enabled precise navigation and extraction of
 👉 See full [benchmark results](https://github.com/VectifyAI/Mafin2.5-FinanceBench) for detailed comparisons and performance metrics.
 
 ---
-## 🚧 Notice
+# 🚧 Notice
 This project is in its early beta development, and all progress will remain open and transparent. We welcome you to raise issues, reach out with questions, or contribute directly to the project.  
 
 Due to the diverse structures of PDF documents, you may encounter instability during usage. For a more accuracy  and stable version with a leading OCR integration, please try our [hosted API for PageIndex](https://pageindex.vectify.ai/). Leave your email in [this form](https://ii2abc2jejf.typeform.com/to/meB40zV0) to receive 1,000 pages for free.
@@ -169,7 +169,7 @@ Together, let's push forward the revolution of reasoning-based RAG systems.
 
 
 ---
-## 📬 Contact Us
+# 📬 Contact Us
 
 Need customized support for your documents or reasoning-based RAG system?
 
