@@ -580,13 +580,13 @@ def process_no_toc(page_list, start_index=1, model=None, logger=None):
 
     return toc_with_page_number
 
-def process_toc_no_page_numbers(toc_content, toc_page_list, page_list,  model=None, logger=None):
+def process_toc_no_page_numbers(toc_content, toc_page_list, page_list,  start_index=1, model=None, logger=None):
     page_contents=[]
     token_lengths=[]
     toc_content = toc_transformer(toc_content, model)
     logger.info(f'toc_transformer: {toc_content}')
-    for page_index in range(len(page_list)):
-        page_text = f"<physical_index_{page_index+1}>\n{page_list[page_index][0]}\n<physical_index_{page_index+1}>\n\n"
+    for page_index in range(start_index, start_index+len(page_list)):
+        page_text = f"<physical_index_{page_index}>\n{page_list[page_index-start_index][0]}\n<physical_index_{page_index}>\n\n"
         page_contents.append(page_text)
         token_lengths.append(count_tokens(page_text, model))
     
@@ -639,27 +639,27 @@ def process_toc_with_page_numbers(toc_content, toc_page_list, page_list, toc_che
 
 
 ##check if needed to process none page numbers
-def process_none_page_numbers(toc_items, page_list, model=None):
+def process_none_page_numbers(toc_items, page_list, start_index=1, model=None):
     for i, item in enumerate(toc_items):
         if "physical_index" not in item:
             # logger.info(f"fix item: {item}")
             # Find previous physical_index
-            prev_index = 0  # Default if no previous item exists
+            prev_physical_index = 0  # Default if no previous item exists
             for j in range(i - 1, -1, -1):
                 if toc_items[j].get('physical_index') is not None:
-                    prev_index = toc_items[j]['physical_index']-1
+                    prev_physical_index = toc_items[j]['physical_index']
                     break
             
             # Find next physical_index
-            next_index = -1  # Default if no next item exists
+            next_physical_index = -1  # Default if no next item exists
             for j in range(i + 1, len(toc_items)):
                 if toc_items[j].get('physical_index') is not None:
-                    next_index = toc_items[j]['physical_index']
+                    next_physical_index = toc_items[j]['physical_index']
                     break
 
             page_contents = []
-            for page_index in range(prev_index, next_index):
-                page_text = f"<physical_index_{page_index+1}>\n{page_list[page_index][0]}\n<physical_index_{page_index+1}>\n\n"
+            for page_index in range(prev_physical_index, next_physical_index+1):
+                page_text = f"<physical_index_{page_index}>\n{page_list[page_index-start_index][0]}\n<physical_index_{page_index}>\n\n"
                 page_contents.append(page_text)
 
             item_copy = copy.deepcopy(item)
@@ -777,7 +777,7 @@ def fix_incorrect_toc(toc_with_page_number, page_list, incorrect_results, start_
 
         page_contents=[]
         for page_index in range(prev_correct, next_correct+1):
-            page_text = f"<physical_index_{page_index}>\n{page_list[page_index-start_index][0]}\n<physical_index_{page_index-start_index+1}>\n\n"
+            page_text = f"<physical_index_{page_index}>\n{page_list[page_index-start_index][0]}\n<physical_index_{page_index}>\n\n"
             page_contents.append(page_text)
         content_range = ''.join(page_contents)
         
