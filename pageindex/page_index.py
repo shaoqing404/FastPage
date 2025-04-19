@@ -945,7 +945,7 @@ async def meta_processor(page_list, mode=None, toc_content=None, toc_page_list=N
         
  
 async def process_large_node_recursively(node, page_list, opt=None, logger=None):
-    node_page_list = page_list[node['start_index']-1:node['end_index']-1]
+    node_page_list = page_list[node['start_index']-1:node['end_index']]
     token_num = sum([page[1] for page in node_page_list])
     
     if node['end_index'] - node['start_index'] > opt.max_page_num_each_node and token_num >= opt.max_token_num_each_node:
