@@ -1,10 +1,12 @@
 # 📄 PageIndex
 
-Are you frustrated with vector database retrieval accuracy for long professional documents? Traditional vector-based RAG relies on semantic *similarity* rather than true *relevance*. But what we really need in retrieval is **relevance** — which requires **reasoning**. When working with professional documents that demand domain expertise and multi-step reasoning, similarity search often falls short.
+Are you frustrated with vector database retrieval accuracy for long professional documents? Traditional vector-based RAG relies on semantic *similarity* rather than true *relevance*. But what we truly need in retrieval is **relevance** — which requires **reasoning**. When working with professional documents that demand domain expertise and multi-step reasoning, similarity search often falls short.
 
 **Reasoning-based RAG** offers a better alternative: enabling LLMs to *think* and *reason* their way to the most relevant document sections. Inspired by AlphaGo, we propose to use  *tree search* to perform structured document retrieval.
 
 **[PageIndex](https://vectify.ai/pageindex)** is a *document indexing system* that builds *search tree structures* from long documents, making them ready for reasoning-based RAG. 
+
+Self-host it with this open-source repo, or try our [Cloud service](https://pageindex.vectify.ai/) — no setup required, with advanced features like OCR for complex PDFs.
 
 Built by [Vectify AI](https://vectify.ai/pageindex).
 
@@ -88,7 +90,7 @@ python3 run_pageindex.py --pdf_path /path/to/your/document.pdf
 ```
 You can customize the processing with additional optional arguments:
 
-```bash
+```
 --model                 OpenAI model to use (default: gpt-4o-2024-11-20)
 --toc-check-pages       Pages to check for table of contents (default: 20)
 --max-pages-per-node    Max pages per node (default: 10)
@@ -103,6 +105,9 @@ You can customize the processing with additional optional arguments:
 # ☁️ Cloud API (Beta)
 
 Don’t want to host it yourself? Try our [hosted API](https://pageindex.vectify.ai/) for PageIndex. The hosted version uses our custom OCR model to recognize PDFs more accurately, providing a better tree structure for complex documents.
+
+You can also explore results visually with our [web Dashboard](https://pageindex.ai/files) — no coding needed.
+
 Leave your email in [this form](https://ii2abc2jejf.typeform.com/to/meB40zV0) to receive 1,000 pages for free.
 
 ---
