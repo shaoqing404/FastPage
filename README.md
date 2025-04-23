@@ -1,3 +1,14 @@
+### ⚠️ Bug Fix Notice
+
+A bug was introduced on April 18 and has now been fixed.  If you pulled the repo between April 18–23, please update to the latest version:
+
+```bash
+git pull origin main
+```
+
+Thanks for your understanding 🙏
+
+
 # 📄 PageIndex
 
 Are you frustrated with vector database retrieval accuracy for long professional documents? Traditional vector-based RAG relies on semantic *similarity* rather than true *relevance*. But what we truly need in retrieval is **relevance** — which requires **reasoning**. When working with professional documents that demand domain expertise and multi-step reasoning, similarity search often falls short.
