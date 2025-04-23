@@ -1,6 +1,8 @@
 ### ⚠️ Bug Fix Notice
 
-A bug was introduced on April 18 and has now been fixed.  If you pulled the repo between April 18–23, please update to the latest version:
+A bug introduced on **April 18** has now been fixed.
+
+If you pulled the repo between **April 18–23**, please update to the latest version:
 
 ```bash
 git pull origin main
@@ -11,13 +13,13 @@ Thanks for your understanding 🙏
 
 # 📄 PageIndex
 
-Are you frustrated with vector database retrieval accuracy for long professional documents? Traditional vector-based RAG relies on semantic *similarity* rather than true *relevance*. But what we truly need in retrieval is **relevance** — which requires **reasoning**. When working with professional documents that demand domain expertise and multi-step reasoning, similarity search often falls short.
+Are you frustrated with vector database retrieval accuracy for long professional documents? Traditional vector-based RAG relies on semantic *similarity* rather than true *relevance*. But **similarity ≠ relevance** — what we truly need in retrieval is **relevance**, and that requires **reasoning**. When working with professional documents that demand domain expertise and multi-step reasoning, similarity search often falls short.
 
-**Reasoning-based RAG** offers a better alternative: enabling LLMs to *think* and *reason* their way to the most relevant document sections. Inspired by AlphaGo, we propose to use  *tree search* to perform structured document retrieval.
+🧠 **Reasoning-based RAG** offers a better alternative: enabling LLMs to *think* and *reason* their way to the most relevant document sections. Inspired by AlphaGo, we use *tree search* to perform structured document retrieval.
 
 **[PageIndex](https://vectify.ai/pageindex)** is a *document indexing system* that builds *search tree structures* from long documents, making them ready for reasoning-based RAG. 
 
-Self-host it with this open-source repo, or try our [Cloud service](https://pageindex.vectify.ai/) — no setup required, with advanced features like OCR for complex PDFs.
+You can self-host it with this open-source repo, or try our ☁️ [Cloud service](https://pageindex.vectify.ai/) — no setup required, with advanced features like OCR for complex PDFs.
 
 Built by [Vectify AI](https://vectify.ai/pageindex).
 
