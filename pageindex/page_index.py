@@ -637,7 +637,7 @@ def process_toc_with_page_numbers(toc_content, toc_page_list, page_list, toc_che
     toc_with_page_number = add_page_offset_to_toc_json(toc_with_page_number, offset)
     logger.info(f'toc_with_page_number: {toc_with_page_number}')
 
-    toc_with_page_number = process_none_page_numbers(toc_with_page_number,page_list, model)
+    toc_with_page_number = process_none_page_numbers(toc_with_page_number, page_list, model=model)
     logger.info(f'toc_with_page_number: {toc_with_page_number}')
 
     return toc_with_page_number
