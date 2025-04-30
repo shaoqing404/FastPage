@@ -1,6 +1,7 @@
 <div align="center">
-  <img src="https://github.com/user-attachments/assets/15c609f9-443d-4d81-a1f3-aa5a6051b676" alt="pg_logo_small" width="300px">
-
+  <a href="https://vectify.ai/pageindex" target="_blank">
+    <img src="https://github.com/user-attachments/assets/15c609f9-443d-4d81-a1f3-aa5a6051b676" alt="pg_logo_small" width="300px">
+  </a>
 </div>
 
 ### ⚠️ Bug Fix Notice
