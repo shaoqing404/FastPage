@@ -1,6 +1,7 @@
 <div align="center">
     
-![pg_logo_small](https://github.com/user-attachments/assets/ff1afb97-15d8-4b60-9079-160c04b6b596)
+![pg_logo_s](https://github.com/user-attachments/assets/1b536179-9850-4590-a5e1-f7e1d2fc3d86)
+
 
 </div>
 
