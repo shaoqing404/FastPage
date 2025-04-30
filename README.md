@@ -1,7 +1,5 @@
 <div align="center">
-    
-![pg_logo_s](https://github.com/user-attachments/assets/1b536179-9850-4590-a5e1-f7e1d2fc3d86)
-
+  <img src="https://github.com/user-attachments/assets/15c609f9-443d-4d81-a1f3-aa5a6051b676" alt="pg_logo_small" width="300px">
 
 </div>
 
