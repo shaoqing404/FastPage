@@ -1,3 +1,9 @@
+<div align="center">
+    
+![pg_logo_small](https://github.com/user-attachments/assets/ff1afb97-15d8-4b60-9079-160c04b6b596)
+
+</div>
+
 ### ⚠️ Bug Fix Notice
 
 A bug introduced on **April 18** has now been fixed.
