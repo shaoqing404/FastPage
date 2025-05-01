@@ -189,8 +189,8 @@ For more examples, see the [API dashboard](https://pageindex.vectify.ai/).
 
 # 🛤 Roadmap
 
-- [x]  Detailed examples of document selection, node selection, and RAG pipelines (due 2025/04/14)
-- [ ]  Integration of reasoning-based retrieval and semantic-based retrieval (due 2025/04/21)
+- [x]  [Detailed examples of document selection, node selection, and RAG pipelines](https://pageindex.vectify.ai/examples/rag)
+- [x]  [Integration of reasoning-based retrieval and semantic-based retrieval](https://pageindex.vectify.ai/examples/hybrid-rag)
 - [ ]  Efficient tree search methods introduction
 - [ ]  Technical report on the design of PageIndex
 
