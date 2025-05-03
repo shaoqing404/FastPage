@@ -125,7 +125,7 @@ You can customize the processing with additional optional arguments:
 
 # ☁️ Cloud API (Beta)
 
-Don’t want to host it yourself? Try our [hosted API](https://pageindex.vectify.ai/) for PageIndex. The hosted version uses our custom OCR model to recognize PDFs more accurately, providing a better tree structure for complex documents.
+Don’t want to host it yourself? Try our [hosted API](https://pageindex.vectify.ai/) for PageIndex. The hosted version uses our custom OCR model to recognize PDFs more accurately, providing a better tree structure for complex documents. Ideal for rapid prototyping, production environments, and documents requiring advanced OCR.
 
 You can also explore results visually with our [web Dashboard](https://pageindex.ai/files) — no coding needed.
 
@@ -210,6 +210,13 @@ This project is in its early beta development, and all progress will remain open
 Due to the diverse structures of PDF documents, you may encounter instability during usage. For a more accurate and stable version with a leading OCR integration, please try our [hosted API for PageIndex](https://pageindex.vectify.ai/). Leave your email in [this form](https://ii2abc2jejf.typeform.com/to/meB40zV0) to receive 1,000 pages for free.
 
 Together, let's push forward the revolution of reasoning-based RAG systems.
+
+### 🙋 FAQ
+- **Does PageIndex support other LLMs besides OpenAI?**  
+  Currently optimized for GPT models, but future versions will support more.
+
+- **Can PageIndex handle scanned PDFs?**  
+  Yes! Our [Cloud API](https://pageindex.vectify.ai/) includes advanced OCR specifically for scanned and complex PDFs.
 
 ---
 
