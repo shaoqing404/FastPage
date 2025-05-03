@@ -151,7 +151,7 @@ PageIndex’s hierarchical indexing enabled precise navigation and extraction of
 
 # 🧠 Reasoning-Based RAG with PageIndex
 
-Use PageIndex to build **reasoning-based retrieval systems** without relying on semantic similarity. Great for domain-specific tasks where nuance matters.
+Use PageIndex to build **reasoning-based retrieval systems** without relying on semantic similarity. Great for domain-specific tasks where nuance matters ([more examples](https://pageindex.vectify.ai/examples/rag)).
 
 ### 🔖 Preprocessing Workflow Example
 1. Process documents using PageIndex to generate tree structures.
