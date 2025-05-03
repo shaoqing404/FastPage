@@ -133,7 +133,7 @@ Leave your email in [this form](https://ii2abc2jejf.typeform.com/to/meB40zV0) to
 
 ---
 
-# 📈 Case Study: Mafin 2.5
+# 📈 Case Study: Mafin 2.5 on FinanceBench
 
 [Mafin 2.5](https://vectify.ai/) is a state-of-the-art reasoning-based RAG model designed specifically for financial document analysis. Built on top of **PageIndex**, it achieved a market-leading **98.7% accuracy** on the [FinanceBench](https://github.com/VectifyAI/Mafin2.5-FinanceBench) benchmark — significantly outperforming traditional vector-based RAG systems.
 
