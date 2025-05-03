@@ -4,19 +4,6 @@
   </a>
 </div>
 
-### ⚠️ Bug Fix Notice
-
-A bug introduced on **April 18** has now been fixed.
-
-If you pulled the repo between **April 18–23**, please update to the latest version:
-
-```bash
-git pull origin main
-```
-
-Thanks for your understanding 🙏
-
-
 # 📄 PageIndex
 
 Are you frustrated with vector database retrieval accuracy for long professional documents? Traditional vector-based RAG relies on semantic *similarity* rather than true *relevance*. But **similarity ≠ relevance** — what we truly need in retrieval is **relevance**, and that requires **reasoning**. When working with professional documents that demand domain expertise and multi-step reasoning, similarity search often falls short.
@@ -84,6 +71,21 @@ Here is an example output. See more [example documents](https://github.com/Vecti
 
 ---
 
+### ⚠️ Bug Fix Notice
+
+A bug introduced on **April 18** has now been fixed.
+
+If you pulled the repo between **April 18–23**, please update to the latest version:
+
+```bash
+git pull origin main
+```
+
+Thanks for your understanding 🙏
+
+
+---
+
 # 🚀 Package Usage
 
 Follow these steps to generate a PageIndex tree from a PDF document.
@@ -133,11 +135,16 @@ Leave your email in [this form](https://ii2abc2jejf.typeform.com/to/meB40zV0) to
 
 # 📈 Case Study: Mafin 2.5
 
-[Mafin 2.5](https://vectify.ai/blog/Mafin2.5) is a state-of-the-art reasoning-based RAG model designed specifically for financial document analysis. Built on top of **PageIndex**, it achieved an impressive **98.7% accuracy** on the [FinanceBench](https://github.com/VectifyAI/Mafin2.5-FinanceBench) benchmark — significantly outperforming traditional vector-based RAG systems.
+[Mafin 2.5](https://vectify.ai/) is a state-of-the-art reasoning-based RAG model designed specifically for financial document analysis. Built on top of **PageIndex**, it achieved a market-leading **98.7% accuracy** on the [FinanceBench](https://github.com/VectifyAI/Mafin2.5-FinanceBench) benchmark — significantly outperforming traditional vector-based RAG systems.
 
 PageIndex’s hierarchical indexing enabled precise navigation and extraction of relevant content from complex financial reports, such as SEC filings and earnings disclosures.
 
-👉 See full [benchmark results](https://github.com/VectifyAI/Mafin2.5-FinanceBench) for detailed comparisons and performance metrics.
+👉 See our [blog post](https://vectify.ai/blog/Mafin2.5) and full [benchmark results](https://github.com/VectifyAI/Mafin2.5-FinanceBench) for detailed comparisons and performance metrics.
+
+<div align="center">
+  <img src="https://github.com/user-attachments/assets/571aa074-d803-43c7-80c4-a04254b782a3" width="80%">
+</div>
+
 
 ---
 
@@ -183,7 +190,7 @@ Reply in the following JSON format:
 }}
 """
 ```
-For more examples, see the [API dashboard](https://pageindex.vectify.ai/).
+👉 For more examples, see the [PageIndex Dashboard](https://pageindex.vectify.ai/).
 
 ---
 
