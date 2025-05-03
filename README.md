@@ -135,16 +135,17 @@ Leave your email in [this form](https://ii2abc2jejf.typeform.com/to/meB40zV0) to
 
 # 📈 Case Study: Mafin 2.5 on FinanceBench
 
-[Mafin 2.5](https://vectify.ai/) is a state-of-the-art reasoning-based RAG model designed specifically for financial document analysis. Built on top of **PageIndex**, it achieved a market-leading **98.7% accuracy** on the [FinanceBench](https://github.com/VectifyAI/Mafin2.5-FinanceBench) benchmark — significantly outperforming traditional vector-based RAG systems.
+[Mafin 2.5](https://vectify.ai/) is a state-of-the-art reasoning-based RAG model designed specifically for financial document analysis. Powered by **PageIndex**, it achieved a market-leading [**98.7% accuracy**](https://vectify.ai/blog/Mafin2.5) on the [FinanceBench](https://arxiv.org/abs/2311.11944) benchmark — significantly outperforming traditional vector-based RAG systems.
 
 PageIndex’s hierarchical indexing enabled precise navigation and extraction of relevant content from complex financial reports, such as SEC filings and earnings disclosures.
 
-👉 See our [blog post](https://vectify.ai/blog/Mafin2.5) and full [benchmark results](https://github.com/VectifyAI/Mafin2.5-FinanceBench) for detailed comparisons and performance metrics.
+👉 See the full [benchmark results](https://github.com/VectifyAI/Mafin2.5-FinanceBench) and our [blog post](https://vectify.ai/blog/Mafin2.5) for detailed comparisons and performance metrics.
 
 <div align="center">
-  <img src="https://github.com/user-attachments/assets/571aa074-d803-43c7-80c4-a04254b782a3" width="80%">
+  <a href="https://github.com/VectifyAI/Mafin2.5-FinanceBench">
+    <img src="https://github.com/user-attachments/assets/571aa074-d803-43c7-80c4-a04254b782a3" width="80%">
+  </a>
 </div>
-
 
 ---
 
