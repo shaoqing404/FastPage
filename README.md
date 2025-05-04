@@ -14,7 +14,10 @@ Are you frustrated with vector database retrieval accuracy for long professional
 
 You can self-host it with this open-source repo, or try our ☁️ [Cloud service](https://pageindex.vectify.ai/) — no setup required, with advanced features like OCR for complex PDFs.
 
-Built by [Vectify AI](https://vectify.ai/pageindex).
+Built by <a href="https://vectify.ai" target="_blank">Vectify AI</a>&nbsp;&nbsp;
+<a href="https://vectify.ai" target="_blank">
+  <img src="https://github.com/user-attachments/assets/55abe487-9d21-44ad-b686-a008c2d2b7e7" alt="Vectify AI Logo" width="100" valign="middle">
+</a>
 
 ---
 
@@ -227,3 +230,10 @@ Need customized support for your documents or reasoning-based RAG system?
 :loudspeaker: [Join our Discord](https://discord.com/invite/nnyyEdT2RG)
 
 :envelope: [Leave us a message](https://ii2abc2jejf.typeform.com/to/meB40zV0)
+
+<div align="center">
+  <a href="https://vectify.ai" target="_blank">
+    <img src="https://github.com/user-attachments/assets/55abe487-9d21-44ad-b686-a008c2d2b7e7" alt="Vectify AI Logo" width="180">
+  </a>
+</div>
+
