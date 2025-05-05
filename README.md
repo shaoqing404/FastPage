@@ -33,11 +33,11 @@ It’s ideal for: financial reports, regulatory filings, academic textbooks, leg
 - **Hierarchical Tree Structure**  
   Enables LLMs to traverse documents logically — like an intelligent, LLM-optimized table of contents.
 
-- **Precise Page Referencing**  
-  Every node contains its summary and start/end page physical index, allowing pinpoint retrieval.
-
 - **Chunk-Free Segmentation**  
   No arbitrary chunking. Nodes follow the natural structure of the document.
+
+- **Precise Page Referencing**  
+  Every node contains its summary and start/end page physical index, allowing pinpoint retrieval.
 
 - **Scales to Massive Documents**  
   Designed to handle hundreds or even thousands of pages with ease.
