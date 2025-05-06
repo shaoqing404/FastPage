@@ -14,7 +14,7 @@ Are you frustrated with vector database retrieval accuracy for long professional
 
 Self-host it with this open-source repo, or try our ☁️ [Cloud service](https://pageindex.vectify.ai/) — no setup required, with advanced features like OCR for complex and scanned PDFs.
 
-PageIndex powers a reasoning-based RAG system that achieved a 98.7% accuracy on [FinanceBench](https://vectify.ai/blog/Mafin2.5), demonstrating state-of-the-art performance on financial document analysis.
+PageIndex powers a reasoning-based RAG system that achieved 98.7% accuracy on [FinanceBench](https://vectify.ai/blog/Mafin2.5), demonstrating state-of-the-art performance in financial document analysis.
 
 Built by <a href="https://vectify.ai" target="_blank">Vectify AI</a>&nbsp;&nbsp;
 <a href="https://vectify.ai" target="_blank">
