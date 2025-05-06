@@ -26,7 +26,7 @@ Built by <a href="https://vectify.ai" target="_blank">Vectify AI</a>&nbsp;&nbsp;
 # **⭐ What is PageIndex**
 
 PageIndex can transform lengthy PDF documents into a semantic **tree structure**, similar to a *"table of contents"* but optimized for use with Large Language Models (LLMs).
-It’s ideal for: financial reports, regulatory filings, academic textbooks, legal or technical manuals, and any document that exceeds LLM context limits.
+It's ideal for: financial reports, regulatory filings, academic textbooks, legal or technical manuals, and any document that exceeds LLM context limits.
 
 ### ✅ Key Features
     
@@ -128,11 +128,11 @@ You can customize the processing with additional optional arguments:
 
 ---
 
-# ☁️ Cloud API (Beta)
+# ☁️ Cloud API & Platform (Beta)
 
-Don’t want to host it yourself? Try our [hosted API](https://pageindex.vectify.ai/) for PageIndex. The hosted version uses our custom OCR model to recognize PDFs more accurately, providing a better tree structure for complex documents. Ideal for rapid prototyping, production environments, and documents requiring advanced OCR.
+Don't want to host it yourself? Try our [hosted API](https://pageindex.vectify.ai/) for PageIndex. The hosted service leverages our custom OCR model for more accurate PDF recognition, delivering better tree structures for complex documents. Ideal for rapid prototyping, production environments, and documents requiring advanced OCR.
 
-You can also explore results visually with our [web Dashboard](https://pageindex.ai/files) — no coding needed.
+You can also upload PDFs from your browser and explore results visually with our [web Dashboard](https://pageindex.ai/files) — no coding needed.
 
 Leave your email in [this form](https://ii2abc2jejf.typeform.com/to/meB40zV0) to receive 1,000 pages for free.
 
@@ -142,7 +142,7 @@ Leave your email in [this form](https://ii2abc2jejf.typeform.com/to/meB40zV0) to
 
 [Mafin 2.5](https://vectify.ai/) is a state-of-the-art reasoning-based RAG model designed specifically for financial document analysis. Powered by **PageIndex**, it achieved a market-leading [**98.7% accuracy**](https://vectify.ai/blog/Mafin2.5) on the [FinanceBench](https://arxiv.org/abs/2311.11944) benchmark — significantly outperforming traditional vector-based RAG systems.
 
-PageIndex’s hierarchical indexing enabled precise navigation and extraction of relevant content from complex financial reports, such as SEC filings and earnings disclosures.
+PageIndex's hierarchical indexing enabled precise navigation and extraction of relevant content from complex financial reports, such as SEC filings and earnings disclosures.
 
 👉 See the full [benchmark results](https://github.com/VectifyAI/Mafin2.5-FinanceBench) and our [blog post](https://vectify.ai/blog/Mafin2.5) for detailed comparisons and performance metrics.
 
@@ -238,4 +238,3 @@ Need customized support for your documents or reasoning-based RAG system?
     <img src="https://github.com/user-attachments/assets/55abe487-9d21-44ad-b686-a008c2d2b7e7" alt="Vectify AI Logo" width="180">
   </a>
 </div>
-
