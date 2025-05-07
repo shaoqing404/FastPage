@@ -16,10 +16,7 @@ Self-host it with this open-source repo, or try our ☁️ [Cloud service](https
 
 PageIndex powers a reasoning-based RAG system that achieved 98.7% accuracy on [FinanceBench](https://vectify.ai/blog/Mafin2.5), demonstrating state-of-the-art performance in financial document analysis.
 
-Built by <a href="https://vectify.ai" target="_blank">Vectify AI</a>&nbsp;&nbsp;
-<a href="https://vectify.ai" target="_blank">
-  <img src="https://github.com/user-attachments/assets/55abe487-9d21-44ad-b686-a008c2d2b7e7" alt="Vectify AI Logo" width="100" valign="middle">
-</a>
+Built by <a href="https://vectify.ai" target="_blank">Vectify AI</a>.
 
 ---
 
