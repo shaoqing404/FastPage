@@ -18,7 +18,7 @@ Are you frustrated with vector database retrieval accuracy for long professional
   </a>
 </div>
 
-Try our ☁️ [Cloud service](https://pageindex.vectify.ai/) — no setup required, with advanced features like OCR for complex and scanned PDFs.
+Self-host it with this open-source repo, or try our ☁️ [Cloud service](https://pageindex.vectify.ai/) — no setup required, with advanced features like OCR for complex and scanned PDFs.
 
 Built by <a href="https://vectify.ai" target="_blank">Vectify AI</a>.
 
