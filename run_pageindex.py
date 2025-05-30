@@ -18,6 +18,8 @@ if __name__ == "__main__":
                       help='Whether to add summary to the node')
     parser.add_argument('--if-add-doc-description', type=str, default='yes',
                       help='Whether to add doc description to the doc')
+    parser.add_argument('--if-add-node-text', type=str, default='no',
+                      help='Whether to add text to the node')
     args = parser.parse_args()
         
         # Configure options
@@ -28,7 +30,8 @@ if __name__ == "__main__":
         max_token_num_each_node=args.max_tokens_per_node,
         if_add_node_id=args.if_add_node_id,
         if_add_node_summary=args.if_add_node_summary,
-        if_add_doc_description=args.if_add_doc_description
+        if_add_doc_description=args.if_add_doc_description,
+        if_add_node_text=args.if_add_node_text
     )
 
     # Process the PDF
