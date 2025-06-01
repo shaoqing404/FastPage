@@ -665,8 +665,13 @@ def process_none_page_numbers(toc_items, page_list, start_index=1, model=None):
 
             page_contents = []
             for page_index in range(prev_physical_index, next_physical_index+1):
-                page_text = f"<physical_index_{page_index}>\n{page_list[page_index-start_index][0]}\n<physical_index_{page_index}>\n\n"
-                page_contents.append(page_text)
+                # Add bounds checking to prevent IndexError
+                list_index = page_index - start_index
+                if list_index >= 0 and list_index < len(page_list):
+                    page_text = f"<physical_index_{page_index}>\n{page_list[list_index][0]}\n<physical_index_{page_index}>\n\n"
+                    page_contents.append(page_text)
+                else:
+                    continue
 
             item_copy = copy.deepcopy(item)
             del item_copy['page']
@@ -754,12 +759,25 @@ async def fix_incorrect_toc(toc_with_page_number, page_list, incorrect_results, 
     # Helper function to process and check a single incorrect item
     async def process_and_check_item(incorrect_item):
         list_index = incorrect_item['list_index']
+        
+        # Check if list_index is valid
+        if list_index < 0 or list_index >= len(toc_with_page_number):
+            # Return an invalid result for out-of-bounds indices
+            return {
+                'list_index': list_index,
+                'title': incorrect_item['title'],
+                'physical_index': incorrect_item.get('physical_index'),
+                'is_valid': False
+            }
+        
         # Find the previous correct item
         prev_correct = None
         for i in range(list_index-1, -1, -1):
-            if i not in incorrect_indices:
-                prev_correct = toc_with_page_number[i]['physical_index']
-                break
+            if i not in incorrect_indices and i >= 0 and i < len(toc_with_page_number):
+                physical_index = toc_with_page_number[i].get('physical_index')
+                if physical_index is not None:
+                    prev_correct = physical_index
+                    break
         # If no previous correct item found, use start_index
         if prev_correct is None:
             prev_correct = start_index - 1
@@ -767,9 +785,11 @@ async def fix_incorrect_toc(toc_with_page_number, page_list, incorrect_results, 
         # Find the next correct item
         next_correct = None
         for i in range(list_index+1, len(toc_with_page_number)):
-            if i not in incorrect_indices:
-                next_correct = toc_with_page_number[i]['physical_index']
-                break
+            if i not in incorrect_indices and i >= 0 and i < len(toc_with_page_number):
+                physical_index = toc_with_page_number[i].get('physical_index')
+                if physical_index is not None:
+                    next_correct = physical_index
+                    break
         # If no next correct item found, use end_index
         if next_correct is None:
             next_correct = end_index
@@ -783,8 +803,13 @@ async def fix_incorrect_toc(toc_with_page_number, page_list, incorrect_results, 
 
         page_contents=[]
         for page_index in range(prev_correct, next_correct+1):
-            page_text = f"<physical_index_{page_index}>\n{page_list[page_index-start_index][0]}\n<physical_index_{page_index}>\n\n"
-            page_contents.append(page_text)
+            # Add bounds checking to prevent IndexError
+            list_index = page_index - start_index
+            if list_index >= 0 and list_index < len(page_list):
+                page_text = f"<physical_index_{page_index}>\n{page_list[list_index][0]}\n<physical_index_{page_index}>\n\n"
+                page_contents.append(page_text)
+            else:
+                continue
         content_range = ''.join(page_contents)
         
         physical_index_int = single_toc_item_index_fixer(incorrect_item['title'], content_range, model)
@@ -817,7 +842,17 @@ async def fix_incorrect_toc(toc_with_page_number, page_list, incorrect_results, 
     invalid_results = []
     for result in results:
         if result['is_valid']:
-            toc_with_page_number[result['list_index']]['physical_index'] = result['physical_index']
+            # Add bounds checking to prevent IndexError
+            list_idx = result['list_index']
+            if 0 <= list_idx < len(toc_with_page_number):
+                toc_with_page_number[list_idx]['physical_index'] = result['physical_index']
+            else:
+                # Index is out of bounds, treat as invalid
+                invalid_results.append({
+                    'list_index': result['list_index'],
+                    'title': result['title'],
+                    'physical_index': result['physical_index'],
+                })
         else:
             invalid_results.append({
                 'list_index': result['list_index'],
@@ -880,9 +915,11 @@ async def verify_toc(page_list, list_result, start_index=1, N=None, model=None):
     indexed_sample_list = []
     for idx in sample_indices:
         item = list_result[idx]
-        item_with_index = item.copy()
-        item_with_index['list_index'] = idx  # Add the original index in list_result
-        indexed_sample_list.append(item_with_index)
+        # Skip items with None physical_index (these were invalidated by validate_and_truncate_physical_indices)
+        if item.get('physical_index') is not None:
+            item_with_index = item.copy()
+            item_with_index['list_index'] = idx  # Add the original index in list_result
+            indexed_sample_list.append(item_with_index)
 
     # Run checks concurrently
     tasks = [
@@ -923,6 +960,14 @@ async def meta_processor(page_list, mode=None, toc_content=None, toc_page_list=N
         toc_with_page_number = process_no_toc(page_list, start_index=start_index, model=opt.model, logger=logger)
             
     toc_with_page_number = [item for item in toc_with_page_number if item.get('physical_index') is not None] 
+    
+    toc_with_page_number = validate_and_truncate_physical_indices(
+        toc_with_page_number, 
+        len(page_list), 
+        start_index=start_index, 
+        logger=logger
+    )
+    
     accuracy, incorrect_results = await verify_toc(page_list, toc_with_page_number, start_index=start_index, model=opt.model)
         
     logger.info({
@@ -954,12 +999,15 @@ async def process_large_node_recursively(node, page_list, opt=None, logger=None)
         node_toc_tree = await meta_processor(node_page_list, mode='process_no_toc', start_index=node['start_index'], opt=opt, logger=logger)
         node_toc_tree = await check_title_appearance_in_start_concurrent(node_toc_tree, page_list, model=opt.model, logger=logger)
         
-        if node['title'].strip() == node_toc_tree[0]['title'].strip():
-            node['nodes'] = post_processing(node_toc_tree[1:], node['end_index'])
-            node['end_index'] = node_toc_tree[1]['start_index']
+        # Filter out items with None physical_index before post_processing
+        valid_node_toc_items = [item for item in node_toc_tree if item.get('physical_index') is not None]
+        
+        if valid_node_toc_items and node['title'].strip() == valid_node_toc_items[0]['title'].strip():
+            node['nodes'] = post_processing(valid_node_toc_items[1:], node['end_index'])
+            node['end_index'] = valid_node_toc_items[1]['start_index'] if len(valid_node_toc_items) > 1 else node['end_index']
         else:
-            node['nodes'] = post_processing(node_toc_tree, node['end_index'])
-            node['end_index'] = node_toc_tree[0]['start_index']
+            node['nodes'] = post_processing(valid_node_toc_items, node['end_index'])
+            node['end_index'] = valid_node_toc_items[0]['start_index'] if valid_node_toc_items else node['end_index']
         
     if 'nodes' in node and node['nodes']:
         tasks = [
@@ -993,7 +1041,11 @@ async def tree_parser(page_list, opt, doc=None, logger=None):
 
     toc_with_page_number = add_preface_if_needed(toc_with_page_number)
     toc_with_page_number = await check_title_appearance_in_start_concurrent(toc_with_page_number, page_list, model=opt.model, logger=logger)
-    toc_tree = post_processing(toc_with_page_number, len(page_list))
+    
+    # Filter out items with None physical_index before post_processings
+    valid_toc_items = [item for item in toc_with_page_number if item.get('physical_index') is not None]
+    
+    toc_tree = post_processing(valid_toc_items, len(page_list))
     tasks = [
         process_large_node_recursively(node, page_list, opt, logger=logger)
         for node in toc_tree
@@ -1054,5 +1106,34 @@ def page_index(doc, model=None, toc_check_page_num=None, max_page_num_each_node=
     return page_index_main(doc, opt)
 
 
-
+def validate_and_truncate_physical_indices(toc_with_page_number, page_list_length, start_index=1, logger=None):
+    """
+    Validates and truncates physical indices that exceed the actual document length.
+    This prevents errors when TOC references pages that don't exist in the document (e.g. the file is broken or incomplete).
+    """
+    if not toc_with_page_number:
+        return toc_with_page_number
     
+    max_allowed_page = page_list_length + start_index - 1
+    truncated_items = []
+    
+    for i, item in enumerate(toc_with_page_number):
+        if item.get('physical_index') is not None:
+            original_index = item['physical_index']
+            if original_index > max_allowed_page:
+                item['physical_index'] = None
+                truncated_items.append({
+                    'title': item.get('title', 'Unknown'),
+                    'original_index': original_index
+                })
+                if logger:
+                    logger.info(f"Removed physical_index for '{item.get('title', 'Unknown')}' (was {original_index}, too far beyond document)")
+    
+    if truncated_items and logger:
+        logger.info(f"Total removed items: {len(truncated_items)}")
+        
+    print(f"Document validation: {page_list_length} pages, max allowed index: {max_allowed_page}")
+    if truncated_items:
+        print(f"Truncated {len(truncated_items)} TOC items that exceeded document length")
+     
+    return toc_with_page_number
