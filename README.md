@@ -4,7 +4,12 @@
   </a>
 </div>
 
+### We will have a major update to our PageIndex cloud service on June 23, 2025. Stay in touch!
+
+
 # 📄 PageIndex
+
+
 
 Are you frustrated with vector database retrieval accuracy for long professional documents? Traditional vector-based RAG relies on semantic *similarity* rather than true *relevance*. But **similarity ≠ relevance** — what we truly need in retrieval is **relevance**, and that requires **reasoning**. When working with professional documents that demand domain expertise and multi-step reasoning, similarity search often falls short.
 
@@ -21,6 +26,7 @@ Are you frustrated with vector database retrieval accuracy for long professional
 Self-host it with this open-source repo, or try our ☁️ [Cloud service](https://pageindex.vectify.ai/) — no setup required, with advanced features like OCR for complex and scanned PDFs.
 
 Built by <a href="https://vectify.ai" target="_blank">Vectify AI</a>.
+
 
 ---
 
@@ -205,6 +211,7 @@ Reply in the following JSON format:
 
 - [x]  [Detailed examples of document selection, node selection, and RAG pipelines](https://pageindex.vectify.ai/examples/rag)
 - [x]  [Integration of reasoning-based retrieval and semantic-based retrieval](https://pageindex.vectify.ai/examples/hybrid-rag)
+- [ ]  Release of PageIndex Platform with Retrieval (23rd June 2025)
 - [ ]  Efficient tree search methods introduction
 - [ ]  Technical report on the design of PageIndex
 
