@@ -1,8 +1,11 @@
 <div align="center">
   <a href="https://vectify.ai/pageindex" target="_blank">
-    <img src="https://github.com/user-attachments/assets/15c609f9-443d-4d81-a1f3-aa5a6051b676" alt="pg_logo_small" width="300px">
+    <img src="https://github.com/user-attachments/assets/a62b4c04-d4cf-4edd-982f-2de0f3ed2dfc" alt="pg_logo_small" width="300px">
   </a>
 </div>
+
+
+
 
 ### We will have a major update to our PageIndex cloud service on June 23, 2025. Stay in touch!
 
