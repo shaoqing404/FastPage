@@ -7,7 +7,7 @@
 
 
 
-### A Major PageIndex Cloud Update is Coming Soon - Stay Tuned!
+### A Major PageIndex Cloud Update is Coming Soon in June - Stay Tuned!
 
 
 # 📄 PageIndex
