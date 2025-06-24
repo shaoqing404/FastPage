@@ -7,7 +7,7 @@
 
 
 
-### We will have a major update to our PageIndex cloud service on June 23, 2025. Stay in touch!
+### A Major PageIndex Cloud Update is Coming Soon - Stay Tuned!
 
 
 # 📄 PageIndex
