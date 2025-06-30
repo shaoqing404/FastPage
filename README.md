@@ -142,7 +142,7 @@ You can customize the processing with additional optional arguments:
 
 Don't want to host it yourself? Try our [hosted API](https://pageindex.vectify.ai/) for PageIndex. The hosted service leverages our custom OCR model for more accurate PDF recognition, delivering better tree structures for complex documents. Ideal for rapid prototyping, production environments, and documents requiring advanced OCR.
 
-You can also upload PDFs from your browser and explore results visually with our [web Dashboard](https://pageindex.ai/files) — no coding needed.
+You can also upload PDFs from your browser and explore results visually with our [Dashboard](https://pageindex.vectify.ai/overview) — no coding needed.
 
 Leave your email in [this form](https://ii2abc2jejf.typeform.com/to/meB40zV0) to receive 1,000 pages for free.
 
