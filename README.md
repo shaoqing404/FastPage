@@ -243,9 +243,3 @@ Need customized support for your documents or reasoning-based RAG system?
 :loudspeaker: [Join our Discord](https://discord.com/invite/nnyyEdT2RG)
 
 :envelope: [Leave us a message](https://ii2abc2jejf.typeform.com/to/meB40zV0)
-
-<div align="center">
-  <a href="https://vectify.ai" target="_blank">
-    <img src="https://github.com/user-attachments/assets/55abe487-9d21-44ad-b686-a008c2d2b7e7" alt="Vectify AI Logo" width="180">
-  </a>
-</div>
