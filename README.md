@@ -1,6 +1,6 @@
 <div align="center">
   <a href="https://vectify.ai/pageindex" target="_blank">
-    <img src="https://github.com/user-attachments/assets/a62b4c04-d4cf-4edd-982f-2de0f3ed2dfc" alt="pg_logo_small" width="300px">
+    <img width="4500" height="1500" alt="image" src="https://github.com/user-attachments/assets/46201e72-675b-43bc-bfbd-081cc6b65a1d" />
   </a>
 </div>
 
@@ -20,11 +20,6 @@ Are you frustrated with vector database retrieval accuracy for long professional
 
 **[PageIndex](https://vectify.ai/pageindex)** is a *document indexing system* that builds *search tree structures* from long documents, making them ready for reasoning-based RAG.  It has been used to develop a RAG system that achieved 98.7% accuracy on [FinanceBench](https://vectify.ai/blog/Mafin2.5), demonstrating state-of-the-art performance in document analysis.
 
-<div align="center">
-  <a href="https://vectify.ai/pageindex">
-    <img src="https://github.com/user-attachments/assets/6604d932-bdf7-435e-8c28-2213e6ea6a5b" alt="PageIndex" width="700px"/>
-  </a>
-</div>
 
 Self-host it with this open-source repo, or try our ☁️ [Cloud service](https://pageindex.vectify.ai/) — no setup required, with advanced features like OCR for complex and scanned PDFs.
 
