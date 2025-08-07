@@ -2,12 +2,10 @@
   <a href="https://vectify.ai/pageindex" target="_blank">
     <img width="4500" height="1500" alt="image" src="https://github.com/user-attachments/assets/46201e72-675b-43bc-bfbd-081cc6b65a1d" />
   </a>
+
 </div>
 
 
-
-
-### A Major PageIndex Cloud Update is Coming Soon - Stay Tuned!
 
 
 # 📄 PageIndex
@@ -21,9 +19,16 @@ Are you frustrated with vector database retrieval accuracy for long professional
 **[PageIndex](https://vectify.ai/pageindex)** is a *document indexing system* that builds *search tree structures* from long documents, making them ready for reasoning-based RAG.  It has been used to develop a RAG system that achieved 98.7% accuracy on [FinanceBench](https://vectify.ai/blog/Mafin2.5), demonstrating state-of-the-art performance in document analysis.
 
 
-Self-host it with this open-source repo, or try our ☁️ [Cloud service](https://pageindex.vectify.ai/) — no setup required, with advanced features like OCR for complex and scanned PDFs.
+### PageIndex OCR (Updates On 2025/08/07)
+This repo is designed for generating PageIndex tree structure with text inputbut, but many real-world use cases involve PDFs that require OCR to convert them into Markdown. However, extracting high-quality text from PDF documents remains a non-trivial challenge. Most OCR tools only extract page-level content, losing the broader document context and hierarchy.
+ 
+To address this, we’ve introduced PageIndex OCR—the first OCR system designed to preserve the global structure of the documents. PageIndex OCR significantly outperforms other leading OCR tools, such as those from Mistral and Contextual AI, in recognizing the hierarchical layout and semantic relationships across pages.
 
-Built by <a href="https://vectify.ai" target="_blank">Vectify AI</a>.
+
+- Quality experience PageIndex OCR’s next-level quality with our  [Dashboard](https://dash.pageindex.ai).
+- Easily integrate PageIndex OCR into your stack via our [API](https://lnkd.in/e4Kbk59T).
+
+<img width="3016" height="1644" alt="image" src="https://github.com/user-attachments/assets/eb35d8ae-865c-4e60-a33b-ebbd00c41732" />
 
 
 ---
@@ -201,35 +206,8 @@ Reply in the following JSON format:
 }}
 """
 ```
-👉 For more examples, see the [PageIndex Dashboard](https://pageindex.vectify.ai/).
 
----
 
-# 🛤 Roadmap
-
-- [x]  [Detailed examples of document selection, node selection, and RAG pipelines](https://pageindex.vectify.ai/examples/rag)
-- [x]  [Integration of reasoning-based retrieval and semantic-based retrieval](https://pageindex.vectify.ai/examples/hybrid-rag)
-- [ ]  Release of PageIndex Platform with Retrieval (23rd June 2025)
-- [ ]  Efficient tree search methods introduction
-- [ ]  Technical report on the design of PageIndex
-
----
-
-# 🚧 Notice
-This project is in its early beta development, and all progress will remain open and transparent. We welcome you to raise issues, reach out with questions, or contribute directly to the project.  
-
-Due to the diverse structures of PDF documents, you may encounter instability during usage. For a more accurate and stable version with a leading OCR integration, please try our [hosted API for PageIndex](https://pageindex.vectify.ai/). Leave your email in [this form](https://ii2abc2jejf.typeform.com/to/meB40zV0) to receive 1,000 pages for free.
-
-Together, let's push forward the revolution of reasoning-based RAG systems.
-
-### 🙋 FAQ
-- **Does PageIndex support other LLMs besides OpenAI?**  
-  Currently optimized for GPT models, but future versions will support more.
-
-- **Can PageIndex handle scanned PDFs?**  
-  Yes! Our [Cloud API](https://pageindex.vectify.ai/) includes advanced OCR specifically for scanned and complex PDFs.
-
----
 
 # 📬 Contact Us
 
@@ -238,3 +216,5 @@ Need customized support for your documents or reasoning-based RAG system?
 :loudspeaker: [Join our Discord](https://discord.com/invite/nnyyEdT2RG)
 
 :envelope: [Leave us a message](https://ii2abc2jejf.typeform.com/to/meB40zV0)
+
+Built by <a href="https://vectify.ai" target="_blank">Vectify AI</a>.
