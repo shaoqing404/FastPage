@@ -25,7 +25,7 @@ This repo is designed for generating PageIndex tree structure with text input, b
 To address this, we introduced PageIndex OCR — the first OCR system designed to preserve the global structure of documents. PageIndex OCR significantly outperforms other leading OCR tools, such as those from Mistral and Contextual AI, in recognizing true hierarchy and semantic relationships across document pages.
 
 - Experience next-level OCR quality with PageIndex OCR at our [Dashboard](https://dash.pageindex.ai).
-- Integrate seamlessly PageIndex OCR into your stack via our [API](https://lnkd.in/e4Kbk59T).
+- Integrate seamlessly PageIndex OCR into your stack via our [API](https://docs.pageindex.ai/quickstart).
 
 <img width="3016" height="1644" alt="image" src="https://github.com/user-attachments/assets/eb35d8ae-865c-4e60-a33b-ebbd00c41732" />
 
