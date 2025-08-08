@@ -5,12 +5,7 @@
 
 </div>
 
-
-
-
 # 📄 PageIndex
-
-
 
 Are you frustrated with vector database retrieval accuracy for long professional documents? Traditional vector-based RAG relies on semantic *similarity* rather than true *relevance*. But **similarity ≠ relevance** — what we truly need in retrieval is **relevance**, and that requires **reasoning**. When working with professional documents that demand domain expertise and multi-step reasoning, similarity search often falls short.
 
@@ -18,6 +13,7 @@ Are you frustrated with vector database retrieval accuracy for long professional
 
 **[PageIndex](https://vectify.ai/pageindex)** is a *document indexing system* that builds *search tree structures* from long documents, making them ready for reasoning-based RAG.  It has been used to develop a RAG system that achieved 98.7% accuracy on [FinanceBench](https://vectify.ai/blog/Mafin2.5), demonstrating state-of-the-art performance in document analysis.
 
+Self-host it with this open-source repo, or try our ☁️ [Cloud service](https://dash.pageindex.ai/) - no setup required.
 
 ### PageIndex OCR (Updates On 2025/08/07)
 This repo is designed for generating PageIndex tree structure with text input, but many real-world use cases involve PDFs that require OCR to convert them into Markdown. However, extracting high-quality text from PDF documents remains a non-trivial challenge. Most OCR tools only extract page-level content, losing the broader document context and hierarchy.
@@ -28,7 +24,6 @@ To address this, we introduced PageIndex OCR — the first OCR system designed t
 - Integrate seamlessly PageIndex OCR into your stack via our [API](https://docs.pageindex.ai/quickstart).
 
 <img width="3016" height="1644" alt="image" src="https://github.com/user-attachments/assets/eb35d8ae-865c-4e60-a33b-ebbd00c41732" />
-
 
 ---
 
