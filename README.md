@@ -85,21 +85,6 @@ Here is an example output. See more [example documents](https://github.com/Vecti
 
 ---
 
-### ⚠️ Bug Fix Notice
-
-A bug introduced on **April 18** has now been fixed.
-
-If you pulled the repo between **April 18–23**, please update to the latest version:
-
-```bash
-git pull origin main
-```
-
-Thanks for your understanding 🙏
-
-
----
-
 # 🚀 Package Usage
 
 Follow these steps to generate a PageIndex tree from a PDF document.
@@ -149,7 +134,7 @@ Leave your email in [this form](https://ii2abc2jejf.typeform.com/to/meB40zV0) to
 
 # 📈 Case Study: Mafin 2.5 on FinanceBench
 
-[Mafin 2.5](https://vectify.ai/) is a state-of-the-art reasoning-based RAG model designed specifically for financial document analysis. Powered by **PageIndex**, it achieved a market-leading [**98.7% accuracy**](https://vectify.ai/blog/Mafin2.5) on the [FinanceBench](https://arxiv.org/abs/2311.11944) benchmark — significantly outperforming traditional vector-based RAG systems.
+[Mafin 2.5](https://vectify.ai/mafin) is a state-of-the-art reasoning-based RAG model designed specifically for financial document analysis. Powered by **PageIndex**, it achieved a market-leading [**98.7% accuracy**](https://vectify.ai/blog/Mafin2.5) on the [FinanceBench](https://arxiv.org/abs/2311.11944) benchmark — significantly outperforming traditional vector-based RAG systems.
 
 PageIndex's hierarchical indexing enabled precise navigation and extraction of relevant content from complex financial reports, such as SEC filings and earnings disclosures.
 
