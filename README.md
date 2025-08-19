@@ -15,16 +15,6 @@ Are you frustrated with vector database retrieval accuracy for long professional
 
 Self-host it with this open-source repo, or try our ☁️ [Cloud service](https://dash.pageindex.ai/) - no setup required.
 
-### PageIndex OCR (Updates On 2025/08/07)
-This repo is designed for generating PageIndex tree structure with text input, but many real-world use cases involve PDFs that require OCR to convert them into Markdown. However, extracting high-quality text from PDF documents remains a non-trivial challenge. Most OCR tools only extract page-level content, losing the broader document context and hierarchy.
- 
-To address this, we introduced PageIndex OCR — the first OCR system designed to preserve the global structure of documents. PageIndex OCR significantly outperforms other leading OCR tools, such as those from Mistral and Contextual AI, in recognizing true hierarchy and semantic relationships across document pages.
-
-- Experience next-level OCR quality with PageIndex OCR at our [Dashboard](https://dash.pageindex.ai).
-- Integrate seamlessly PageIndex OCR into your stack via our [API](https://docs.pageindex.ai/quickstart).
-
-<img width="3016" height="1644" alt="image" src="https://github.com/user-attachments/assets/eb35d8ae-865c-4e60-a33b-ebbd00c41732" />
-
 ---
 
 # **⭐ What is PageIndex**
@@ -124,6 +114,18 @@ Don't want to host it yourself? Try our [hosted API](https://pageindex.vectify.a
 You can also upload PDFs from your browser and explore results visually with our [Dashboard](https://pageindex.vectify.ai/overview) — no coding needed.
 
 Leave your email in [this form](https://ii2abc2jejf.typeform.com/to/meB40zV0) to receive 1,000 pages for free.
+
+---
+
+### PageIndex OCR (Updates On 2025/08/07)
+This repo is designed for generating PageIndex tree structure with text input, but many real-world use cases involve PDFs that require OCR to convert them into Markdown. However, extracting high-quality text from PDF documents remains a non-trivial challenge. Most OCR tools only extract page-level content, losing the broader document context and hierarchy.
+ 
+To address this, we introduced PageIndex OCR — the first OCR system designed to preserve the global structure of documents. PageIndex OCR significantly outperforms other leading OCR tools, such as those from Mistral and Contextual AI, in recognizing true hierarchy and semantic relationships across document pages.
+
+- Experience next-level OCR quality with PageIndex OCR at our [Dashboard](https://dash.pageindex.ai).
+- Integrate seamlessly PageIndex OCR into your stack via our [API](https://docs.pageindex.ai/quickstart).
+
+<img width="3016" height="1644" alt="image" src="https://github.com/user-attachments/assets/eb35d8ae-865c-4e60-a33b-ebbd00c41732" />
 
 ---
 
