@@ -11,13 +11,12 @@ Are you frustrated with vector database retrieval accuracy for long professional
 
 🧠 **[Reasoning-based RAG](https://pageindex.ai)** offers a better alternative: enabling LLMs to **think** and **reason** their way to the most relevant document sections. Inspired by AlphaGo, we use **tree search** to perform structured document retrieval, which simulates how **human experts** navigate and extract knowledge from long documents.
 
-**[PageIndex](https://vectify.ai/pageindex)** is a *document indexing system* that builds *search tree structures* from long documents, making them ready for reasoning-based RAG.  It has been used to develop a RAG system that achieved 98.7% accuracy on [FinanceBench](https://vectify.ai/blog/Mafin2.5), demonstrating state-of-the-art performance in document analysis.
+**[PageIndex](https://vectify.ai/pageindex)** is a *document indexing system* that builds **search tree structures** from long documents, making them ready for *reasoning-based RAG*.  It has been used to develop a RAG system that achieved 98.7% accuracy on [FinanceBench](https://vectify.ai/blog/Mafin2.5), demonstrating state-of-the-art performance in document analysis.
 
-Try [Reasoning-based RAG with PageIndex](https://pageindex.ai). Say goodbye to "vibe retrieval" 👋
-- No *Vector DB* required
-- No *Chunking* required
-- No *Top-K selection* required
-
+Try [Reasoning-based RAG with PageIndex](https://pageindex.ai). No vector DB required. Say goodbye to *"vibe retrieval"* 👋
+- No *Vector DB*, No *Chunking*, No *Top-K selection*  
+- Higher Accuracy, Better Transparency, Human-like Retrieval
+  
 #### 🚀 Deployment Options  
 - 🛠️ Self-host: run it yourself from this open-source repo
 - **[☁️ Cloud service](https://dash.pageindex.ai/)**: try instantly with our [🖥️ Dashboard](https://dash.pageindex.ai/) or [🔌 API](https://docs.vectify.ai/quickstart) *(no setup required)*  
