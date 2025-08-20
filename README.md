@@ -1,8 +1,23 @@
 <div align="center">
+  
   <a href="https://vectify.ai/pageindex" target="_blank">
-    <img width="4500" height="1500" alt="image" src="https://github.com/user-attachments/assets/46201e72-675b-43bc-bfbd-081cc6b65a1d" />
+    <img src="https://github.com/user-attachments/assets/46201e72-675b-43bc-bfbd-081cc6b65a1d" alt="PageIndex Banner" />
   </a>
+  
+  <br/>
+  <br/>
 
+  <p align="center"><i>Reasoning-based RAG&nbsp; ✧ &nbsp;No Vector DB&nbsp; ✧ &nbsp;No Chunking&nbsp; ✧ &nbsp;Human-like Retrieval</i></p>
+
+<p align="center">
+  <a href="https://vectify.ai">🏠 Homepage</a>&nbsp; • &nbsp;
+  <a href="https://dash.pageindex.ai">🖥️ Dashboard</a>&nbsp; • &nbsp;
+  <a href="https://docs.pageindex.ai/quickstart">📚 API Docs</a>&nbsp; • &nbsp;
+  <a href="https://discord.com/invite/VuXuf29EUj">💬 Discord</a>&nbsp; • &nbsp;
+  <a href="https://ii2abc2jejf.typeform.com/to/tK3AXl8T">✉️ Contact</a>&nbsp; • &nbsp;
+  <a href="https://x.com/VectifyAI">🧬 Vectify AI</a>
+</p>
+  
 </div>
 
 # [📄 PageIndex](https://pageindex.ai)
@@ -206,4 +221,6 @@ Need customized support for your documents or reasoning-based RAG system?
 
 :envelope: [Leave us a message](https://ii2abc2jejf.typeform.com/to/meB40zV0)
 
-Built by <a href="https://vectify.ai" target="_blank">Vectify AI</a>.
+---
+ 
+© 2025 <a href="https://vectify.ai" target="_blank" rel="noopener noreferrer">Vectify AI</a>
