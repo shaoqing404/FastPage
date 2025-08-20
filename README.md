@@ -11,15 +11,15 @@ Are you frustrated with vector database retrieval accuracy for long professional
 
 🧠 **[Reasoning-based RAG](https://pageindex.ai)** offers a better alternative: enabling LLMs to **think** and **reason** their way to the most relevant document sections. Inspired by AlphaGo, we use **tree search** to perform structured document retrieval, which simulates how **human experts** navigate and extract knowledge from long documents.
 
-**[PageIndex](https://vectify.ai/pageindex)** is a *document indexing system* that builds **search tree structures** from long documents, making them ready for *reasoning-based RAG*.  It has been used to develop a RAG system that achieved 98.7% accuracy on [FinanceBench](https://vectify.ai/blog/Mafin2.5), demonstrating state-of-the-art performance in document analysis.
+**[PageIndex](https://vectify.ai/pageindex)** is a *document indexing system* that builds **search tree structures** from long documents, making them ready for **reasoning-based RAG**.  It has been used to develop a RAG system that achieved 98.7% accuracy on [FinanceBench](https://vectify.ai/blog/Mafin2.5), demonstrating state-of-the-art performance in document analysis.
 
 Try [Reasoning-based RAG with PageIndex](https://pageindex.ai) — no vector DB required. Say goodbye to *"vibe retrieval"* 👋
-- No *Vector DB*, No *Chunking*, No *Top-K selection*  
-- Higher Accuracy, Better Transparency, Human-like Retrieval
+- No *Vector DB*, No *Chunking*, No *Top-K* selection
+- Human-like Retrieval, Higher Accuracy, Better Transparency
   
 #### 🚀 Deployment Options  
-- 🛠️ Self-host: run it yourself from this open-source repo
-- **[☁️ Cloud service](https://dash.pageindex.ai/)**: try instantly with our [🖥️ Dashboard](https://dash.pageindex.ai/) or [🔌 API](https://docs.pageindex.ai/quickstart) *(no setup required)*  
+- 🛠️ Self-host — run it yourself from this open-source repo
+- ☁️ **[Cloud Service](https://dash.pageindex.ai/)** — try instantly with our 🖥️ [Dashboard](https://dash.pageindex.ai/) or 🔌 [API](https://docs.pageindex.ai/quickstart), no setup required
 
 ---
 
@@ -131,7 +131,9 @@ To address this, we introduced PageIndex OCR — the first OCR system designed t
 - Experience next-level OCR quality with PageIndex OCR at our [Dashboard](https://dash.pageindex.ai).
 - Integrate seamlessly PageIndex OCR into your stack via our [API](https://docs.pageindex.ai/quickstart).
 
-<img width="3016" height="1644" alt="image" src="https://github.com/user-attachments/assets/eb35d8ae-865c-4e60-a33b-ebbd00c41732" />
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/eb35d8ae-865c-4e60-a33b-ebbd00c41732" width="90%">
+</p>
 
 ---
 
@@ -194,7 +196,7 @@ Reply in the following JSON format:
 """
 ```
 
-
+---
 
 # 📬 Contact Us
 
