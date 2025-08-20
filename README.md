@@ -15,7 +15,6 @@
   <a href="https://docs.pageindex.ai/quickstart">📚 API Docs</a>&nbsp; • &nbsp;
   <a href="https://discord.com/invite/VuXuf29EUj">💬 Discord</a>&nbsp; • &nbsp;
   <a href="https://ii2abc2jejf.typeform.com/to/tK3AXl8T">✉️ Contact</a>&nbsp; • &nbsp;
-  <a href="https://x.com/VectifyAI">🧬 Vectify AI</a>
 </p>
   
 </div>
