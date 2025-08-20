@@ -222,5 +222,5 @@ Need customized support for your documents or reasoning-based RAG system?
 :envelope: [Leave us a message](https://ii2abc2jejf.typeform.com/to/meB40zV0)
 
 ---
- 
-© 2025 <a href="https://vectify.ai" target="_blank" rel="noopener noreferrer">Vectify AI</a>
+
+© 2025 [Vectify AI](https://vectify.ai)
