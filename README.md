@@ -9,7 +9,7 @@
 
 Are you frustrated with vector database retrieval accuracy for long professional documents? Traditional vector-based RAG relies on semantic *similarity* rather than true *relevance*. But **similarity ≠ relevance** — what we truly need in retrieval is **relevance**, and that requires **reasoning**. When working with professional documents that demand domain expertise and multi-step reasoning, similarity search often falls short.
 
-🧠 **[Reasoning-based RAG](https://pageindex.ai)** offers a better alternative: enabling LLMs to **think** and **reason** their way to the most relevant document sections. Inspired by AlphaGo, we use **tree search** to perform structured document retrieval, which simulates how **human experts** navigate and extract knowledge from long documents.
+**[Reasoning-based RAG](https://pageindex.ai)** 🧠 offers a better alternative: enabling LLMs to **think** and **reason** their way to the most relevant document sections. Inspired by AlphaGo, we use **tree search** to perform structured document retrieval, which simulates how **human experts** navigate and extract knowledge from complex documents.
 
 **[PageIndex](https://vectify.ai/pageindex)** is a *document indexing system* that builds **search tree structures** from long documents, making them ready for **reasoning-based RAG**.  It has been used to develop a RAG system that achieved 98.7% accuracy on [FinanceBench](https://vectify.ai/blog/Mafin2.5), demonstrating state-of-the-art performance in document analysis.
 
@@ -18,7 +18,7 @@ Try [Reasoning-based RAG with PageIndex](https://pageindex.ai) — no vector DB 
 - Human-like Retrieval, Higher Accuracy, Better Transparency
   
 #### 🚀 Deployment Options  
-- 🛠️ Self-host — run it yourself from this open-source repo
+- 🛠️ Self-host — run it yourself with this open-source repo
 - ☁️ **[Cloud Service](https://dash.pageindex.ai/)** — try instantly with our 🖥️ [Dashboard](https://dash.pageindex.ai/) or 🔌 [API](https://docs.pageindex.ai/quickstart), no setup required
 
 ---
@@ -155,7 +155,7 @@ PageIndex's hierarchical indexing enabled precise navigation and extraction of r
 
 # 🧠 Reasoning-Based RAG with PageIndex
 
-Use PageIndex to build **reasoning-based retrieval systems** without relying on semantic similarity. Great for domain-specific tasks where nuance matters ([more examples](https://pageindex.vectify.ai/examples/rag)).
+Use PageIndex to build **reasoning-based retrieval systems** without relying on semantic similarity. Great for domain-specific tasks where nuance matters (see **[more examples](https://pageindex.vectify.ai/examples/rag)**).
 
 ### 🔖 Preprocessing Workflow Example
 1. Process documents using PageIndex to generate tree structures.
