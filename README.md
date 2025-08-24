@@ -35,6 +35,12 @@ Try [Reasoning-based RAG with PageIndex](https://pageindex.ai) — no vector DB 
 - 🛠️ Self-host — run it yourself with this open-source repo
 - ☁️ **[Cloud Service](https://dash.pageindex.ai/)** — try instantly with our 🖥️ [Dashboard](https://dash.pageindex.ai/) or 🔌 [API](https://docs.pageindex.ai/quickstart), no setup required
 
+<br>
+
+[![New Notebook](https://img.shields.io/badge/NEW-Simple_Vectorless_RAG_Notebook-red?style=for-the-badge&logo=jupyter)](https://colab.research.google.com/github/VectifyAI/PageIndex/blob/main/cookbook/pageindex_RAG_simple.ipynb)
+
+🚨 **New!** Explore the [Simple Vectorless RAG](https://github.com/VectifyAI/PageIndex/blob/main/cookbook/pageindex_RAG_simple.ipynb) Jupyter notebook — a minimal, hands-on reasoning-based RAG pipeline with PageIndex.
+
 ---
 
 # **⭐ What is PageIndex**
