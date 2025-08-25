@@ -174,10 +174,12 @@ Check out the [Cookbook](https://docs.pageindex.ai/cookbook/vectorless-rag-pagei
 
 Refer to the [API Documentation](https://docs.pageindex.ai/quickstart) for integration details and options.
 
+# ⭐ Support Us
 
-# ⭐ Support us
-Leave a star if you like our project, Thank you!
-![star](https://github.com/user-attachments/assets/eae4ff38-48ae-4a7c-b19f-eab81201d794)
+Leave a star if you like our project — thank you!  
 
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/eae4ff38-48ae-4a7c-b19f-eab81201d794" width="75%">
+</p>
 
 © 2025 [Vectify AI](https://vectify.ai)
