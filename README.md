@@ -50,7 +50,7 @@ PageIndex powers a reasoning-based RAG system that achieved [98.7% accuracy](htt
 
 ### ⚡ Quick Hands-on
 
-🚨 **New:** Check out this simple [*Vectorless RAG Notebook*](https://github.com/VectifyAI/PageIndex/blob/main/cookbook/pageindex_RAG_simple.ipynb) — a minimal, hands-on, reasoning-based RAG pipeline using **PageIndex**.
+Check out this simple [*Vectorless RAG Notebook*](https://github.com/VectifyAI/PageIndex/blob/main/cookbook/pageindex_RAG_simple.ipynb) — a minimal, hands-on, reasoning-based RAG pipeline using **PageIndex**.
 <p align="center">
 <a href="https://colab.research.google.com/github/VectifyAI/PageIndex/blob/main/cookbook/pageindex_RAG_simple.ipynb">
     <img src="https://img.shields.io/badge/Open_In_Colab-Vectorless_RAG_With_PageIndex-orange?style=for-the-badge&logo=googlecolab" alt="Open in Colab"/>
