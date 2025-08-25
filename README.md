@@ -19,50 +19,48 @@
   
 </div>
 
-# [📄 PageIndex](https://pageindex.ai)
+---
+
+# ⭐ Introduction to PageIndex
 
 Are you frustrated with vector database retrieval accuracy for long professional documents? Traditional vector-based RAG relies on semantic *similarity* rather than true *relevance*. But **similarity ≠ relevance** — what we truly need in retrieval is **relevance**, and that requires **reasoning**. When working with professional documents that demand domain expertise and multi-step reasoning, similarity search often falls short.
 
-**[Reasoning-based RAG](https://pageindex.ai)** 🧠 offers a better alternative: enabling LLMs to **think** and **reason** their way to the most relevant document sections. Inspired by AlphaGo, we use **tree search** to perform structured document retrieval, which simulates how **human experts** navigate and extract knowledge from complex documents.
+Inspired by AlphaGo, we propose [PageIndex](https://vectify.ai/pageindex), a **reasoning-based RAG** system that simulates how **human experts** navigate and extract knowledge from long documents through **tree search**, enabling LLMs to *think* and *reason* their way to the most relevant document sections. It performs retrieval in two steps:
 
-**[PageIndex](https://vectify.ai/pageindex)** is a *document indexing system* that builds **search tree structures** from long documents, making them ready for **reasoning-based RAG**.  It has been used to develop a RAG system that achieved 98.7% accuracy on [FinanceBench](https://vectify.ai/blog/Mafin2.5), demonstrating state-of-the-art performance in document analysis.
+1. Generate a "Table-of-Contents" **tree structure index** of documents
+2. Perform reasoning-based retrieval through **tree search**
 
-Try [Reasoning-based RAG with PageIndex](https://pageindex.ai) — no vector DB required. Say goodbye to *"vibe retrieval"* 👋
-- No *Vector DB*, No *Chunking*, No *Top-K* selection
-- Human-like Retrieval, Higher Accuracy, Better Transparency
-  
-#### 🚀 Deployment Options  
-- 🛠️ Self-host — run it yourself with this open-source repo
+<div align="center">
+    <img src="https://docs.pageindex.ai/images/cookbook/vectorless-rag.png" width="90%">
+</div>
+
+### 💡 Features 
+
+Compared to traditional vector-based RAG, PageIndex features:
+- **No Vectors Needed**: Uses document structure and LLM reasoning for retrieval.
+- **No Chunking Needed**: Documents are organized into natural sections, not artificial chunks.
+- **Human-like Retrieval**: Simulates how human experts navigate and extract knowledge from complex documents.
+- **Transparent Retrieval Process**: Retrieval based on reasoning — say goodbye to approximate vector search ("vibe retrieval").
+
+PageIndex powers a reasoning-based RAG system that achieved [98.7% accuracy](https://github.com/VectifyAI/Mafin2.5-FinanceBench) on FinanceBench, showing state-of-the-art performance in professional document analysis (see our [blog post](https://vectify.ai/blog/Mafin2.5) for details).
+
+### 🚀 Deployment Options
+- 🛠️ Self-host — run locally with this open-source repo
 - ☁️ **[Cloud Service](https://dash.pageindex.ai/)** — try instantly with our 🖥️ [Dashboard](https://dash.pageindex.ai/) or 🔌 [API](https://docs.pageindex.ai/quickstart), no setup required
 
-<br>
+### ⚡ Quick Hands-on
 
-[![New Notebook](https://img.shields.io/badge/NEW-Simple_Vectorless_RAG_Notebook-red?style=for-the-badge&logo=jupyter)](https://colab.research.google.com/github/VectifyAI/PageIndex/blob/main/cookbook/pageindex_RAG_simple.ipynb)
-
-🚨 **New!** Explore the [Simple Vectorless RAG](https://github.com/VectifyAI/PageIndex/blob/main/cookbook/pageindex_RAG_simple.ipynb) Jupyter notebook — a minimal, hands-on reasoning-based RAG pipeline with PageIndex.
+🚨 **New:** Check out this simple [*Vectorless RAG Notebook*](https://github.com/VectifyAI/PageIndex/blob/main/cookbook/pageindex_RAG_simple.ipynb) — a minimal, hands-on, reasoning-based RAG pipeline using **PageIndex**.
+<p align="center">
+<a href="https://colab.research.google.com/github/VectifyAI/PageIndex/blob/main/cookbook/pageindex_RAG_simple.ipynb">
+    <img src="https://img.shields.io/badge/Open_In_Colab-Vectorless_RAG_With_PageIndex-orange?style=for-the-badge&logo=googlecolab" alt="Open in Colab"/>
+  </a>
+</p>
 
 ---
 
-# **⭐ What is PageIndex**
-
-PageIndex can transform lengthy PDF documents into a semantic **tree structure**, similar to a *"table of contents"* but optimized for use with Large Language Models (LLMs).
-It's ideal for: financial reports, regulatory filings, academic textbooks, legal or technical manuals, and any document that exceeds LLM context limits.
-
-### ✅ Key Features
-    
-- **Hierarchical Tree Structure**  
-  Enables LLMs to traverse documents logically — like an intelligent, LLM-optimized table of contents.
-
-- **Chunk-Free Segmentation**  
-  No arbitrary chunking. Nodes follow the natural structure of the document.
-
-- **Precise Page Referencing**  
-  Every node contains its summary and start/end page physical index, allowing pinpoint retrieval.
-
-- **Scales to Massive Documents**  
-  Designed to handle hundreds or even thousands of pages with ease.
-
-### 📦 PageIndex Format
+# 📦 PageIndex Tree Structure
+PageIndex can transform lengthy PDF documents into a semantic **tree structure**, similar to a _"table of contents"_ but optimized for use with Large Language Models (LLMs). It's ideal for: financial reports, regulatory filings, academic textbooks, legal or technical manuals, and any document that exceeds LLM context limits.
 
 Here is an example output. See more [example documents](https://github.com/VectifyAI/PageIndex/tree/main/docs) and [generated trees](https://github.com/VectifyAI/PageIndex/tree/main/results).
 
@@ -94,11 +92,13 @@ Here is an example output. See more [example documents](https://github.com/Vecti
 ...
 ```
 
+ You can either generate the PageIndex tree structure with this open-source repo or try our ☁️ **[Cloud Service](https://dash.pageindex.ai/)** — instantly accessible via our 🖥️ [Dashboard](https://dash.pageindex.ai/) or 🔌 [API](https://docs.pageindex.ai/quickstart), with no setup required.
+
 ---
 
 # 🚀 Package Usage
 
-Follow these steps to generate a PageIndex tree from a PDF document.
+You can follow these steps to generate a PageIndex tree from a PDF document.
 
 ### 1. Install dependencies
 
@@ -119,6 +119,7 @@ CHATGPT_API_KEY=your_openai_key_here
 ```bash
 python3 run_pageindex.py --pdf_path /path/to/your/document.pdf
 ```
+
 You can customize the processing with additional optional arguments:
 
 ```
@@ -131,25 +132,17 @@ You can customize the processing with additional optional arguments:
 --if-add-doc-description Add doc description (yes/no, default: yes)
 ```
 
----
-
-# ☁️ Cloud API & Platform (Beta)
-
-Don't want to host it yourself? Try our [hosted API](https://pageindex.vectify.ai/) for PageIndex. The hosted service leverages our custom OCR model for more accurate PDF recognition, delivering better tree structures for complex documents. Ideal for rapid prototyping, production environments, and documents requiring advanced OCR.
-
-You can also upload PDFs from your browser and explore results visually with our [Dashboard](https://pageindex.vectify.ai/overview) — no coding needed.
-
-Leave your email in [this form](https://ii2abc2jejf.typeform.com/to/meB40zV0) to receive 1,000 pages for free.
 
 ---
 
-### PageIndex OCR (Updates On 2025/08/07)
-This repo is designed for generating PageIndex tree structure with text input, but many real-world use cases involve PDFs that require OCR to convert them into Markdown. However, extracting high-quality text from PDF documents remains a non-trivial challenge. Most OCR tools only extract page-level content, losing the broader document context and hierarchy.
- 
-To address this, we introduced PageIndex OCR — the first OCR system designed to preserve the global structure of documents. PageIndex OCR significantly outperforms other leading OCR tools, such as those from Mistral and Contextual AI, in recognizing true hierarchy and semantic relationships across document pages.
+# ☁️ Improved Tree Generation with PageIndex OCR
 
-- Experience next-level OCR quality with PageIndex OCR at our [Dashboard](https://dash.pageindex.ai).
-- Integrate seamlessly PageIndex OCR into your stack via our [API](https://docs.pageindex.ai/quickstart).
+This repo is designed for generating PageIndex tree structure for simple PDFs, but many real-world use cases involve complex PDFs that are hard to parsed by classic python tools. However, extracting high-quality text from PDF documents remains a non-trivial challenge. Most OCR tools only extract page-level content, losing the broader document context and hierarchy.
+
+To address this, we introduced PageIndex OCR — the first long-context OCR model designed to preserve the global structure of documents. PageIndex OCR significantly outperforms other leading OCR tools, such as those from Mistral and Contextual AI, in recognizing true hierarchy and semantic relationships across document pages.
+
+- Experience next-level OCR quality with PageIndex OCR at our [Dashboard](https://dash.pageindex.ai/).
+- Integrate seamlessly PageIndex OCR into your stack via our [API](https://docs.pageindex.ai/quickstart).
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/eb35d8ae-865c-4e60-a33b-ebbd00c41732" width="90%">
@@ -173,59 +166,14 @@ PageIndex's hierarchical indexing enabled precise navigation and extraction of r
 
 ---
 
-# 🧠 Reasoning-Based RAG with PageIndex
+# 🔎 Learn More about PageIndex
 
-Use PageIndex to build **reasoning-based retrieval systems** without relying on semantic similarity. Great for domain-specific tasks where nuance matters (see **[more examples](https://docs.pageindex.ai/doc-search)**).
+See the [Tutorials](https://docs.pageindex.ai/doc-search) for step-by-step guides, including Document Search and Tree Search.
 
-### 🔖 Preprocessing Workflow Example
-1. Process documents using PageIndex to generate tree structures.
-2. Store the tree structures and their corresponding document IDs in a database table.
-3. Store the contents of each node in a separate table, indexed by node ID and tree ID.
+Check out the [Cookbook](https://docs.pageindex.ai/cookbook/vectorless-rag-pageindex) for practical recipes and advanced use cases.
 
-### 🔖 Reasoning-Based RAG Framework Example
-1. Query Preprocessing:
-    - Analyze the query to identify the required knowledge
-2. Document Selection: 
-    - Search for relevant documents and their IDs
-    - Fetch the corresponding tree structures from the database
-3. Node Selection:
-    - Search through tree structures to identify relevant nodes
-4. LLM Generation:
-    - Fetch the corresponding contents of the selected nodes from the database
-    - Format and extract the relevant information
-    - Send the assembled context along with the original query to the LLM
-    - Generate contextually informed responses
+Refer to the [API Documentation](https://docs.pageindex.ai/quickstart) for integration details and options.
 
-
-### 🔖 Example Prompt for Tree Search (Node Selection)
-
-```python
-prompt = f"""
-You are given a question and a tree structure of a document.
-You need to find all nodes that are likely to contain the answer.
-
-Question: {question}
-
-Document tree structure: {structure}
-
-Reply in the following JSON format:
-{{
-    "thinking": <reasoning about where to look>,
-    "node_list": [node_id1, node_id2, ...]
-}}
-"""
-```
-
----
-
-# 📬 Contact Us
-
-Need customized support for your documents or reasoning-based RAG system?
-
-:loudspeaker: [Join our Discord](https://discord.com/invite/nnyyEdT2RG)
-
-:envelope: [Leave us a message](https://ii2abc2jejf.typeform.com/to/meB40zV0)
-
----
+<br>  
 
 © 2025 [Vectify AI](https://vectify.ai)
