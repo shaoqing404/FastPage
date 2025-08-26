@@ -19,8 +19,9 @@ from types import SimpleNamespace as config
 
 CHATGPT_API_KEY = os.getenv("CHATGPT_API_KEY")
 
-
-def count_tokens(text, model):
+def count_tokens(text, model=None):
+    if not text:
+        return 0
     enc = tiktoken.encoding_for_model(model)
     tokens = enc.encode(text)
     return len(tokens)
@@ -488,6 +489,34 @@ def clean_structure_post(data):
         for section in data:
             clean_structure_post(section)
     return data
+
+def remove_fields(data, fields=['text']):
+    if isinstance(data, dict):
+        return {k: remove_fields(v, fields)
+            for k, v in data.items() if k not in fields}
+    elif isinstance(data, list):
+        return [remove_fields(item, fields) for item in data]
+    return data
+
+def print_toc(tree, indent=0):
+    for node in tree:
+        print('  ' * indent + node['title'])
+        if node.get('nodes'):
+            print_toc(node['nodes'], indent + 1)
+
+def print_json(data, max_len=40, indent=2):
+    def simplify_data(obj):
+        if isinstance(obj, dict):
+            return {k: simplify_data(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [simplify_data(item) for item in obj]
+        elif isinstance(obj, str) and len(obj) > max_len:
+            return obj[:max_len] + '...'
+        else:
+            return obj
+    
+    simplified = simplify_data(data)
+    print(json.dumps(simplified, indent=indent, ensure_ascii=False))
 
 
 def remove_structure_text(data):
