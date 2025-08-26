@@ -2,8 +2,9 @@ import asyncio
 import json
 import re
 import tiktoken
+from utils import generate_summaries_for_structure
 
-def count_tokens(text, model):
+def count_tokens(text, model='gpt-4o'):
     enc = tiktoken.encoding_for_model(model)
     tokens = enc.encode(text)
     return len(tokens)
@@ -27,7 +28,7 @@ def extract_nodes_from_markdown(markdown_content):
     return node_list,lines
 
 
-def extract_node_text_content(node_list, markdown_lines, model="gpt-4o"):    
+def extract_node_text_content(node_list, markdown_lines):    
     all_nodes = []
     for node in node_list:
         processed_node = {
@@ -45,7 +46,7 @@ def extract_node_text_content(node_list, markdown_lines, model="gpt-4o"):
             end_line = len(markdown_lines)
         
         node['text'] = '\n'.join(markdown_lines[start_line:end_line]).strip()
-        node['text_token_count'] = count_tokens(node['text'], model)
+        node['text_token_count'] = count_tokens(node['text'])
     
     return all_nodes
 
@@ -157,7 +158,8 @@ def clean_tree_for_output(tree_nodes):
     
     return cleaned_nodes
 
-def md_to_tree(md_path, if_thinning=True, min_token_threshold=None):
+
+async def md_to_tree(md_path, if_thinning=True, min_token_threshold=None, if_summary=True, model="gpt-4.1"):
     with open(md_path, 'r', encoding='utf-8') as f:
         markdown_content = f.read()
     
@@ -170,6 +172,10 @@ def md_to_tree(md_path, if_thinning=True, min_token_threshold=None):
         thinned_nodes = nodes_with_content
     
     tree_structure = build_tree_from_nodes(thinned_nodes)
+
+    if if_summary:
+        tree_structure = await generate_summaries_for_structure(tree_structure, model=model)
+
     return tree_structure
 
 
@@ -179,9 +185,8 @@ if __name__ == "__main__":
     
     # Path to the Welcome.md file
     md_path = os.path.join(os.path.dirname(__file__), '..', 'docs', 'Welcome.md')
-    
 
-    tree_structure = md_to_tree(md_path, if_thinning=True, min_token_threshold=100)
+    tree_structure = asyncio.run(md_to_tree(md_path, if_thinning=True, min_token_threshold=100, if_summary=True))
 
     def print_tree(nodes, indent=0):
         for node in nodes:
