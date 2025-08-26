@@ -268,8 +268,6 @@ if __name__ == "__main__":
         if_summary=IF_SUMMARY, 
         summary_token_threshold=SUMMARY_TOKEN_THRESHOLD, 
         model=MODEL))
-
-    tree_structure=remove_fields(tree_structure, fields=['text'])
     
     print('\n' + '='*60)
     print('TREE STRUCTURE')
