@@ -606,6 +606,24 @@ def generate_doc_description(structure, model=None):
     return response
 
 
+def reorder_dict(data, key_order):
+    if not key_order:
+        return data
+    return {key: data[key] for key in key_order if key in data}
+
+
+def format_structure(structure, order=None):
+    if isinstance(structure, dict):
+        if 'nodes' in structure:
+            structure['nodes'] = format_structure(structure['nodes'], order)
+        if not structure.get('nodes'):
+            structure.pop('nodes', None)
+        structure = reorder_dict(structure, order)
+    elif isinstance(structure, list):
+        structure = [format_structure(item, order) for item in structure]
+    return structure
+
+
 class ConfigLoader:
     def __init__(self, default_path: str = None):
         if default_path is None:

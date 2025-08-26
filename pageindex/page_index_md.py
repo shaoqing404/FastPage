@@ -2,12 +2,25 @@ import asyncio
 import json
 import re
 import tiktoken
-from utils import generate_summaries_for_structure
+from utils import *
 
 def count_tokens(text, model='gpt-4o'):
     enc = tiktoken.encoding_for_model(model)
     tokens = enc.encode(text)
     return len(tokens)
+
+
+async def generate_summaries_for_structure_md(structure, model="gpt-4.1"):
+    nodes = structure_to_list(structure)
+    tasks = [generate_node_summary(node, model=model) for node in nodes]
+    summaries = await asyncio.gather(*tasks)
+    
+    for node, summary in zip(nodes, summaries):
+        if not node.get('nodes'):
+            node['summary'] = summary
+        else:
+            node['prefix_summary'] = summary
+    return structure
 
 
 def extract_nodes_from_markdown(markdown_content):
@@ -159,7 +172,7 @@ def clean_tree_for_output(tree_nodes):
     return cleaned_nodes
 
 
-async def md_to_tree(md_path, if_thinning=True, min_token_threshold=None, if_summary=True, model="gpt-4.1"):
+async def md_to_tree(md_path, if_thinning=True, min_token_threshold=None, if_summary=True):
     with open(md_path, 'r', encoding='utf-8') as f:
         markdown_content = f.read()
     
@@ -174,7 +187,9 @@ async def md_to_tree(md_path, if_thinning=True, min_token_threshold=None, if_sum
     tree_structure = build_tree_from_nodes(thinned_nodes)
 
     if if_summary:
-        tree_structure = await generate_summaries_for_structure(tree_structure, model=model)
+        tree_structure = await generate_summaries_for_structure_md(tree_structure)
+
+    tree_structure = format_structure(tree_structure, order = ['title', 'node_id', 'summary', 'prefix_summary', 'text', 'line_num', 'nodes'])
 
     return tree_structure
 
