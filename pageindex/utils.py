@@ -613,6 +613,8 @@ def reorder_dict(data, key_order):
 
 
 def format_structure(structure, order=None):
+    if not order:
+        return structure
     if isinstance(structure, dict):
         if 'nodes' in structure:
             structure['nodes'] = format_structure(structure['nodes'], order)
