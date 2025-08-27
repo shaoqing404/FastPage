@@ -1,8 +1,10 @@
 import asyncio
 import json
 import re
-from .utils import *
-
+try:
+    from .utils import *
+except:
+    from utils import *
 
 async def get_node_summary(node, summary_token_threshold=200, model=None):
     node_text = node.get('text')
