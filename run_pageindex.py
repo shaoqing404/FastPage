@@ -26,7 +26,7 @@ if __name__ == "__main__":
     parser.add_argument('--if-add-node-text', type=str, default='no',
                       help='Whether to add text to the node')
     # Markdown specific arguments
-    parser.add_argument('--if-thinning', type=str, default='yes',
+    parser.add_argument('--if-thinning', type=str, default='no',
                       help='Whether to apply tree thinning for markdown (markdown only)')
     parser.add_argument('--thinning-threshold', type=int, default=5000,
                       help='Minimum token threshold for thinning (markdown only)')

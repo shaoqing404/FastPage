@@ -1,8 +1,10 @@
 import asyncio
 import json
 import re
-from .utils import *
-
+try:
+    from .utils import *
+except:
+    from utils import *
 
 async def get_node_summary(node, summary_token_threshold=200, model=None):
     node_text = node.get('text')
@@ -28,29 +30,48 @@ async def generate_summaries_for_structure_md(structure, summary_token_threshold
 
 def extract_nodes_from_markdown(markdown_content):
     header_pattern = r'^(#{1,6})\s+(.+)$'
+    code_block_pattern = r'^```'
     node_list = []
     
     lines = markdown_content.split('\n')
+    in_code_block = False
+    
     for line_num, line in enumerate(lines, 1):
-        line = line.strip()
-        if not line:
+        stripped_line = line.strip()
+        
+        # Check for code block delimiters (triple backticks)
+        if re.match(code_block_pattern, stripped_line):
+            in_code_block = not in_code_block
             continue
-            
-        match = re.match(header_pattern, line)
-        if match:
-            title = match.group(2).strip()
-            node_list.append({'node_title': title, 'line_num': line_num})
+        
+        # Skip empty lines
+        if not stripped_line:
+            continue
+        
+        # Only look for headers when not inside a code block
+        if not in_code_block:
+            match = re.match(header_pattern, stripped_line)
+            if match:
+                title = match.group(2).strip()
+                node_list.append({'node_title': title, 'line_num': line_num})
 
-    return node_list,lines
+    return node_list, lines
 
 
 def extract_node_text_content(node_list, markdown_lines):    
     all_nodes = []
     for node in node_list:
+        line_content = markdown_lines[node['line_num'] - 1]
+        header_match = re.match(r'^(#{1,6})', line_content)
+        
+        if header_match is None:
+            print(f"Warning: Line {node['line_num']} does not contain a valid header: '{line_content}'")
+            continue
+            
         processed_node = {
             'title': node['node_title'],
             'line_num': node['line_num'],
-            'level': len(re.match(r'^(#{1,6})', markdown_lines[node['line_num'] - 1]).group(1))
+            'level': len(header_match.group(1))
         }
         all_nodes.append(processed_node)
     
@@ -250,7 +271,8 @@ if __name__ == "__main__":
     import os
     import json
     
-    MD_NAME = 'Detect-Order-Construct'
+    # MD_NAME = 'Detect-Order-Construct'
+    MD_NAME = 'mcp'
     # MD_NAME = 'Welcome'
     MD_PATH = os.path.join(os.path.dirname(__file__), '..', 'docs', f'{MD_NAME}.md')
 
