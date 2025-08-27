@@ -19,8 +19,9 @@ from types import SimpleNamespace as config
 
 CHATGPT_API_KEY = os.getenv("CHATGPT_API_KEY")
 
-
-def count_tokens(text, model):
+def count_tokens(text, model=None):
+    if not text:
+        return 0
     enc = tiktoken.encoding_for_model(model)
     tokens = enc.encode(text)
     return len(tokens)
@@ -489,6 +490,34 @@ def clean_structure_post(data):
             clean_structure_post(section)
     return data
 
+def remove_fields(data, fields=['text']):
+    if isinstance(data, dict):
+        return {k: remove_fields(v, fields)
+            for k, v in data.items() if k not in fields}
+    elif isinstance(data, list):
+        return [remove_fields(item, fields) for item in data]
+    return data
+
+def print_toc(tree, indent=0):
+    for node in tree:
+        print('  ' * indent + node['title'])
+        if node.get('nodes'):
+            print_toc(node['nodes'], indent + 1)
+
+def print_json(data, max_len=40, indent=2):
+    def simplify_data(obj):
+        if isinstance(obj, dict):
+            return {k: simplify_data(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [simplify_data(item) for item in obj]
+        elif isinstance(obj, str) and len(obj) > max_len:
+            return obj[:max_len] + '...'
+        else:
+            return obj
+    
+    simplified = simplify_data(data)
+    print(json.dumps(simplified, indent=indent, ensure_ascii=False))
+
 
 def remove_structure_text(data):
     if isinstance(data, dict):
@@ -604,6 +633,26 @@ def generate_doc_description(structure, model=None):
     """
     response = ChatGPT_API(model, prompt)
     return response
+
+
+def reorder_dict(data, key_order):
+    if not key_order:
+        return data
+    return {key: data[key] for key in key_order if key in data}
+
+
+def format_structure(structure, order=None):
+    if not order:
+        return structure
+    if isinstance(structure, dict):
+        if 'nodes' in structure:
+            structure['nodes'] = format_structure(structure['nodes'], order)
+        if not structure.get('nodes'):
+            structure.pop('nodes', None)
+        structure = reorder_dict(structure, order)
+    elif isinstance(structure, list):
+        structure = [format_structure(item, order) for item in structure]
+    return structure
 
 
 class ConfigLoader:
