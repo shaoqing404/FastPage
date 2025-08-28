@@ -240,7 +240,7 @@ def clean_tree_for_output(tree_nodes):
     return cleaned_nodes
 
 
-async def md_to_tree(md_path, if_thinning=True, min_token_threshold=None, if_add_node_summary='no', summary_token_threshold=None, model=None, if_add_doc_description='yes', if_add_node_text='no', if_add_node_id='yes'):
+async def md_to_tree(md_path, if_thinning=False, min_token_threshold=None, if_add_node_summary='no', summary_token_threshold=None, model=None, if_add_doc_description='no', if_add_node_text='no', if_add_node_id='yes'):
     with open(md_path, 'r', encoding='utf-8') as f:
         markdown_content = f.read()
     
@@ -258,7 +258,6 @@ async def md_to_tree(md_path, if_thinning=True, min_token_threshold=None, if_add
     print(f"Building tree from nodes...")
     tree_structure = build_tree_from_nodes(nodes_with_content)
 
-    # Add node IDs if requested (matching PDF behavior)
     if if_add_node_id == 'yes':
         write_node_id(tree_structure)
 
@@ -318,7 +317,7 @@ if __name__ == "__main__":
         md_path=MD_PATH, 
         if_thinning=IF_THINNING, 
         min_token_threshold=THINNING_THRESHOLD, 
-        if_summary=IF_SUMMARY, 
+        if_add_node_summary='yes' if IF_SUMMARY else 'no', 
         summary_token_threshold=SUMMARY_TOKEN_THRESHOLD, 
         model=MODEL))
     
