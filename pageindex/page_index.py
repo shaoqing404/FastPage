@@ -496,7 +496,7 @@ def remove_first_physical_index_section(text):
     return text
 
 ### add verify completeness
-def generate_toc_continue(toc_content, part, model="gpt-4o-2024-11-20"):
+def generate_toc_continue(toc_content, part, model="gpt-4.1"):
     print('start generate_toc_continue')
     prompt = """
     You are an expert in extracting hierarchical tree structure.
@@ -729,7 +729,7 @@ def check_toc(page_list, opt=None):
 
 
 ################### fix incorrect toc #########################################################
-def single_toc_item_index_fixer(section_title, content, model="gpt-4o-2024-11-20"):
+def single_toc_item_index_fixer(section_title, content, model="gpt-4.1"):
     tob_extractor_prompt = """
     You are given a section title and several pages of a document, your job is to find the physical index of the start page of the section in the partial document.
 
@@ -1084,7 +1084,9 @@ def page_index_main(doc, opt=None):
             if opt.if_add_node_text == 'no':
                 remove_structure_text(structure)
             if opt.if_add_doc_description == 'yes':
-                doc_description = generate_doc_description(structure, model=opt.model)
+                # Create a clean structure without unnecessary fields for description generation
+                clean_structure = create_clean_structure_for_description(structure)
+                doc_description = generate_doc_description(clean_structure, model=opt.model)
                 return {
                     'doc_name': get_pdf_name(doc),
                     'doc_description': doc_description,

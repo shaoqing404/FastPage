@@ -410,7 +410,7 @@ def add_preface_if_needed(data):
 
 
 
-def get_page_tokens(pdf_path, model="gpt-4o-2024-11-20", pdf_parser="PyPDF2"):
+def get_page_tokens(pdf_path, model="gpt-4.1", pdf_parser="PyPDF2"):
     enc = tiktoken.encoding_for_model(model)
     if pdf_parser == "PyPDF2":
         pdf_reader = PyPDF2.PdfReader(pdf_path)
@@ -621,6 +621,29 @@ async def generate_summaries_for_structure(structure, model=None):
     for node, summary in zip(nodes, summaries):
         node['summary'] = summary
     return structure
+
+
+def create_clean_structure_for_description(structure):
+    """
+    Create a clean structure for document description generation,
+    excluding unnecessary fields like 'text'.
+    """
+    if isinstance(structure, dict):
+        clean_node = {}
+        # Only include essential fields for description
+        for key in ['title', 'node_id', 'summary', 'prefix_summary']:
+            if key in structure:
+                clean_node[key] = structure[key]
+        
+        # Recursively process child nodes
+        if 'nodes' in structure and structure['nodes']:
+            clean_node['nodes'] = create_clean_structure_for_description(structure['nodes'])
+        
+        return clean_node
+    elif isinstance(structure, list):
+        return [create_clean_structure_for_description(item) for item in structure]
+    else:
+        return structure
 
 
 def generate_doc_description(structure, model=None):
