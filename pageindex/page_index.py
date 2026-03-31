@@ -484,8 +484,15 @@ def add_page_number_to_toc(part, structure, model=None):
     prompt = fill_prompt_seq + f"\n\nCurrent Partial Document:\n{part}\n\nGiven Structure\n{json.dumps(structure, indent=2)}\n"
     current_json_raw = llm_completion(model=model, prompt=prompt)
     json_result = extract_json(current_json_raw)
-    
+
+    if isinstance(json_result, dict):
+        json_result = [json_result]
+    if not isinstance(json_result, list):
+        return []
+
     for item in json_result:
+        if not isinstance(item, dict):
+            continue
         if 'start' in item:
             del item['start']
     return json_result
@@ -642,6 +649,18 @@ def process_toc_with_page_numbers(toc_content, toc_page_list, page_list, toc_che
     offset = calculate_page_offset(matching_pairs)
     logger.info(f'offset: {offset}')
 
+    if offset is None:
+        if logger:
+            logger.info('Failed to infer page offset from TOC; falling back to TOC-without-page-numbers mode')
+        return process_toc_no_page_numbers(
+            toc_content,
+            toc_page_list,
+            page_list,
+            start_index=1,
+            model=model,
+            logger=logger,
+        )
+
     toc_with_page_number = add_page_offset_to_toc_json(toc_with_page_number, offset)
     logger.info(f'toc_with_page_number: {toc_with_page_number}')
 
@@ -684,7 +703,13 @@ def process_none_page_numbers(toc_items, page_list, start_index=1, model=None):
             item_copy = copy.deepcopy(item)
             del item_copy['page']
             result = add_page_number_to_toc(page_contents, item_copy, model)
-            if isinstance(result[0]['physical_index'], str) and result[0]['physical_index'].startswith('<physical_index'):
+            if (
+                isinstance(result, list)
+                and len(result) > 0
+                and isinstance(result[0], dict)
+                and isinstance(result[0].get('physical_index'), str)
+                and result[0]['physical_index'].startswith('<physical_index')
+            ):
                 item['physical_index'] = int(result[0]['physical_index'].split('_')[-1].rstrip('>').strip())
                 del item['page']
     
