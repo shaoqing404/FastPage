@@ -29,30 +29,112 @@ def count_tokens(text, model=None):
     return litellm.token_counter(model=model, text=text)
 
 
-def llm_completion(model, prompt, chat_history=None, return_finish_reason=False):
+def _json_safe(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, datetime):
+        return value.isoformat() + "Z"
+    if hasattr(value, "model_dump"):
+        return _json_safe(value.model_dump())
+    if hasattr(value, "dict"):
+        return _json_safe(value.dict())
+    if hasattr(value, "json"):
+        try:
+            return json.loads(value.json())
+        except Exception:
+            return value.json()
+    return str(value)
+
+
+def llm_completion(
+    model,
+    prompt,
+    chat_history=None,
+    return_finish_reason=False,
+    raise_on_error=False,
+    request_options=None,
+    trace_hook=None,
+    trace_label=None,
+    stats_hook=None,
+):
     if model:
         model = model.removeprefix("litellm/")
     max_retries = 10
     messages = list(chat_history) + [{"role": "user", "content": prompt}] if chat_history else [{"role": "user", "content": prompt}]
+    completion_kwargs = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0,
+    }
+    if request_options:
+        completion_kwargs.update(request_options)
     for i in range(max_retries):
+        call_started = time.perf_counter()
         try:
-            response = litellm.completion(
-                model=model,
-                messages=messages,
-                temperature=0,
-            )
+            response = litellm.completion(**completion_kwargs)
             content = response.choices[0].message.content
+            if stats_hook:
+                stats_hook(
+                    {
+                        "label": trace_label or "completion",
+                        "ok": True,
+                        "duration_ms": int((time.perf_counter() - call_started) * 1000),
+                        "usage": _json_safe(getattr(response, "usage", None)),
+                        "finish_reason": response.choices[0].finish_reason,
+                    }
+                )
+            if trace_hook:
+                trace_hook(
+                    {
+                        "type": "llm_completion",
+                        "label": trace_label or "completion",
+                        "attempt": i + 1,
+                        "ok": True,
+                        "duration_ms": int((time.perf_counter() - call_started) * 1000),
+                        "request": _json_safe(completion_kwargs),
+                        "response": _json_safe(response),
+                        "response_text": content,
+                        "finish_reason": response.choices[0].finish_reason,
+                    }
+                )
             if return_finish_reason:
                 finish_reason = "max_output_reached" if response.choices[0].finish_reason == "length" else "finished"
                 return content, finish_reason
             return content
         except Exception as e:
+            if stats_hook:
+                stats_hook(
+                    {
+                        "label": trace_label or "completion",
+                        "ok": False,
+                        "duration_ms": int((time.perf_counter() - call_started) * 1000),
+                        "error": str(e),
+                    }
+                )
+            if trace_hook:
+                trace_hook(
+                    {
+                        "type": "llm_completion",
+                        "label": trace_label or "completion",
+                        "attempt": i + 1,
+                        "ok": False,
+                        "duration_ms": int((time.perf_counter() - call_started) * 1000),
+                        "request": _json_safe(completion_kwargs),
+                        "error": str(e),
+                    }
+                )
             print('************* Retrying *************')
             logging.error(f"Error: {e}")
             if i < max_retries - 1:
                 time.sleep(1)
             else:
                 logging.error('Max retries reached for prompt: ' + prompt)
+                if raise_on_error:
+                    raise RuntimeError(f"LLM completion failed after {max_retries} retries: {e}") from e
                 if return_finish_reason:
                     return "", "error"
                 return ""
