@@ -4,3 +4,13 @@ pymupdf==1.26.4
 PyPDF2==3.0.1
 python-dotenv==1.1.0
 pyyaml==6.0.2
+fastapi==0.115.12
+uvicorn==0.34.0
+SQLAlchemy==2.0.40
+python-multipart==0.0.20
+PyJWT==2.10.1
+redis==5.2.1
+minio==7.2.15
+PyMySQL==1.1.1
+alembic==1.14.1
+cryptography==45.0.4
