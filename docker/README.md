@@ -41,6 +41,20 @@ The startup script builds the API and worker images and brings up the dependency
 - MinIO API: `127.0.0.1:9000`
 - MinIO Console: `127.0.0.1:9001`
 
+## Env Matching
+
+The compose file and [docker/.env.example](/Users/shaoqing/workspace/PageIndex-main-integration/docker/.env.example) are aligned around the same runtime names:
+
+- `MYSQL_DATABASE`
+- `MYSQL_USER`
+- `MYSQL_PASSWORD`
+- `MYSQL_ROOT_PASSWORD`
+- `DATABASE_URL`
+- `REDIS_URL`
+- `MINIO_*`
+- `QUEUE_NAME_PARSE`
+- `QUEUE_NAME_CHAT`
+
 ## Migrations
 
 Run migrations after the stack is up:
