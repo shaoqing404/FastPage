@@ -8,3 +8,4 @@ data/
 !.env.example
 !docker/.env.example
 spec/
+《运行手册》（第1版）.pdf
