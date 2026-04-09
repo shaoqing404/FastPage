@@ -199,6 +199,8 @@ Near-term roadmap themes:
 - keep the service surface compatible with alternative infrastructure components often used in domestic deployments
 - evaluate substitutes for Redis, MySQL, and MinIO where equivalent runtime roles are needed
 
+Repository rename and release guidance lives in [RELEASING.md](/Users/shaoqing/workspace/PageIndex-main-integration/RELEASING.md).
+
 ## Important Notes
 
 - The frontend is a separate build from the API service. The root Dockerfiles package the backend API and worker, not a production frontend server.
