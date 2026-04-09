@@ -9,6 +9,7 @@ class ChatSkillCreate(BaseModel):
     description: str | None = None
     system_prompt: str
     document_ids: list[str] = Field(default_factory=list)
+    knowledge_base_id: str | None = None
     provider_id: str | None = None
     model: str
     request_config: dict[str, Any] = Field(default_factory=dict)
@@ -23,6 +24,7 @@ class ChatSkillUpdate(BaseModel):
     description: str | None = None
     system_prompt: str | None = None
     document_ids: list[str] | None = None
+    knowledge_base_id: str | None = None
     provider_id: str | None = None
     model: str | None = None
     request_config: dict[str, Any] | None = None
@@ -36,11 +38,13 @@ class ChatSkillUpdate(BaseModel):
 class ChatSkillOut(BaseModel):
     id: str
     tenant_id: str
+    workspace_id: str | None
     owner_user_id: str
     name: str
     description: str | None
     system_prompt: str
     document_scope_type: str
+    knowledge_base_id: str | None
     provider_id: str | None
     model: str
     request_config: dict[str, Any]

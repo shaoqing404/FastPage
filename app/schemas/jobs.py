@@ -7,6 +7,7 @@ class ParseJobOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
     tenant_id: str
+    workspace_id: str | None
     document_id: str
     version_id: str
     model: str | None

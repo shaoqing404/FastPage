@@ -5,9 +5,11 @@ import {
   BarChart3,
   BookCopy,
   KeyRound,
+  Layers3,
   LogOut,
   MessageSquare,
   Settings2,
+  ShieldCheck,
   Sparkles,
 } from 'lucide-react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
@@ -16,12 +18,13 @@ import { authApi } from '../../features/auth/api';
 import { cn } from '../../lib/utils';
 
 const NAV_ITEMS = [
-  { to: '/overview', label: 'Overview', icon: Sparkles },
+  { to: '/workspace', label: 'Workspace', icon: Sparkles },
+  { to: '/knowledge-bases', label: 'Knowledge Base', icon: Layers3 },
+  { to: '/compliance-checks', label: 'Compliance', icon: ShieldCheck },
   { to: '/documents', label: 'Documents', icon: BookCopy },
   { to: '/skills', label: 'Skills', icon: Settings2 },
-  { to: '/chat', label: 'Chat', icon: MessageSquare },
-  { to: '/control-plane', label: 'Control Plane', icon: KeyRound },
-  { to: '/activity', label: 'Activity', icon: Activity },
+  { to: '/runs', label: 'Runs', icon: Activity },
+  { to: '/providers', label: 'Providers', icon: KeyRound },
 ] as const;
 
 export const MainLayout: React.FC = () => {
@@ -30,7 +33,9 @@ export const MainLayout: React.FC = () => {
   const [navVisible, setNavVisible] = useState(true);
   const [navHovered, setNavHovered] = useState(false);
   const user = useMemo(() => JSON.parse(localStorage.getItem('user') || '{}'), []);
-  const isOverview = location.pathname === '/overview' || location.pathname === '/';
+  const workspaceLabel =
+    typeof user.workspace_id === 'string' && user.workspace_id.trim().length > 0 ? user.workspace_id.trim() : 'Active workspace';
+  const isOverview = location.pathname === '/workspace' || location.pathname === '/overview' || location.pathname === '/';
 
   useEffect(() => {
     setNavVisible(true);
@@ -88,7 +93,7 @@ export const MainLayout: React.FC = () => {
                 </div>
                 <div>
                   <p className="text-xs font-medium uppercase tracking-[0.22em] text-slate-500">PageIndex</p>
-                  <p className="text-sm font-semibold tracking-[-0.02em] text-slate-900">Knowledge Workbench</p>
+                  <p className="text-sm font-semibold tracking-[-0.02em] text-slate-900">Workspace Console</p>
                 </div>
               </div>
 
@@ -105,6 +110,14 @@ export const MainLayout: React.FC = () => {
               </nav>
 
               <div className="flex items-center gap-3">
+                <NavLink to="/chat" className={({ isActive }) => cn('nav-pill', isActive && 'nav-pill-active')}>
+                  <MessageSquare size={16} />
+                  <span>Skill Chat</span>
+                </NavLink>
+                <div className="hidden rounded-full border border-white/75 bg-white/75 px-4 py-2 lg:block">
+                  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">Workspace</p>
+                  <p className="max-w-[180px] truncate text-sm font-semibold text-slate-900">{workspaceLabel}</p>
+                </div>
                 <div className="rounded-full border border-white/75 bg-white/75 px-4 py-2">
                   <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">Operator</p>
                   <p className="text-sm font-semibold text-slate-900">{user.username || 'admin'}</p>

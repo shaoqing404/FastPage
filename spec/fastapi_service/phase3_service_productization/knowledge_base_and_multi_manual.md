@@ -218,6 +218,31 @@ Recommended endpoints:
 - `PATCH /api/v1/workspaces/{workspace_id}/knowledge-bases/{kb_id}/documents/{document_id}`
 - `DELETE /api/v1/workspaces/{workspace_id}/knowledge-bases/{kb_id}/documents/{document_id}`
 
+## Batch 2 Implementation Note
+
+This repository's Batch 2 backend implementation lands the KB resource model and the skill binding contract, but intentionally stops short of changing chat execution semantics.
+
+Implemented in this batch:
+
+- `knowledge_bases` and `knowledge_base_documents` are now first-class backend resources
+- KB is enforced as a tenant-bounded, workspace-scoped resource
+- `chat_skills.knowledge_base_id` is now part of the backend schema and API contract
+- skill create/update/get/list now read and write `knowledge_base_id`
+- existing skill rows with legacy `document_ids` are backfilled to auto-migrated compatibility KB rows during migration
+- KB membership updates also synchronize legacy `chat_skill_documents` rows as a compatibility shim so current single-document chat execution paths do not break immediately
+
+Still intentionally deferred after this batch:
+
+- federated multi-manual retrieval execution in `chat_service`
+- multi-manual citation/runtime payload changes
+- compliance-oriented KB consumers
+
+Compatibility shims retained for follow-up cleanup:
+
+- `skills.document_ids` remains in the API as a read/write compatibility field
+- `chat_skill_documents` remains populated for current chat runtime compatibility
+- current chat execution may still resolve one effective document even when the backing KB contains more than one enabled document
+
 ## Citation Contract
 
 Any KB-backed multi-manual response must include at minimum:
@@ -255,6 +280,12 @@ Recommended shape:
 5. migrate existing single-doc skills:
    - either create one KB per skill
    - or create shared KBs where the grouping is obviously reusable
+
+Current Batch 2 migration choice:
+
+- create one compatibility KB per existing skill that already has `chat_skill_documents`
+- bind `chat_skills.knowledge_base_id` to that migrated KB
+- keep legacy `chat_skill_documents` rows in place until chat/compliance follow-up batches remove the shim
 
 ### Defer
 

@@ -1,5 +1,5 @@
 import { apiClient } from '../../lib/api/client';
-import type { ChatSkill } from '../../types';
+import type { ChatSkill, ChatSkillCreateInput, ChatSkillUpdateInput } from '../../types';
 
 export const skillsApi = {
   list: async (): Promise<ChatSkill[]> => {
@@ -10,11 +10,11 @@ export const skillsApi = {
     const { data } = await apiClient.get<ChatSkill>(`/skills/${id}`);
     return data;
   },
-  create: async (skill: Partial<ChatSkill>): Promise<ChatSkill> => {
+  create: async (skill: ChatSkillCreateInput | Partial<ChatSkill>): Promise<ChatSkill> => {
     const { data } = await apiClient.post<ChatSkill>('/skills', skill);
     return data;
   },
-  update: async (id: string, skill: Partial<ChatSkill>): Promise<ChatSkill> => {
+  update: async (id: string, skill: ChatSkillUpdateInput | Partial<ChatSkill>): Promise<ChatSkill> => {
     const { data } = await apiClient.patch<ChatSkill>(`/skills/${id}`, skill);
     return data;
   },

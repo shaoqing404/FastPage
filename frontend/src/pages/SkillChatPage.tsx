@@ -6,10 +6,12 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { AnswerContent } from '../components/ui/AnswerContent';
 import { Field, GlassPanel, InlineAlert, KeyMetric, SectionToolbar, StatusBadge } from '../components/ui/workbench';
 import { chatApi } from '../features/chat/api';
+import { isApiClientError } from '../lib/api/client';
 import { documentsApi } from '../features/documents/api';
+import { knowledgeBasesApi } from '../features/knowledge-bases/api';
 import { providersApi } from '../features/providers/api';
 import { skillsApi } from '../features/skills/api';
-import type { ChatMessage, ChatRun, ChatSession, Document, RunStatus } from '../types';
+import type { ChatMessage, ChatRun, ChatSession, RunStatus } from '../types';
 import { formatDateTime, formatPageRange, getErrorMessage, resolveProviderById } from '../lib/utils';
 
 type HistoryItem = {
@@ -41,9 +43,9 @@ export const SkillChatPage: React.FC = () => {
   const [streamingAnswer, setStreamingAnswer] = useState('');
   const [streamingRunCreatedAt, setStreamingRunCreatedAt] = useState<string | null>(null);
   const [streamingStatus, setStreamingStatus] = useState<RunStatus | null>(null);
+  const [streamingRunId, setStreamingRunId] = useState<string | null>(null);
   const [streamingExecutionContext, setStreamingExecutionContext] = useState<ChatRun['execution_context'] | null>(null);
   const [completedStreamRun, setCompletedStreamRun] = useState<ChatRun | null>(null);
-  const [selectedDocId, setSelectedDocId] = useState('');
   const [selectedProviderId, setSelectedProviderId] = useState('');
   const [newSessionTitle, setNewSessionTitle] = useState('');
   const [queryRewriteWithHistory, setQueryRewriteWithHistory] = useState<boolean | null>(null);
@@ -57,9 +59,11 @@ export const SkillChatPage: React.FC = () => {
   const [maxContextTokens, setMaxContextTokens] = useState('');
   const [temperature, setTemperature] = useState('');
   const [chatError, setChatError] = useState('');
+  const [chatErrorMeta, setChatErrorMeta] = useState<{ code?: string; requestId?: string | null } | null>(null);
 
   const { data: skills = [] } = useQuery({ queryKey: ['skills'], queryFn: skillsApi.list });
   const { data: documents = [] } = useQuery({ queryKey: ['documents'], queryFn: documentsApi.list });
+  const { data: knowledgeBases = [] } = useQuery({ queryKey: ['knowledge-bases'], queryFn: knowledgeBasesApi.list });
   const { data: providers = [] } = useQuery({ queryKey: ['providers'], queryFn: providersApi.list });
   const { data: sessions = [] } = useQuery({
     queryKey: ['skill-chat-sessions', skillId],
@@ -68,10 +72,9 @@ export const SkillChatPage: React.FC = () => {
   });
 
   const skill = skills.find((item) => item.id === skillId) || null;
+  const boundKnowledgeBase = knowledgeBases.find((kb) => kb.id === skill?.knowledge_base_id) || null;
   const skillDocumentIds = skill?.document_ids || [];
   const skillDocuments = documents.filter((document) => skillDocumentIds.includes(document.id));
-  const effectiveDocumentId = selectedDocId && skillDocumentIds.includes(selectedDocId) ? selectedDocId : skillDocumentIds[0] || '';
-  const selectedDocument = skillDocuments.find((document) => document.id === effectiveDocumentId) || null;
   const skillProvider = skill?.provider_id ? resolveProviderById(skill.provider_id, providers) : null;
   const requestProvider = !skill?.provider_id ? resolveProviderById(selectedProviderId || null, providers) : null;
   const tenantDefaultProvider = providers.find((provider) => provider.is_default) || null;
@@ -190,7 +193,6 @@ export const SkillChatPage: React.FC = () => {
   const runSkillMutation = useMutation({
     mutationFn: async (q: string) => {
       if (!skill) throw new Error('Skill not found');
-      if (!effectiveDocumentId) throw new Error('This skill has no linked document');
       if (!resolvedModel) throw new Error('No model resolved for this skill');
       const retrieval_config = {
         top_k: Number(effectiveTopK || 5),
@@ -211,7 +213,6 @@ export const SkillChatPage: React.FC = () => {
 
       return chatApi.streamSkillRun(skill.id, {
         question: q,
-        document_id: effectiveDocumentId,
         provider_id: !skill.provider_id ? selectedProviderId || undefined : undefined,
         session_id: effectiveSessionId || undefined,
         ...(effectiveSessionId
@@ -225,7 +226,8 @@ export const SkillChatPage: React.FC = () => {
         generation_config,
       }, {
         signal: controller.signal,
-        onRunStarted: ({ created_at }) => {
+        onRunStarted: ({ run_id, created_at }) => {
+          setStreamingRunId(run_id);
           setStreamingRunCreatedAt(created_at);
         },
         onStatus: ({ status }) => {
@@ -244,8 +246,10 @@ export const SkillChatPage: React.FC = () => {
       setPendingQuestion(q);
       setIsStreaming(true);
       setChatError('');
+      setChatErrorMeta(null);
       setCompletedStreamRun(null);
       setStreamingAnswer('');
+      setStreamingRunId(null);
       setStreamingRunCreatedAt(null);
       setStreamingStatus('accepted');
       setStreamingExecutionContext(null);
@@ -265,6 +269,7 @@ export const SkillChatPage: React.FC = () => {
       }
       setNewSessionTitle('');
       setStreamingAnswer('');
+      setStreamingRunId(null);
       setStreamingRunCreatedAt(null);
       setStreamingStatus(null);
       setStreamingExecutionContext(run.execution_context || null);
@@ -279,10 +284,17 @@ export const SkillChatPage: React.FC = () => {
       setIsStreaming(false);
       setQuestion(q);
       setStreamingAnswer('');
+      setStreamingRunId(null);
       setStreamingRunCreatedAt(null);
       setStreamingStatus(null);
       setStreamingExecutionContext(null);
-      setChatError(error instanceof DOMException && error.name === 'AbortError' ? 'Streaming cancelled. The backend marks the run as failed if execution had already started.' : getErrorMessage(error, 'Skill chat failed'));
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        setChatError('');
+        setChatErrorMeta(null);
+      } else {
+        setChatError(getErrorMessage(error, 'Skill run failed'));
+        setChatErrorMeta(isApiClientError(error) ? { code: error.code, requestId: error.requestId } : null);
+      }
       queryClient.invalidateQueries({ queryKey: ['skill-runs-all-sessions', skillId] });
       queryClient.invalidateQueries({ queryKey: ['skill-session-runs', skillId, effectiveSessionId] });
       queryClient.invalidateQueries({ queryKey: ['skill-session-messages', skillId, effectiveSessionId] });
@@ -317,7 +329,7 @@ export const SkillChatPage: React.FC = () => {
     <div className="space-y-8">
       <SectionToolbar
         title={skill.name}
-        description="This route is now skill-specific. Left side is session history, center is the conversation, right side is settings and runtime data."
+        description={`Skill console${boundKnowledgeBase ? ` · ${boundKnowledgeBase.name}` : ''}. Sessions · Conversation · Runtime telemetry.`}
         actions={
           <Link to="/chat" className="btn-secondary">
             <ArrowLeft size={16} />
@@ -368,12 +380,12 @@ export const SkillChatPage: React.FC = () => {
           </div>
         </GlassPanel>
 
-        <GlassPanel title={`Skill chat · ${skill.name}`} subtitle={selectedSession?.title || 'No session selected'}>
+        <GlassPanel title={skill.name} subtitle={selectedSession?.title || 'No session selected'}>
           <div className="space-y-4">
             {chatError && (
               <InlineAlert
                 tone="danger"
-                title="Skill chat failed"
+                title="Skill run failed"
                 action={
                   <button type="button" className="btn-secondary" disabled={!lastQuestion || isStreaming} onClick={() => lastQuestion && runSkillMutation.mutate(lastQuestion)}>
                     <RefreshCcw size={16} />
@@ -383,6 +395,12 @@ export const SkillChatPage: React.FC = () => {
               >
                 <div className="space-y-1">
                   <p>{chatError}</p>
+                  {chatErrorMeta && (
+                    <p className="text-xs text-slate-400">
+                      {chatErrorMeta.code && <span>Code: {chatErrorMeta.code}</span>}
+                      {chatErrorMeta.requestId && <span> · Request ID: {chatErrorMeta.requestId}</span>}
+                    </p>
+                  )}
                   <p className="text-sm text-slate-500">Provider: {activeExecutionContext.provider?.name || resolvedProvider?.name || 'Backend system default'} · Model: {activeExecutionContext.model?.resolved_model || resolvedModel || 'N/A'}</p>
                 </div>
               </InlineAlert>
@@ -392,8 +410,8 @@ export const SkillChatPage: React.FC = () => {
               {history.length === 0 ? (
                 <div className="empty-state min-h-[420px]">
                   <TextQuote size={22} className="text-blue-600" />
-                  <p className="text-base font-medium text-slate-900">Start chatting with this skill</p>
-                  <p className="text-sm text-slate-500">Choose or create a skill session on the left, then ask a question in the center.</p>
+                  <p className="text-base font-medium text-slate-900">Start a conversation</p>
+                  <p className="text-sm text-slate-500">Create a session on the left, then ask a question against this skill's knowledge context.</p>
                 </div>
               ) : (
                 history.map((message, index) => (
@@ -432,10 +450,12 @@ export const SkillChatPage: React.FC = () => {
                       <p className="text-sm font-medium text-slate-900">Assistant</p>
                       <p className="text-sm text-slate-500">
                         {streamingStatus === 'retrieving'
-                          ? 'Retrieving context…'
+                          ? 'Retrieving from knowledge base…'
                           : streamingStatus === 'answering'
-                            ? 'Streaming answer…'
-                            : 'Generating answer…'}
+                            ? 'Generating answer…'
+                            : streamingStatus === 'queued'
+                              ? 'Queued — waiting for execution slot…'
+                              : 'Running…'}
                       </p>
                     </div>
                   </div>
@@ -460,10 +480,15 @@ export const SkillChatPage: React.FC = () => {
                   <button
                     type="button"
                     className="btn-secondary self-end"
-                    onClick={() => streamAbortRef.current?.abort()}
+                    onClick={() => {
+                      streamAbortRef.current?.abort();
+                      if (streamingRunId) {
+                         chatApi.cancelRun(streamingRunId).catch(() => {});
+                      }
+                    }}
                   >
                     <Square size={16} />
-                    <span>Stop</span>
+                    <span>Cancel</span>
                   </button>
                 ) : (
                   <button type="submit" className="btn-primary self-end" disabled={!question.trim() || isStreaming}>
@@ -477,17 +502,23 @@ export const SkillChatPage: React.FC = () => {
         </GlassPanel>
 
         <div className="space-y-6">
-          <GlassPanel title="Settings" subtitle="Skill-scoped execution settings and document choice.">
+          <GlassPanel title="Settings" subtitle="Skill-scoped execution settings and knowledge context.">
             <div className="space-y-4">
-              <Field label="Document">
-                <select value={effectiveDocumentId} onChange={(event) => setSelectedDocId(event.target.value)} className="field">
-                  {skillDocuments.map((document: Document) => (
-                    <option key={document.id} value={document.id}>
-                      {document.display_name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
+              {boundKnowledgeBase ? (
+                <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4">
+                  <div className="mb-1 text-sm font-medium text-slate-900">Knowledge Base</div>
+                  <div className="text-sm font-medium text-blue-700">{boundKnowledgeBase.name}</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {boundKnowledgeBase.documents.length} document(s) bound
+                  </div>
+                </div>
+              ) : skillDocuments.length > 0 ? (
+                <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4">
+                  <div className="mb-1 text-sm font-medium text-slate-900">Legacy Target Documents</div>
+                  <div className="text-sm text-slate-700">{skillDocuments.length} document(s) bound</div>
+                  <div className="mt-1 text-xs text-slate-500">Upgrade skill to use a Knowledge Base</div>
+                </div>
+              ) : null}
 
               <Field label="Provider override" hint={skill.provider_id ? 'This skill is provider-bound. Request override is ignored by the backend.' : 'Optional override when the skill itself does not bind a provider.'}>
                 <select value={skill.provider_id || selectedProviderId} onChange={(event) => setSelectedProviderId(event.target.value)} className="field" disabled={Boolean(skill.provider_id)}>
@@ -556,7 +587,7 @@ export const SkillChatPage: React.FC = () => {
             </div>
           </GlassPanel>
 
-          <GlassPanel title="Runtime data" subtitle="Latest run telemetry, citations, and resolved execution details.">
+          <GlassPanel title="Runtime data" subtitle="Latest run telemetry, knowledge context, citations, and execution details.">
             <div className="space-y-5">
               <div className="grid grid-cols-2 gap-3">
                 <KeyMetric label="Session" value={selectedSession?.title || 'No session'} />
@@ -565,13 +596,17 @@ export const SkillChatPage: React.FC = () => {
                 <KeyMetric label="Citations" value={displayRun?.citations.length ?? 0} />
               </div>
 
-              {selectedDocument && (
+              {boundKnowledgeBase ? (
                 <div className="surface-soft p-4">
-                  <p className="metric-label">Target document</p>
-                  <p className="mt-2 font-medium text-slate-900">{selectedDocument.display_name}</p>
-                  <p className="mt-1 text-sm text-slate-500">{selectedDocument.status}</p>
+                  <p className="metric-label">Knowledge Base</p>
+                  <p className="mt-2 font-medium text-slate-900">{boundKnowledgeBase.name}</p>
                 </div>
-              )}
+              ) : skillDocuments.length > 0 ? (
+                <div className="surface-soft p-4">
+                  <p className="metric-label">Legacy Target Document</p>
+                  <p className="mt-2 font-medium text-slate-900">{skillDocuments.length} document(s) bound</p>
+                </div>
+              ) : null}
 
               {(displayRun || activeStatus || activeExecutionContext.retrieval?.query || activeExecutionContext.model?.resolved_model) ? (
                 <>
@@ -585,7 +620,22 @@ export const SkillChatPage: React.FC = () => {
                   {activeStatus && (
                     <div className="surface-soft p-4">
                       <p className="metric-label">Run status</p>
-                      <p className="mt-2 font-medium text-slate-900">{activeStatus}</p>
+                      <div className="mt-2 flex items-center gap-2">
+                        <StatusBadge tone={activeStatus === 'completed' ? 'success' : activeStatus === 'failed' ? 'danger' : activeStatus === 'cancelled' ? 'warning' : 'accent'}>
+                          {activeStatus}
+                        </StatusBadge>
+                        {displayRun?.raw_status && displayRun.raw_status !== activeStatus && (
+                          <span className="text-xs text-slate-400">({displayRun.raw_status})</span>
+                        )}
+                      </div>
+                      {displayRun?.cancel_requested && (
+                        <p className="mt-2 text-xs text-amber-600">
+                          Cancel requested{displayRun.cancel_reason ? `: ${displayRun.cancel_reason}` : ''}
+                        </p>
+                      )}
+                      {displayRun?.last_error && activeStatus === 'failed' && (
+                        <p className="mt-2 text-xs text-red-500">{displayRun.last_error}</p>
+                      )}
                     </div>
                   )}
 
@@ -624,7 +674,7 @@ export const SkillChatPage: React.FC = () => {
                   {isStreaming && (
                     <div className="surface-soft p-4">
                       <p className="metric-label">Streaming</p>
-                      <p className="mt-2 text-sm text-slate-600">Answer deltas are rendering live. Final citations, selected sections, and metrics arrive with the `run_completed` event.</p>
+                      <p className="mt-2 text-sm text-slate-600">Receiving live answer deltas. Final citations, metrics, and knowledge context details arrive when the run completes.</p>
                     </div>
                   )}
 
@@ -655,7 +705,7 @@ export const SkillChatPage: React.FC = () => {
                 <div className="empty-state min-h-[220px]">
                   <TextQuote size={20} className="text-blue-600" />
                   <p className="text-base font-medium text-slate-900">No run data yet</p>
-                  <p className="text-sm text-slate-500">Ask a question in this skill route to populate runtime metrics and citations.</p>
+                  <p className="text-sm text-slate-500">Ask a question to populate runtime metrics, knowledge context details, and citations.</p>
                 </div>
               )}
             </div>

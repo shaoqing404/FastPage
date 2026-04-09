@@ -1,5 +1,5 @@
 import { apiClient } from '../../lib/api/client';
-import type { Document, DocumentVersion, ParseJob } from '../../types';
+import type { Document, DocumentRestoreResponse, DocumentUploadResponse, DocumentVersion, ParseJob } from '../../types';
 
 export const documentsApi = {
   list: async (): Promise<Document[]> => {
@@ -10,11 +10,11 @@ export const documentsApi = {
     const { data } = await apiClient.get<Document>(`/documents/${id}`);
     return data;
   },
-  upload: async (file: File, document_id?: string): Promise<{ document_id: string; version_id: string; status: string }> => {
+  upload: async (file: File, document_id?: string): Promise<DocumentUploadResponse> => {
     const formData = new FormData();
     formData.append('file', file);
     if (document_id) formData.append('document_id', document_id);
-    const { data } = await apiClient.post('/documents/upload', formData, {
+    const { data } = await apiClient.post<DocumentUploadResponse>('/documents/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
     return data;
@@ -31,8 +31,8 @@ export const documentsApi = {
     const { data } = await apiClient.post<ParseJob>(`/documents/${id}/reparse`, { version_id, model });
     return data;
   },
-  restore: async (id: string, version_id: string): Promise<{ document_id: string; active_version_id: string }> => {
-    const { data } = await apiClient.post(`/documents/${id}/versions/${version_id}/restore`);
+  restore: async (id: string, version_id: string): Promise<DocumentRestoreResponse> => {
+    const { data } = await apiClient.post<DocumentRestoreResponse>(`/documents/${id}/versions/${version_id}/restore`);
     return data;
   },
   delete: async (id: string): Promise<void> => {

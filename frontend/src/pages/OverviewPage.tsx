@@ -1,10 +1,12 @@
 import React, { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, BookCopy, CheckCircle2, Clock3, KeyRound, MessageSquare, Sparkles, Waves } from 'lucide-react';
+import { Activity, AlertTriangle, ArrowRight, BookCopy, CheckCircle2, Clock3, KeyRound, Layers3, MessageSquare, Settings2, Sparkles, Waves } from 'lucide-react';
+import { Link } from 'react-router-dom';
 
 import { authApi } from '../features/auth/api';
 import { chatApi } from '../features/chat/api';
 import { documentsApi } from '../features/documents/api';
+import { knowledgeBasesApi } from '../features/knowledge-bases/api';
 import { metricsApi, jobsApi } from '../features/metrics/api';
 import { providersApi } from '../features/providers/api';
 import { skillsApi } from '../features/skills/api';
@@ -15,6 +17,7 @@ export const OverviewPage: React.FC = () => {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const { data: overview } = useQuery({ queryKey: ['metrics-overview'], queryFn: metricsApi.overview });
   const { data: documents = [] } = useQuery({ queryKey: ['documents'], queryFn: documentsApi.list });
+  const { data: knowledgeBases = [] } = useQuery({ queryKey: ['knowledge-bases'], queryFn: () => knowledgeBasesApi.list() });
   const { data: skills = [] } = useQuery({ queryKey: ['skills'], queryFn: skillsApi.list });
   const { data: providers = [] } = useQuery({ queryKey: ['providers'], queryFn: providersApi.list });
   const { data: directAskSessions = [] } = useQuery({ queryKey: ['chat-sessions'], queryFn: () => chatApi.listSessions() });
@@ -31,6 +34,10 @@ export const OverviewPage: React.FC = () => {
   const { data: apiKeys = [] } = useQuery({ queryKey: ['api-keys'], queryFn: authApi.listApiKeys });
 
   const readyDocuments = useMemo(() => documents.filter((document) => document.status === 'index_ready').length, [documents]);
+  const enabledKnowledgeBaseDocuments = useMemo(
+    () => knowledgeBases.reduce((total, knowledgeBase) => total + knowledgeBase.documents.filter((document) => document.enabled).length, 0),
+    [knowledgeBases],
+  );
   const failedRuns = useMemo(() => runs.filter((run) => run.status === 'failed'), [runs]);
   const activeJobs = useMemo(() => jobs.filter((job) => ['uploaded', 'queued', 'parsing'].includes(job.status)), [jobs]);
   const defaultProvider = providers.find((provider) => provider.is_default) || null;
@@ -42,8 +49,8 @@ export const OverviewPage: React.FC = () => {
   return (
     <div className="space-y-8">
       <SectionToolbar
-        title="Overview"
-        description="A single operational surface for documents, model execution, and recent knowledge work."
+        title="Workspace"
+        description="Operate this Workspace through Knowledge Bases, Documents, Skills, Runs, and Providers."
       />
 
       <GlassPanel className="overflow-visible" bodyClassName="space-y-8">
@@ -55,49 +62,91 @@ export const OverviewPage: React.FC = () => {
             </div>
             <div className="space-y-3">
               <h1 className="max-w-3xl text-5xl font-semibold tracking-[-0.05em] text-slate-950">
-                Build, inspect, and chat against your structured knowledge base without dropping into raw config.
+                Run this Workspace through Knowledge Bases, Documents, Skills, and Runs instead of disconnected feature pages.
               </h1>
               <p className="max-w-3xl text-base leading-7 text-slate-600">
-                Welcome back, {user.username || 'operator'}. This workbench keeps document ingestion, skill design, provider control, and
-                session health in one Apple-style surface instead of scattering them across generic admin pages.
+                Welcome back, {user.username || 'operator'}. Knowledge Base is now the formal resource above Document scope, so this console can
+                express Skill design, Provider control, and Run review as one Workspace model instead of a loose tool collection.
               </p>
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <KeyMetric label="Documents" value={overview?.documents ?? 0} hint={`${readyDocuments} ready for chat`} />
-            <KeyMetric label="Skills" value={skills.length} hint="Reusable knowledge behaviors" />
-            <KeyMetric label="Chat Runs" value={overview?.chat_runs ?? 0} hint={`${failedRuns.length} failed recently`} />
-            <KeyMetric label="Providers" value={providers.length} hint={defaultProvider ? `${defaultProvider.name} is tenant default` : 'No tenant default yet'} />
+            <KeyMetric label="Knowledge Bases" value={knowledgeBases.length} hint="Reusable retrieval scopes" />
+            <KeyMetric label="Runs" value={overview?.chat_runs ?? 0} hint={`${failedRuns.length} failed recently`} />
+            <KeyMetric label="Providers" value={providers.length} hint={defaultProvider ? `${defaultProvider.name} is Workspace default` : 'No Workspace default yet'} />
           </div>
         </div>
 
         <div className="grid grid-cols-4 gap-4">
-          <div className="surface-soft p-4">
-            <p className="metric-label">Tenant default provider</p>
-            <p className="mt-2 text-lg font-semibold text-slate-900">{defaultProvider?.name || 'Backend resolved'}</p>
-            <p className="mt-1 text-sm text-slate-500">{defaultProvider?.default_model || 'System default execution may be used'}</p>
+          <div className="surface-soft flex h-full flex-col gap-4 p-4">
+            <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
+              <Layers3 size={18} className="text-blue-600" />
+              <span>Knowledge Base path</span>
+            </div>
+            <div className="space-y-1">
+              <p className="text-lg font-semibold text-slate-900">{knowledgeBases.length} reusable scopes</p>
+              <p className="text-sm text-slate-500">{enabledKnowledgeBaseDocuments} enabled Documents are packaged for reuse across this Workspace.</p>
+            </div>
+            <Link to="/knowledge-bases" className="btn-secondary mt-auto">
+              <span>Open Knowledge Bases</span>
+              <ArrowRight size={16} />
+            </Link>
           </div>
-          <div className="surface-soft p-4">
-            <p className="metric-label">Open sessions</p>
-            <p className="mt-2 text-lg font-semibold text-slate-900">{sessions.length}</p>
-            <p className="mt-1 text-sm text-slate-500">Direct ask plus skill-scoped session continuity</p>
+          <div className="surface-soft flex h-full flex-col gap-4 p-4">
+            <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
+              <Settings2 size={18} className="text-blue-600" />
+              <span>Skill path</span>
+            </div>
+            <div className="space-y-1">
+              <p className="text-lg font-semibold text-slate-900">{skills.length} Skills</p>
+              <p className="text-sm text-slate-500">Bind prompt, Knowledge Base, and Provider into reusable execution entry points.</p>
+            </div>
+            <Link to="/skills" className="btn-secondary mt-auto">
+              <span>Open Skills</span>
+              <ArrowRight size={16} />
+            </Link>
           </div>
-          <div className="surface-soft p-4">
-            <p className="metric-label">API keys</p>
-            <p className="mt-2 text-lg font-semibold text-slate-900">{apiKeys.length}</p>
-            <p className="mt-1 text-sm text-slate-500">Tenant-scoped programmatic access</p>
+          <div className="surface-soft flex h-full flex-col gap-4 p-4">
+            <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
+              <Activity size={18} className="text-blue-600" />
+              <span>Run path</span>
+            </div>
+            <div className="space-y-1">
+              <p className="text-lg font-semibold text-slate-900">{overview?.chat_runs ?? 0} Runs</p>
+              <p className="text-sm text-slate-500">{failedRuns.length > 0 ? `${failedRuns.length} failed recently.` : 'Review execution history or jump into skill-scoped chat.'}</p>
+            </div>
+            <div className="mt-auto flex flex-wrap gap-2">
+              <Link to="/runs" className="btn-primary">
+                <span>View Runs</span>
+              </Link>
+              <Link to="/chat" className="btn-secondary">
+                <span>Open Skill Chat</span>
+              </Link>
+            </div>
           </div>
-          <div className="surface-soft p-4">
-            <p className="metric-label">Active parse jobs</p>
-            <p className="mt-2 text-lg font-semibold text-slate-900">{activeJobs.length}</p>
-            <p className="mt-1 text-sm text-slate-500">Real-time ingestion pipeline load</p>
+          <div className="surface-soft flex h-full flex-col gap-4 p-4">
+            <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
+              <KeyRound size={18} className="text-blue-600" />
+              <span>Provider path</span>
+            </div>
+            <div className="space-y-1">
+              <p className="text-lg font-semibold text-slate-900">{defaultProvider?.name || 'Backend resolved'}</p>
+              <p className="text-sm text-slate-500">
+                {defaultProvider?.default_model || 'System default execution may be used'} · {apiKeys.length} workspace API keys issued.
+              </p>
+            </div>
+            <Link to="/providers" className="btn-secondary mt-auto">
+              <span>Open Providers</span>
+              <ArrowRight size={16} />
+            </Link>
           </div>
         </div>
       </GlassPanel>
 
       <div className="grid grid-cols-[1.1fr_1fr] gap-6">
-        <GlassPanel title="Recent work" subtitle="Latest sessions, runs, and ingestions across the tenant.">
+        <GlassPanel title="Recent work" subtitle="Latest sessions, runs, and ingestion work across the Workspace.">
           <div className="space-y-3">
             {runs.slice(0, 5).map((run) => (
               <div key={run.id} className="list-row">
@@ -139,7 +188,7 @@ export const OverviewPage: React.FC = () => {
               <div>
                 <p className="font-medium text-slate-900">Documents ready for chat</p>
                 <p className="text-sm text-slate-500">
-                  {readyDocuments} of {documents.length} documents are ready. {activeJobs.length > 0 ? `${activeJobs.length} jobs are still processing.` : 'No active parse backlog.'}
+                  {readyDocuments} of {documents.length} Documents are ready. {activeJobs.length > 0 ? `${activeJobs.length} jobs are still processing.` : 'No active parse backlog.'}
                 </p>
               </div>
             </div>
@@ -159,7 +208,7 @@ export const OverviewPage: React.FC = () => {
               <div>
                 <p className="font-medium text-slate-900">Provider resolution</p>
                 <p className="text-sm text-slate-500">
-                  Skill-bound provider overrides request provider. Tenant default is {defaultProvider?.name || 'not configured'}, then backend system default takes over.
+                  Skill-bound provider overrides request provider. Workspace default is {defaultProvider?.name || 'not configured'}, then backend system default takes over.
                 </p>
               </div>
             </div>
@@ -167,7 +216,7 @@ export const OverviewPage: React.FC = () => {
         </GlassPanel>
       </div>
 
-      <div className="grid grid-cols-[1fr_1fr_1fr] gap-6">
+      <div className="grid grid-cols-4 gap-6">
         <GlassPanel title="Latest documents" subtitle="Recently ingested or updated assets.">
           <div className="space-y-3">
             {documents.slice(0, 4).map((document) => (
@@ -181,6 +230,23 @@ export const OverviewPage: React.FC = () => {
                 </StatusBadge>
               </div>
             ))}
+          </div>
+        </GlassPanel>
+
+        <GlassPanel title="Knowledge Base coverage" subtitle="How the current Workspace is packaging Documents into reusable scopes.">
+          <div className="space-y-3">
+            {knowledgeBases.slice(0, 4).map((knowledgeBase) => (
+              <div key={knowledgeBase.id} className="list-row">
+                <div>
+                  <p className="font-medium text-slate-900">{knowledgeBase.name}</p>
+                  <p className="text-sm text-slate-500">{knowledgeBase.documents.filter((document) => document.enabled).length} enabled Documents</p>
+                </div>
+                <StatusBadge tone={knowledgeBase.status === 'active' ? 'success' : knowledgeBase.status === 'disabled' ? 'warning' : 'default'}>
+                  {knowledgeBase.status === 'active' ? 'Enabled' : knowledgeBase.status === 'disabled' ? 'Disabled' : knowledgeBase.status}
+                </StatusBadge>
+              </div>
+            ))}
+            {knowledgeBases.length === 0 && <p className="text-sm text-slate-500">No Knowledge Base has been created in this Workspace yet.</p>}
           </div>
         </GlassPanel>
 
@@ -205,7 +271,7 @@ export const OverviewPage: React.FC = () => {
               <CheckCircle2 size={18} className="mt-0.5 text-emerald-600" />
               <div>
                 <p className="font-medium text-slate-900">Providers configured</p>
-                <p className="text-sm text-slate-500">{providers.length} provider profiles available for tenant use.</p>
+                <p className="text-sm text-slate-500">{providers.length} provider profiles available for Workspace use.</p>
               </div>
             </div>
             <div className="surface-soft flex items-start gap-3 p-4">

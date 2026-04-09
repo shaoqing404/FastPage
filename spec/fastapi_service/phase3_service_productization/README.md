@@ -16,6 +16,12 @@ Phase 3 is intentionally split into two groups:
 
 Before Phase 3 starts, **Phase 2 must be formally closed**.
 
+## Current Review Entry
+
+For the current frontend productization closeout and pre-test review, read:
+
+- [phase3_frontend_closeout_report.md](/Users/shaoqing/workspace/PageIndex/spec/fastapi_service/phase3_service_productization/phase3_frontend_closeout_report.md)
+
 ## Codebase Reality Check
 
 This plan is based on the current implementation, not only the earlier spec.
@@ -133,6 +139,15 @@ Upgrade the system from “single default tenant with tenant-shaped tables” to
 - replace bootstrap-only tenant assumptions with explicit creation and lookup flows
 - move away from hardcoded single-admin auth assumptions
 
+Batch 1 implementation note:
+
+- backend foundation now includes formal `workspaces` and `tenant_memberships`
+- auth resolves tenant membership plus default workspace and no longer validates login purely against one configured admin credential pair
+- legacy bootstrap-admin login compatibility is limited to a one-time upgrade window before the password is normalized into the database
+- schema evolution is moving to Alembic-based migration files
+- legacy provider backfill keeps system-managed providers tenant-scoped and assigns legacy user-created providers to the tenant default workspace
+- tenant/workspace CRUD and context switching APIs are still follow-up work
+
 ### Acceptance direction
 
 - at least two tenants can exist without cross-tenant leakage
@@ -213,6 +228,13 @@ Therefore Phase 3 must start with a feasibility spike:
 - skills bound to `knowledge_base_id` rather than raw `document_ids`
 - query across one or more enabled manuals inside one KB
 - citation payloads with full source provenance
+
+Batch 2 implementation note:
+
+- backend schema/API now includes `knowledge_bases`, `knowledge_base_documents`, and `chat_skills.knowledge_base_id`
+- KB CRUD and skill-to-KB binding are now part of the backend surface
+- `skills.document_ids` remains as a compatibility shim and is synchronized from KB membership where needed
+- chat queue / worker changes, federated multi-manual execution, and compliance APIs remain deferred to later batches
 
 ### Acceptance direction
 

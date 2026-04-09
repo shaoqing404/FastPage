@@ -1,5 +1,5 @@
-import { apiClient } from '../../lib/api/client';
-import type { ChatMessage, ChatRun, ChatSession, RunStatus } from '../../types';
+import { ApiClientError, parseApiErrorResponse, resolveApiUrl, apiClient } from '../../lib/api/client';
+import type { ApiErrorPayload, ChatMessage, ChatRun, ChatRunExecutionContext, ChatSession, RunStatus, StandardRunStatus } from '../../types';
 
 export interface AskRequest {
   question: string;
@@ -26,7 +26,9 @@ export interface SkillRunRequest {
   generation_config?: Record<string, unknown>;
 }
 
-type SkillRunExecutionContext = ChatRun['execution_context'];
+type SkillRunExecutionContext = ChatRunExecutionContext;
+type RawChatRun = Omit<ChatRun, 'status' | 'raw_status'> & { status: string };
+type SkillStreamErrorPayload = Partial<ApiErrorPayload> & { detail?: string };
 
 export interface SkillRunStreamHandlers {
   signal?: AbortSignal;
@@ -35,53 +37,35 @@ export interface SkillRunStreamHandlers {
   onContext?: (payload: { execution_context: SkillRunExecutionContext }) => void;
   onAnswerDelta?: (payload: { delta: string; seq?: number }) => void;
   onCompleted?: (payload: ChatRun) => void;
-  onError?: (payload: { code?: string; message?: string; detail?: string }) => void;
+  onError?: (payload: SkillStreamErrorPayload) => void;
 }
 
-const redirectToLogin = () => {
-  localStorage.removeItem('token');
-  localStorage.removeItem('user');
-  const basePath = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') || '/';
-  const loginPath = `${basePath === '/' ? '' : basePath}/login`;
-  if (typeof window !== 'undefined' && window.location.pathname !== loginPath) {
-    window.location.href = loginPath;
+const normalizeRunStatus = (status: string): StandardRunStatus => {
+  switch (status) {
+    case 'accepted':
+    case 'queued':
+      return 'queued';
+    case 'retrieving':
+    case 'answering':
+    case 'running':
+      return 'running';
+    case 'completed':
+      return 'completed';
+    case 'cancelled':
+      return 'cancelled';
+    case 'failed':
+    default:
+      return 'failed';
   }
 };
 
-const parseHttpError = async (response: Response) => {
-  if (response.status === 401) {
-    redirectToLogin();
-    throw new Error('Unauthorized');
-  }
-
-  const contentType = response.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    const data = (await response.json()) as { detail?: unknown };
-    if (typeof data.detail === 'string') {
-      throw new Error(data.detail);
-    }
-    if (Array.isArray(data.detail)) {
-      const messages = data.detail
-        .map((item) => {
-          if (typeof item === 'string') return item;
-          if (item && typeof item === 'object') {
-            const maybeItem = item as { loc?: unknown; msg?: unknown };
-            const location = Array.isArray(maybeItem.loc) ? maybeItem.loc.join('.') : null;
-            const message = typeof maybeItem.msg === 'string' ? maybeItem.msg : null;
-            if (location && message) return `${location}: ${message}`;
-            return message;
-          }
-          return null;
-        })
-        .filter((value): value is string => Boolean(value));
-      if (messages.length > 0) {
-        throw new Error(messages.join('; '));
-      }
-    }
-  }
-
-  const text = await response.text();
-  throw new Error(text || `Request failed with status ${response.status}`);
+const normalizeChatRun = (run: RawChatRun): ChatRun => {
+  const rawStatus = typeof run.status === 'string' ? (run.status as RunStatus) : null;
+  return {
+    ...run,
+    status: normalizeRunStatus(run.status),
+    raw_status: rawStatus,
+  };
 };
 
 const parseSseEvent = (chunk: string): { event: string; data: string } | null => {
@@ -106,15 +90,15 @@ const parseSseEvent = (chunk: string): { event: string; data: string } | null =>
 
 export const chatApi = {
   ask: async (payload: AskRequest): Promise<ChatRun> => {
-    const { data } = await apiClient.post<ChatRun>('/chat/ask', payload);
-    return data;
+    const { data } = await apiClient.post<RawChatRun>('/chat/ask', payload);
+    return normalizeChatRun(data);
   },
   runSkill: async (skill_id: string, payload: SkillRunRequest): Promise<ChatRun> => {
-    const { data } = await apiClient.post<ChatRun>(`/chat/skills/${skill_id}/run`, payload);
-    return data;
+    const { data } = await apiClient.post<RawChatRun>(`/chat/skills/${skill_id}/run`, payload);
+    return normalizeChatRun(data);
   },
   streamSkillRun: async (skill_id: string, payload: SkillRunRequest, handlers: SkillRunStreamHandlers = {}): Promise<ChatRun> => {
-    const response = await fetch(`${apiClient.defaults.baseURL}/chat/skills/${skill_id}/run`, {
+    const response = await fetch(resolveApiUrl(`/chat/skills/${skill_id}/run`), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -126,7 +110,7 @@ export const chatApi = {
     });
 
     if (!response.ok) {
-      await parseHttpError(response);
+      throw await parseApiErrorResponse(response);
     }
 
     if (!response.body) {
@@ -158,7 +142,8 @@ export const chatApi = {
             continue;
           }
           if (parsed.event === 'status') {
-            handlers.onStatus?.(payloadData as { status: RunStatus });
+            const statusPayload = payloadData as { status?: string };
+            handlers.onStatus?.({ status: normalizeRunStatus(statusPayload.status || 'failed') });
             continue;
           }
           if (parsed.event === 'context') {
@@ -170,14 +155,21 @@ export const chatApi = {
             continue;
           }
           if (parsed.event === 'run_completed') {
-            completedRun = payloadData as ChatRun;
+            completedRun = normalizeChatRun(payloadData as RawChatRun);
             handlers.onCompleted?.(completedRun);
             continue;
           }
           if (parsed.event === 'error') {
-            const errorPayload = payloadData as { code?: string; message?: string; detail?: string };
+            const errorPayload = payloadData as SkillStreamErrorPayload;
             handlers.onError?.(errorPayload);
-            throw new Error(errorPayload.detail || errorPayload.message || 'Skill stream failed');
+            throw new ApiClientError(
+              {
+                code: errorPayload.code || 'INTERNAL_ERROR',
+                message: errorPayload.detail || errorPayload.message || 'Skill stream failed',
+                request_id: errorPayload.request_id ?? null,
+                ...(errorPayload.details !== undefined ? { details: errorPayload.details } : {}),
+              },
+            );
           }
         }
       }
@@ -192,12 +184,16 @@ export const chatApi = {
     }
   },
   listRuns: async (params?: { skill_id?: string; document_id?: string; session_id?: string }): Promise<ChatRun[]> => {
-    const { data } = await apiClient.get<ChatRun[]>('/runs', { params });
-    return data;
+    const { data } = await apiClient.get<RawChatRun[]>('/runs', { params });
+    return data.map(normalizeChatRun);
   },
   getRun: async (id: string): Promise<ChatRun> => {
-    const { data } = await apiClient.get<ChatRun>(`/runs/${id}`);
-    return data;
+    const { data } = await apiClient.get<RawChatRun>(`/runs/${id}`);
+    return normalizeChatRun(data);
+  },
+  cancelRun: async (id: string): Promise<ChatRun> => {
+    const { data } = await apiClient.post<RawChatRun>(`/runs/${id}/cancel`);
+    return normalizeChatRun(data);
   },
   listSessions: async (params?: { skill_id?: string }): Promise<ChatSession[]> => {
     const { data } = await apiClient.get<ChatSession[]>('/chat/sessions', { params });
