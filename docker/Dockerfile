@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -17,4 +17,3 @@ RUN pip install --upgrade pip \
 COPY . /app
 
 EXPOSE 22223
-
