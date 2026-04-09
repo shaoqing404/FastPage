@@ -2,10 +2,10 @@ services:
   mysql:
     image: mysql:8.4
     environment:
-      MYSQL_DATABASE: pageindex
-      MYSQL_USER: pageindex
-      MYSQL_PASSWORD: pageindex
-      MYSQL_ROOT_PASSWORD: root-change-me
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-pageindex}
+      MYSQL_USER: ${MYSQL_USER:-pageindex}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-pageindex}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root-change-me}
     command:
       - --default-authentication-plugin=mysql_native_password
     volumes:
@@ -13,7 +13,7 @@ services:
     ports:
       - "127.0.0.1:3306:3306"
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-proot-change-me"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${MYSQL_ROOT_PASSWORD:-root-change-me}"]
       interval: 10s
       timeout: 5s
       retries: 10

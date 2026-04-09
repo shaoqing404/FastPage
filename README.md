@@ -4,6 +4,8 @@
 
 This repository is based on and derived from [PageIndex](https://github.com/VectifyAI/PageIndex). It keeps the upstream [MIT license](/Users/shaoqing/workspace/PageIndex-main-integration/LICENSE) and does not claim to be the upstream PageIndex project itself. The role of this repo is the service surface around PageIndex capabilities.
 
+Thanks to the PageIndex team for the upstream framework, open-source release, and the document-retrieval foundation this project builds on. This repository should be read as an implementation-oriented packaging of PageIndex into a more directly deployable service baseline, not as a replacement for the upstream project.
+
 ## Project Positioning
 
 PageIndex Service exposes a workspace-aware service surface for:
@@ -169,6 +171,7 @@ Use [docker/.env.example](/Users/shaoqing/workspace/PageIndex-main-integration/d
 
 - Based on / derived from PageIndex
 - Keeps the upstream MIT license
+- Explicitly credits and thanks the upstream PageIndex project
 - Focuses on the service and console layer around PageIndex capabilities
 - Does not rename the Python package tree aggressively; project-level naming is `PageIndex Service`
 
@@ -187,9 +190,18 @@ Expected follow-up after this baseline:
 - additional runtime hardening
 - no new Phase 4-scale feature expansion in this packaging pass
 
+## Roadmap Direction
+
+Near-term roadmap themes:
+
+- improve deployability beyond single-host compose
+- add Kubernetes-friendly deployment packaging
+- keep the service surface compatible with alternative infrastructure components often used in domestic deployments
+- evaluate substitutes for Redis, MySQL, and MinIO where equivalent runtime roles are needed
+
 ## Important Notes
 
 - The frontend is a separate build from the API service. The root Dockerfiles package the backend API and worker, not a production frontend server.
 - The recommended runtime baseline for source development is Python 3.12 plus `uv`.
 - Do not expose raw uvicorn directly to the public internet without a reverse proxy, TLS termination, and explicit CORS configuration.
-- Some Phase 3 semantics remain foundational rather than fully expanded product flows; see the specs in [spec/fastapi_service/phase3_service_productization/](/Users/shaoqing/workspace/PageIndex-main-integration/spec/fastapi_service/phase3_service_productization).
+- Some Phase 3 semantics remain foundational rather than fully expanded product flows; the public repository focuses on runnable service packaging rather than shipping internal design docs.
