@@ -29,30 +29,112 @@ def count_tokens(text, model=None):
     return litellm.token_counter(model=model, text=text)
 
 
-def llm_completion(model, prompt, chat_history=None, return_finish_reason=False):
+def _json_safe(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, datetime):
+        return value.isoformat() + "Z"
+    if hasattr(value, "model_dump"):
+        return _json_safe(value.model_dump())
+    if hasattr(value, "dict"):
+        return _json_safe(value.dict())
+    if hasattr(value, "json"):
+        try:
+            return json.loads(value.json())
+        except Exception:
+            return value.json()
+    return str(value)
+
+
+def llm_completion(
+    model,
+    prompt,
+    chat_history=None,
+    return_finish_reason=False,
+    raise_on_error=False,
+    request_options=None,
+    trace_hook=None,
+    trace_label=None,
+    stats_hook=None,
+):
     if model:
         model = model.removeprefix("litellm/")
     max_retries = 10
     messages = list(chat_history) + [{"role": "user", "content": prompt}] if chat_history else [{"role": "user", "content": prompt}]
+    completion_kwargs = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0,
+    }
+    if request_options:
+        completion_kwargs.update(request_options)
     for i in range(max_retries):
+        call_started = time.perf_counter()
         try:
-            response = litellm.completion(
-                model=model,
-                messages=messages,
-                temperature=0,
-            )
+            response = litellm.completion(**completion_kwargs)
             content = response.choices[0].message.content
+            if stats_hook:
+                stats_hook(
+                    {
+                        "label": trace_label or "completion",
+                        "ok": True,
+                        "duration_ms": int((time.perf_counter() - call_started) * 1000),
+                        "usage": _json_safe(getattr(response, "usage", None)),
+                        "finish_reason": response.choices[0].finish_reason,
+                    }
+                )
+            if trace_hook:
+                trace_hook(
+                    {
+                        "type": "llm_completion",
+                        "label": trace_label or "completion",
+                        "attempt": i + 1,
+                        "ok": True,
+                        "duration_ms": int((time.perf_counter() - call_started) * 1000),
+                        "request": _json_safe(completion_kwargs),
+                        "response": _json_safe(response),
+                        "response_text": content,
+                        "finish_reason": response.choices[0].finish_reason,
+                    }
+                )
             if return_finish_reason:
                 finish_reason = "max_output_reached" if response.choices[0].finish_reason == "length" else "finished"
                 return content, finish_reason
             return content
         except Exception as e:
+            if stats_hook:
+                stats_hook(
+                    {
+                        "label": trace_label or "completion",
+                        "ok": False,
+                        "duration_ms": int((time.perf_counter() - call_started) * 1000),
+                        "error": str(e),
+                    }
+                )
+            if trace_hook:
+                trace_hook(
+                    {
+                        "type": "llm_completion",
+                        "label": trace_label or "completion",
+                        "attempt": i + 1,
+                        "ok": False,
+                        "duration_ms": int((time.perf_counter() - call_started) * 1000),
+                        "request": _json_safe(completion_kwargs),
+                        "error": str(e),
+                    }
+                )
             print('************* Retrying *************')
             logging.error(f"Error: {e}")
             if i < max_retries - 1:
                 time.sleep(1)
             else:
                 logging.error('Max retries reached for prompt: ' + prompt)
+                if raise_on_error:
+                    raise RuntimeError(f"LLM completion failed after {max_retries} retries: {e}") from e
                 if return_finish_reason:
                     return "", "error"
                 return ""
@@ -708,3 +790,92 @@ def print_wrapped(text, width=100):
     for line in text.splitlines():
         print(textwrap.fill(line, width=width))
 
+
+def _outline_destination_title(dest) -> str:
+    title = getattr(dest, "title", None)
+    if title is None and hasattr(dest, "get"):
+        title = dest.get("/Title")
+    return (title or "").replace("\r", "").strip()
+
+
+def _outline_destination_page(reader, dest) -> int | None:
+    try:
+        page = reader.get_destination_page_number(dest) + 1
+        return page if page > 0 else None
+    except Exception:
+        return None
+
+
+def _parse_pdf_outline_items(reader, items):
+    nodes = []
+    i = 0
+    while i < len(items):
+        item = items[i]
+        if isinstance(item, list):
+            i += 1
+            continue
+
+        node = {
+            "title": _outline_destination_title(item),
+            "start_index": _outline_destination_page(reader, item),
+            "nodes": [],
+        }
+
+        if i + 1 < len(items) and isinstance(items[i + 1], list):
+            node["nodes"] = _parse_pdf_outline_items(reader, items[i + 1])
+            if node["start_index"] is None:
+                for child in node["nodes"]:
+                    if child.get("start_index") is not None:
+                        node["start_index"] = child["start_index"]
+                        break
+            i += 1
+
+        nodes.append(node)
+        i += 1
+    return nodes
+
+
+def _assign_outline_end_indexes(nodes, fallback_end: int) -> None:
+    for idx, node in enumerate(nodes):
+        next_start = None
+        for sibling in nodes[idx + 1:]:
+            if sibling.get("start_index") is not None:
+                next_start = sibling["start_index"]
+                break
+
+        if node["nodes"]:
+            child_fallback_end = (next_start - 1) if next_start else fallback_end
+            _assign_outline_end_indexes(node["nodes"], child_fallback_end)
+            child_ends = [child.get("end_index") for child in node["nodes"] if child.get("end_index") is not None]
+            node["end_index"] = max(child_ends) if child_ends else child_fallback_end
+        else:
+            node["end_index"] = (next_start - 1) if next_start else fallback_end
+
+
+def get_pdf_outline_tree(pdf_path):
+    """
+    Build a tree from embedded PDF outline/bookmarks when present.
+    Returns [] when outline is unavailable or unusable.
+    """
+    try:
+        reader = PyPDF2.PdfReader(pdf_path)
+        outline = reader.outline
+        if not isinstance(outline, list) or len(outline) == 0:
+            return []
+
+        tree = _parse_pdf_outline_items(reader, outline)
+        tree = [node for node in tree if node.get("title")]
+        if not tree:
+            return []
+
+        _assign_outline_end_indexes(tree, len(reader.pages))
+
+        flat_nodes = structure_to_list(tree)
+        valid_nodes = [node for node in flat_nodes if node.get("start_index") is not None]
+        # Require a minimally useful outline; sparse outlines should fall back.
+        if len(valid_nodes) < 5:
+            return []
+
+        return tree
+    except Exception:
+        return []
