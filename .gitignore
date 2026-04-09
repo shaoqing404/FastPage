@@ -3,8 +3,11 @@ __pycache__
 .DS_Store
 .env*
 .venv/
+.venv.broken-*/
 logs/
 data/
+results/
+.claude/
 !.env.example
 !docker/.env.example
 spec/
