@@ -1,13 +1,13 @@
-# PageIndex Frontend
+# PageIndex Service Frontend
 
-Cognitive knowledge asset management console.
+Workspace console for PageIndex Service.
 
 ## Environment Variables
 
 Copy `.env.example` to `.env`:
 
 ```bash
-VITE_API_BASE_URL=http://localhost:22223/api/v1
+VITE_API_BASE_URL=http://127.0.0.1:22223/api/v1
 ```
 
 ## Tech Stack
@@ -43,4 +43,4 @@ VITE_API_BASE_URL=http://localhost:22223/api/v1
 - **Polling:** Automatic 2s polling for parse jobs.
 - **Telemetry:** Real-time metrics display (latencies, token counts).
 - **Responsive:** Optimized for desktop and mobile viewports.
-- **Backend:** Default local FastAPI target is `http://localhost:22223/api/v1`.
+- **Backend:** Default local FastAPI target is `http://127.0.0.1:22223/api/v1`.

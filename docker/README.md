@@ -1,50 +1,88 @@
 # Docker Runtime
 
-## Goal
+This directory contains the containerized runtime for PageIndex Service Phase 3.
 
-Provide a one-command runtime for the current API + worker architecture.
+Source startup with Python 3.12 and `uv` is the recommended development path. Docker remains the secondary packaging and single-host evaluation path.
 
-## Runtime Shape
+## Stack Shape
 
-- `api`: FastAPI HTTP service
-- `worker`: Redis-backed background parser worker
+- `api`: FastAPI service
+- `worker`: Redis-backed chat/parse worker
+- `mysql`: primary relational database
+- `redis`: queue backend
+- `minio`: object storage for document and trace artifacts
+
+The compose file is for local OSS evaluation and single-host development. It is not a recommendation to expose raw uvicorn directly to the public internet.
 
 ## Files
 
-- `docker/.env`: runtime configuration used by startup scripts
-- `docker/.env.example`: template for `docker/.env`
-- `docker/Dockerfile`: shared image for api and worker
-- `docker/docker-compose.yml`: compose definition
-- `docker/start.sh`: one-click startup
-- `docker/stop.sh`: one-click shutdown
+- [docker/docker-compose.yml](/Users/shaoqing/workspace/PageIndex-main-integration/docker/docker-compose.yml)
+- [docker/.env.example](/Users/shaoqing/workspace/PageIndex-main-integration/docker/.env.example)
+- [docker/start.sh](/Users/shaoqing/workspace/PageIndex-main-integration/docker/start.sh)
+- [docker/stop.sh](/Users/shaoqing/workspace/PageIndex-main-integration/docker/stop.sh)
+- [Dockerfile](/Users/shaoqing/workspace/PageIndex-main-integration/Dockerfile)
+- [Dockerfile.worker](/Users/shaoqing/workspace/PageIndex-main-integration/Dockerfile.worker)
 
-## Startup Order
-
-1. `docker/start.sh`
-2. script reads `docker/.env`
-3. `docker compose` builds image and starts `api`
-4. `docker compose` starts `worker` replicas according to `WORKER_REPLICAS`
-
-## Usage
+## First Run
 
 ```bash
 cd docker
+cp .env.example .env
 bash start.sh
 ```
 
-Stop:
+The startup script builds the API and worker images and brings up the dependency services.
+
+## Default Published Ports
+
+- API: `127.0.0.1:22223`
+- MySQL: `127.0.0.1:3306`
+- Redis: `127.0.0.1:6379`
+- MinIO API: `127.0.0.1:9000`
+- MinIO Console: `127.0.0.1:9001`
+
+## Migrations
+
+Run migrations after the stack is up:
 
 ```bash
-cd docker
-bash stop.sh
+docker compose --env-file .env -f docker-compose.yml exec api alembic upgrade head
 ```
 
-## Worker Node Code
+The API bootstrap calls the migration path on startup, but explicit migration execution is still the safer operational pattern when upgrading a long-lived deployment.
 
-Each worker container derives a node code from:
+## Frontend
 
-- `WORKER_NODE_CODE`, if explicitly passed
-- otherwise `WORKER_NODE_CODE_PREFIX` + container hostname
+The frontend is not bundled into this compose stack. Run it separately from [frontend/](/Users/shaoqing/workspace/PageIndex-main-integration/frontend):
 
-That code is printed in worker logs to identify which node consumed a job.
+```bash
+cd ../frontend
+npm install
+VITE_API_BASE_URL=http://127.0.0.1:22223/api/v1 npm run dev
+```
 
+## Recommended Source Runtime
+
+For normal development outside containers:
+
+```bash
+cp ../.env.example ../.env
+cd ..
+uv sync --python 3.12
+uv run alembic upgrade head
+uv run uvicorn app.main:app --host 127.0.0.1 --port 22223 --reload
+```
+
+Start the worker in a second shell when using Redis-backed jobs:
+
+```bash
+cd ..
+uv run python -m app.worker
+```
+
+## Deployment Notes
+
+- For a reverse-proxy deployment, keep the container listening on `0.0.0.0` internally and publish through nginx, Caddy, Traefik, or equivalent.
+- Set explicit `CORS_ALLOW_ORIGINS` for any browser-facing non-local deployment.
+- In `APP_ENV=prod`, weak defaults for `SECRET_KEY` and `ADMIN_PASSWORD` will fail startup.
+- Align reverse-proxy body-size limits with `MAX_UPLOAD_BYTES`.

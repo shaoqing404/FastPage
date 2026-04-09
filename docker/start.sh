@@ -16,6 +16,5 @@ set +a
 
 : "${WORKER_REPLICAS:=1}"
 
-docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d --build --scale worker="${WORKER_REPLICAS}" api worker
+docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d --build --scale worker="${WORKER_REPLICAS}"
 docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" ps
-

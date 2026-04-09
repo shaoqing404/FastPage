@@ -5,4 +5,5 @@ __pycache__
 .venv/
 logs/
 data/
+!.env.example
 !docker/.env.example
