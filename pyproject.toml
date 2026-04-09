@@ -8,7 +8,7 @@ dependencies = [
   "alembic==1.14.1",
   "cryptography==45.0.4",
   "fastapi==0.115.12",
-  "litellm==1.82.0",
+  "litellm==1.83.0",
   "minio==7.2.15",
   "pymupdf==1.26.4",
   "PyJWT==2.10.1",

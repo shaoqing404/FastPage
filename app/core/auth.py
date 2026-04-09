@@ -25,6 +25,24 @@ PBKDF2_SCHEME = "pbkdf2_sha256"
 PBKDF2_ITERATIONS = 600_000
 
 
+def _assert_pyjwt_runtime() -> None:
+    required_attrs = ("encode", "decode", "PyJWTError")
+    missing = [name for name in required_attrs if not hasattr(jwt, name)]
+    if not missing:
+        return
+    module_path = getattr(jwt, "__file__", "<unknown>")
+    module_version = getattr(jwt, "__version__", "<unknown>")
+    raise RuntimeError(
+        "Invalid jwt runtime detected. PageIndex Service requires the `PyJWT` package, "
+        "but the imported `jwt` module is missing required attributes "
+        f"{missing}. Imported module: path={module_path}, version={module_version}. "
+        "Remove the conflicting `jwt` package and reinstall `PyJWT==2.10.1`."
+    )
+
+
+_assert_pyjwt_runtime()
+
+
 @dataclass
 class AuthContext:
     user: User
