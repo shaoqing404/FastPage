@@ -1,5 +1,28 @@
 # Tenant And Workspace Model
 
+## Batch 1 Implementation Notes
+
+This document describes the target Phase 3.1 model. The current Batch 1 backend implementation lands the schema and auth foundation, with two intentional compatibility constraints:
+
+- `workspaces` and `tenant_memberships` are implemented in backend models and migrations.
+- `workspace_id` has been added to tenant-owned resource tables, but for now it remains nullable on most existing business tables so unchanged Phase 2 service paths can continue inserting rows before workspace-aware service logic is finished.
+- existing rows are backfilled to each tenant's default workspace during migration where the resource is meant to become workspace-bound
+- `model_providers.workspace_id` remains nullable by design so tenant-level providers still work
+- login now resolves active tenant membership plus default workspace and returns that context additively
+- legacy bootstrap admin compatibility is intentionally narrow:
+  - only the seeded bootstrap admin row is eligible
+  - only while its password is still in the pre-Phase-3 legacy format
+  - login accepts either the stored legacy password or the current `ADMIN_PASSWORD`
+  - after the first successful login, the submitted password is re-hashed into the database and env-password override compatibility ends
+- tenant lifecycle, membership management, workspace management, and explicit context switching APIs are still deferred to later batches
+
+So the current state is:
+
+- tenant remains the hard isolation boundary
+- one default workspace is guaranteed for the default bootstrap tenant and for migrated legacy tenants
+- auth and API key issuance are workspace-aware
+- most business services are still tenant-scoped first, with workspace schema groundwork in place for follow-up batches
+
 ## Current-State Audit
 
 This audit is based on the current FastAPI code, not on the intended Phase 1 or Phase 3 wording alone.
@@ -315,6 +338,15 @@ Add `workspace_id` to:
 - `chat_messages`
 - `chat_runs`
 
+Batch 1 implementation note:
+
+- these columns exist in the backend model and migration now
+- `api_keys.workspace_id` is actively used by auth flows
+- the other resource tables keep `workspace_id` nullable temporarily for compatibility until the corresponding service write paths are upgraded
+- provider ownership backfill is explicit:
+  - system-managed providers remain tenant-scoped with `workspace_id = NULL`
+  - legacy user-created providers are moved onto the tenant default workspace
+
 Add `workspace_id` to `model_providers` as nullable:
 
 - `NULL` means tenant-level provider
@@ -437,6 +469,11 @@ Recommended for Phase 3.1:
 - keep `POST /api/v1/auth/login`
 - extend its response with available tenant memberships and the selected default workspace
 - add `POST /api/v1/auth/context/switch` for later tenant/workspace switching without re-login
+
+Batch 1 implementation note:
+
+- login response has been extended with active workspace and tenant membership metadata
+- `POST /api/v1/auth/context/switch` is not implemented in this batch
 
 #### Provider extensions
 

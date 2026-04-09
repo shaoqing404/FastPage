@@ -62,6 +62,7 @@ class ChatRunOut(BaseModel):
     user_id: str
     session_id: str | None
     document_id: str | None
+    version_id: str | None
     skill_id: str | None
     provider_id: str | None
     model: str
@@ -70,10 +71,13 @@ class ChatRunOut(BaseModel):
     answer_text: str | None
     answer_with_marker: str | None
     status: str
+    cancel_requested: bool
+    cancel_reason: str | None
     execution_context: dict[str, Any]
     selected_sections: list[dict[str, Any]]
     citations: list[dict[str, Any]]
     metrics: dict[str, Any]
+    last_error: str | None
     started_at: datetime | None
     finished_at: datetime | None
     created_at: datetime

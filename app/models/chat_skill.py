@@ -11,11 +11,18 @@ class ChatSkill(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.id"), nullable=False, index=True)
+    workspace_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=True, index=True)
     owner_user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.id"), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     document_scope_type: Mapped[str] = mapped_column(String(32), default="explicit", nullable=False)
+    knowledge_base_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("knowledge_bases.id"),
+        nullable=True,
+        index=True,
+    )
     provider_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("model_providers.id"), nullable=True, index=True)
     model: Mapped[str] = mapped_column(String(255), nullable=False)
     request_config_json: Mapped[str] = mapped_column(Text, nullable=False)
@@ -26,6 +33,7 @@ class ChatSkill(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
+    knowledge_base = relationship("KnowledgeBase")
     documents = relationship("ChatSkillDocument", back_populates="skill", cascade="all, delete-orphan")
 
 

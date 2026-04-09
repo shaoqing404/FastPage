@@ -11,13 +11,33 @@ class LoginRequest(BaseModel):
 class UserOut(BaseModel):
     id: str
     tenant_id: str
+    workspace_id: str
     username: str
+    membership_role: str
+
+
+class WorkspaceOut(BaseModel):
+    id: str
+    tenant_id: str
+    name: str
+    slug: str
+    status: str
+    is_default: bool
+
+
+class MembershipOut(BaseModel):
+    id: str
+    tenant_id: str
+    role: str
+    status: str
 
 
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserOut
+    workspace: WorkspaceOut
+    memberships: list[MembershipOut]
 
 
 class ApiKeyCreateRequest(BaseModel):
@@ -27,6 +47,7 @@ class ApiKeyCreateRequest(BaseModel):
 class ApiKeyCreateResponse(BaseModel):
     id: str
     tenant_id: str
+    workspace_id: str
     name: str
     key_prefix: str
     status: str
@@ -37,6 +58,7 @@ class ApiKeyCreateResponse(BaseModel):
 class ApiKeyOut(BaseModel):
     id: str
     tenant_id: str
+    workspace_id: str | None
     name: str
     key_prefix: str
     status: str

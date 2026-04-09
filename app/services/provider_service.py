@@ -1,4 +1,5 @@
 import json
+import logging
 import uuid
 from datetime import datetime
 from urllib import error, request
@@ -10,9 +11,13 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.crypto import decrypt_text, encrypt_text
+from app.core.errors import AppError, ErrorCode
+from app.core.url_validator import validate_provider_url
 from app.models import ChatRun, ChatSkill, ModelProvider
+from app.services.audit_service import emit_audit_event
 
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
@@ -59,6 +64,12 @@ def get_provider_or_404(db: Session, tenant_id: str, provider_id: str) -> ModelP
     return provider
 
 
+def can_bind_provider_to_workspace(provider: ModelProvider, workspace_id: str) -> bool:
+    if provider.workspace_id is None:
+        return True
+    return provider.workspace_id == workspace_id
+
+
 def _clear_default_provider(db: Session, tenant_id: str, keep_provider_id: str | None = None) -> None:
     providers = db.scalars(select(ModelProvider).where(ModelProvider.tenant_id == tenant_id, ModelProvider.is_default.is_(True))).all()
     for provider in providers:
@@ -67,7 +78,20 @@ def _clear_default_provider(db: Session, tenant_id: str, keep_provider_id: str |
         provider.is_default = False
 
 
-def create_provider(db: Session, tenant_id: str, payload) -> ModelProvider:
+def create_provider(db: Session, tenant_id: str, payload, *, actor_id: str | None = None, actor_type: str = "user") -> ModelProvider:
+    # Validate base_url before persisting.
+    try:
+        validated_url = validate_provider_url(
+            payload.base_url,
+            allow_private=settings.provider_url_allow_private_nets,
+        )
+    except ValueError as exc:
+        raise AppError(
+            code=ErrorCode.PROVIDER_URL_INVALID,
+            message=str(exc),
+            status_code=400,
+        ) from exc
+
     now = datetime.utcnow()
     supported_models = _normalize_supported_models(payload.default_model, getattr(payload, "supported_models", None))
     provider = ModelProvider(
@@ -75,7 +99,7 @@ def create_provider(db: Session, tenant_id: str, payload) -> ModelProvider:
         tenant_id=tenant_id,
         provider_type=payload.provider_type,
         name=payload.name,
-        base_url=payload.base_url,
+        base_url=validated_url,
         api_key_encrypted=encrypt_text(settings.secret_key, payload.api_key),
         default_model=payload.default_model,
         supported_models_json=json.dumps(supported_models, ensure_ascii=False),
@@ -89,12 +113,22 @@ def create_provider(db: Session, tenant_id: str, payload) -> ModelProvider:
     if provider.is_default:
         _clear_default_provider(db, tenant_id)
     db.add(provider)
+    emit_audit_event(
+        db,
+        tenant_id=tenant_id,
+        actor_type=actor_type,
+        actor_id=actor_id or "unknown",
+        action="provider.create",
+        target_type="provider",
+        target_id=provider.id,
+        result="success",
+    )
     db.commit()
     db.refresh(provider)
     return provider
 
 
-def update_provider(db: Session, tenant_id: str, provider_id: str, payload) -> ModelProvider:
+def update_provider(db: Session, tenant_id: str, provider_id: str, payload, *, actor_id: str | None = None, actor_type: str = "user") -> ModelProvider:
     provider = get_provider_or_404(db, tenant_id, provider_id)
     if provider.managed_by_system:
         raise HTTPException(
@@ -102,6 +136,21 @@ def update_provider(db: Session, tenant_id: str, provider_id: str, payload) -> M
             detail="System-managed provider is synced from environment and cannot be edited",
         )
     update_dict = payload.model_dump(exclude_unset=True)
+
+    # Validate base_url if it's being changed.
+    if "base_url" in update_dict:
+        try:
+            update_dict["base_url"] = validate_provider_url(
+                update_dict["base_url"],
+                allow_private=settings.provider_url_allow_private_nets,
+            )
+        except ValueError as exc:
+            raise AppError(
+                code=ErrorCode.PROVIDER_URL_INVALID,
+                message=str(exc),
+                status_code=400,
+            ) from exc
+
     current_supported_models = json.loads(provider.supported_models_json or "[]")
     if not isinstance(current_supported_models, list):
         current_supported_models = []
@@ -125,12 +174,22 @@ def update_provider(db: Session, tenant_id: str, provider_id: str, payload) -> M
     for field, value in update_dict.items():
         setattr(provider, field, value)
     provider.updated_at = datetime.utcnow()
+    emit_audit_event(
+        db,
+        tenant_id=tenant_id,
+        actor_type=actor_type,
+        actor_id=actor_id or "unknown",
+        action="provider.update",
+        target_type="provider",
+        target_id=provider.id,
+        result="success",
+    )
     db.commit()
     db.refresh(provider)
     return provider
 
 
-def delete_provider(db: Session, tenant_id: str, provider_id: str) -> None:
+def delete_provider(db: Session, tenant_id: str, provider_id: str, *, actor_id: str | None = None, actor_type: str = "user") -> None:
     provider = get_provider_or_404(db, tenant_id, provider_id)
     if provider.managed_by_system:
         raise HTTPException(
@@ -151,6 +210,16 @@ def delete_provider(db: Session, tenant_id: str, provider_id: str) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Provider is still referenced by chat runs",
         )
+    emit_audit_event(
+        db,
+        tenant_id=tenant_id,
+        actor_type=actor_type,
+        actor_id=actor_id or "unknown",
+        action="provider.delete",
+        target_type="provider",
+        target_id=provider.id,
+        result="success",
+    )
     db.delete(provider)
     db.commit()
 
@@ -184,7 +253,15 @@ def _extract_model_ids(payload: object) -> list[str]:
     return model_ids
 
 
-def probe_provider_models(db: Session, tenant_id: str, provider_id: str) -> ModelProvider:
+def _sanitize_upstream_error(raw: str, max_len: int = 200) -> str:
+    """Truncate and strip secrets from upstream error bodies."""
+    cleaned = raw.replace("\n", " ").strip()
+    if len(cleaned) > max_len:
+        cleaned = cleaned[:max_len] + "...(truncated)"
+    return cleaned
+
+
+def probe_provider_models(db: Session, tenant_id: str, provider_id: str, *, actor_id: str | None = None, actor_type: str = "user") -> ModelProvider:
     provider = get_provider_or_404(db, tenant_id, provider_id)
     try:
         api_key = decrypt_text(settings.secret_key, provider.api_key_encrypted)
@@ -207,10 +284,10 @@ def probe_provider_models(db: Session, tenant_id: str, provider_id: str) -> Mode
                 payload = json.loads(response.read().decode("utf-8"))
         except error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="ignore")
-            last_error = f"{exc.code} {body or exc.reason}"
+            last_error = _sanitize_upstream_error(f"{exc.code} {body or exc.reason}")
             continue
         except Exception as exc:  # pragma: no cover - network/runtime failure path
-            last_error = str(exc)
+            last_error = _sanitize_upstream_error(str(exc))
             continue
 
         model_ids = _extract_model_ids(payload)
@@ -222,13 +299,25 @@ def probe_provider_models(db: Session, tenant_id: str, provider_id: str) -> Mode
             ensure_ascii=False,
         )
         provider.updated_at = datetime.utcnow()
+        emit_audit_event(
+            db,
+            tenant_id=tenant_id,
+            actor_type=actor_type,
+            actor_id=actor_id or "unknown",
+            action="provider.probe",
+            target_type="provider",
+            target_id=provider.id,
+            result="success",
+            meta={"models_found": len(model_ids)},
+        )
         db.commit()
         db.refresh(provider)
         return provider
 
-    raise HTTPException(
-        status_code=status.HTTP_502_BAD_GATEWAY,
-        detail=f"Failed to probe provider models: {last_error or 'unknown error'}",
+    raise AppError(
+        code=ErrorCode.PROVIDER_PROBE_FAILED,
+        message=f"Failed to probe provider models: {last_error or 'unknown error'}",
+        status_code=502,
     )
 
 
@@ -238,6 +327,7 @@ def resolve_provider_config(
     *,
     skill: ChatSkill | None = None,
     explicit_provider_id: str | None = None,
+    workspace_id: str | None = None,
 ) -> dict:
     provider = None
     if skill and skill.provider_id:
@@ -254,6 +344,12 @@ def resolve_provider_config(
         )
 
     if provider:
+        target_workspace_id = skill.workspace_id if skill is not None else workspace_id
+        if target_workspace_id is not None and not can_bind_provider_to_workspace(provider, target_workspace_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Provider is not accessible from this workspace",
+            )
         try:
             api_key = decrypt_text(settings.secret_key, provider.api_key_encrypted)
         except InvalidToken as exc:

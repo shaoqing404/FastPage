@@ -11,6 +11,7 @@ class ParseJob(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.id"), nullable=False, index=True)
+    workspace_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=True, index=True)
     document_id: Mapped[str] = mapped_column(String(64), ForeignKey("documents.id"), nullable=False, index=True)
     version_id: Mapped[str] = mapped_column(String(64), ForeignKey("document_versions.id"), nullable=False, index=True)
     model: Mapped[str | None] = mapped_column(String(255), nullable=True)

@@ -20,6 +20,7 @@ class DocumentOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
     tenant_id: str
+    workspace_id: str | None
     owner_user_id: str
     display_name: str
     source_filename: str

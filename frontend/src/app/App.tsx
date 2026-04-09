@@ -5,8 +5,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MainLayout } from '../components/layout/MainLayout';
 import { ActivityPage } from '../pages/ActivityPage';
 import { ChatPage } from '../pages/ChatPage';
+import { ComplianceChecksPage } from '../pages/ComplianceChecksPage';
+import { ComplianceRunsPage } from '../pages/ComplianceRunsPage';
 import { ControlPlanePage } from '../pages/ControlPlanePage';
 import { DocumentsPage } from '../pages/DocumentsPage';
+import { KnowledgeBasesPage } from '../pages/KnowledgeBasesPage';
 import { LoginPage } from '../pages/LoginPage';
 import { OverviewPage } from '../pages/OverviewPage';
 import { SkillChatPage } from '../pages/SkillChatPage';
@@ -42,15 +45,21 @@ export const App: React.FC = () => (
             </ProtectedRoute>
           }
         >
-          <Route index element={<Navigate to="/overview" replace />} />
-          <Route path="overview" element={<OverviewPage />} />
+          <Route index element={<Navigate to="/workspace" replace />} />
+          <Route path="workspace" element={<OverviewPage />} />
+          <Route path="overview" element={<Navigate to="/workspace" replace />} />
+          <Route path="knowledge-bases" element={<KnowledgeBasesPage />} />
+          <Route path="compliance-checks" element={<ComplianceChecksPage />} />
+          <Route path="compliance-runs" element={<ComplianceRunsPage />} />
           <Route path="documents" element={<DocumentsPage />} />
           <Route path="skills" element={<SkillsPage />} />
           <Route path="chat" element={<ChatPage />} />
           <Route path="chat/skills/:skillId" element={<SkillChatPage />} />
-          <Route path="control-plane" element={<ControlPlanePage />} />
-          <Route path="activity" element={<ActivityPage />} />
-          <Route path="metrics" element={<Navigate to="/activity" replace />} />
+          <Route path="runs" element={<ActivityPage />} />
+          <Route path="activity" element={<Navigate to="/runs" replace />} />
+          <Route path="providers" element={<ControlPlanePage />} />
+          <Route path="control-plane" element={<Navigate to="/providers" replace />} />
+          <Route path="metrics" element={<Navigate to="/runs" replace />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

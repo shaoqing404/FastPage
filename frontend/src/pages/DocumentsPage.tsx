@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { BookCopy, Eye, FileUp, History, Loader2, RefreshCcw, Trash2 } from 'lucide-react';
+import { BookCopy, BookMarked, Eye, FileUp, History, Loader2, RefreshCcw, Trash2 } from 'lucide-react';
 
 import { ExpertDrawer, GlassPanel, InlineAlert, KeyMetric, SectionToolbar, StatusBadge } from '../components/ui/workbench';
 import { documentsApi } from '../features/documents/api';
+import { knowledgeBasesApi } from '../features/knowledge-bases/api';
 import { jobsApi } from '../features/metrics/api';
 import { formatDateTime, getErrorMessage } from '../lib/utils';
 
@@ -17,6 +18,7 @@ export const DocumentsPage: React.FC = () => {
   const [documentError, setDocumentError] = useState('');
 
   const { data: documents = [], isLoading } = useQuery({ queryKey: ['documents'], queryFn: documentsApi.list });
+  const { data: knowledgeBases = [], error: knowledgeBaseError } = useQuery({ queryKey: ['knowledge-bases'], queryFn: () => knowledgeBasesApi.list() });
   const { data: jobs = [] } = useQuery({
     queryKey: ['all-jobs'],
     queryFn: () => jobsApi.list(),
@@ -26,6 +28,20 @@ export const DocumentsPage: React.FC = () => {
   const selectedDoc = documents.find((document) => document.id === selectedDocId) || documents[0] || null;
   const activeJobs = jobs.filter((job) => ['uploaded', 'queued', 'parsing'].includes(job.status));
   const filteredDocuments = documents.filter((document) => document.display_name.toLowerCase().includes(search.trim().toLowerCase()));
+  const documentMembershipCounts = new Map<string, number>();
+  knowledgeBases.forEach((knowledgeBase) => {
+    knowledgeBase.documents.forEach((membership) => {
+      documentMembershipCounts.set(membership.document_id, (documentMembershipCounts.get(membership.document_id) || 0) + 1);
+    });
+  });
+  const selectedDocumentKnowledgeBases = selectedDoc
+    ? knowledgeBases
+        .map((knowledgeBase) => ({
+          knowledgeBase,
+          membership: knowledgeBase.documents.find((membership) => membership.document_id === selectedDoc.id) || null,
+        }))
+        .filter((item): item is { knowledgeBase: (typeof knowledgeBases)[number]; membership: NonNullable<(typeof knowledgeBases)[number]['documents'][number]> } => Boolean(item.membership))
+    : [];
 
   const { data: versions = [], isLoading: loadingVersions } = useQuery({
     queryKey: ['versions', selectedDoc?.id],
@@ -112,7 +128,7 @@ export const DocumentsPage: React.FC = () => {
     <div className="space-y-8">
       <SectionToolbar
         title="Documents"
-        description="Ingest, monitor, and inspect the document corpus that powers retrieval and chat."
+        description="Ingest, monitor, and inspect Workspace Documents before packaging them into reusable Knowledge Bases."
         actions={
           <label className="btn-primary cursor-pointer">
             {uploading ? <Loader2 size={16} className="animate-spin" /> : <FileUp size={16} />}
@@ -128,11 +144,21 @@ export const DocumentsPage: React.FC = () => {
         </InlineAlert>
       )}
 
+      {knowledgeBaseError && (
+        <InlineAlert tone="warning" title="Knowledge Base coverage unavailable">
+          {getErrorMessage(knowledgeBaseError, 'Failed to load Knowledge Base membership')}
+        </InlineAlert>
+      )}
+
       <div className="grid grid-cols-4 gap-4">
         <KeyMetric label="Documents" value={documents.length} hint="Current corpus size" />
         <KeyMetric label="Ready" value={documents.filter((document) => document.status === 'index_ready').length} hint="Available for chat" />
         <KeyMetric label="Active jobs" value={activeJobs.length} hint="Parsing in progress" />
-        <KeyMetric label="Failures" value={documents.filter((document) => document.status === 'failed').length} hint="Need re-run or review" />
+        <KeyMetric
+          label="In Knowledge Bases"
+          value={documents.filter((document) => (documentMembershipCounts.get(document.id) || 0) > 0).length}
+          hint="Documents already packaged for reuse"
+        />
       </div>
 
       {activeJobs.length > 0 && (
@@ -158,8 +184,8 @@ export const DocumentsPage: React.FC = () => {
 
       <div className="grid grid-cols-[0.88fr_1.12fr] gap-6">
         <GlassPanel
-          title="Library"
-          subtitle="The structured document collection available to this tenant."
+          title="Workspace library"
+          subtitle="The Document collection available to the current Workspace."
           actions={<input value={search} onChange={(event) => setSearch(event.target.value)} className="field w-64" placeholder="Filter documents" />}
         >
           <div className="scroll-area max-h-[760px] space-y-3 overflow-auto pr-1">
@@ -239,6 +265,40 @@ export const DocumentsPage: React.FC = () => {
                 <dt>Owner</dt>
                 <dd>{selectedDoc.owner_user_id}</dd>
               </dl>
+
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <BookMarked size={16} className="text-slate-400" />
+                  <p className="text-sm font-medium text-slate-900">Knowledge Base membership</p>
+                </div>
+                {selectedDocumentKnowledgeBases.length > 0 ? (
+                  <div className="space-y-3">
+                    {selectedDocumentKnowledgeBases.map(({ knowledgeBase, membership }) => (
+                      <div key={knowledgeBase.id} className="surface-soft flex items-start justify-between gap-4 p-4">
+                        <div className="space-y-2">
+                          <p className="font-medium text-slate-900">{knowledgeBase.name}</p>
+                          <div className="flex flex-wrap gap-2">
+                            <StatusBadge tone={knowledgeBase.status === 'active' ? 'success' : knowledgeBase.status === 'disabled' ? 'warning' : 'default'}>
+                              {knowledgeBase.status === 'active' ? 'Knowledge Base enabled' : knowledgeBase.status === 'disabled' ? 'Knowledge Base disabled' : knowledgeBase.status}
+                            </StatusBadge>
+                            <StatusBadge tone={membership.enabled ? 'success' : 'warning'}>
+                              {membership.enabled ? 'Document enabled' : 'Document disabled'}
+                            </StatusBadge>
+                            {membership.label && <StatusBadge>{membership.label}</StatusBadge>}
+                          </div>
+                          <p className="text-sm text-slate-500">
+                            {membership.pinned_version_id ? `Pinned version ${membership.pinned_version_id.slice(0, 8)}` : 'Following the active Document version'} · Sort order {membership.sort_order}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="surface-soft p-4 text-sm text-slate-500">
+                    This Document is not part of any Knowledge Base yet.
+                  </div>
+                )}
+              </div>
 
               <div className="flex flex-wrap gap-3">
                 <button type="button" className="btn-secondary" onClick={() => setVersionDrawerOpen(true)}>

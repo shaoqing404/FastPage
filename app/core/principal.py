@@ -7,6 +7,8 @@ from app.models import ApiKey, User
 class Principal:
     kind: str
     tenant_id: str
+    workspace_id: str
+    membership_role: str
     user: User
     api_key: ApiKey | None = None
 
