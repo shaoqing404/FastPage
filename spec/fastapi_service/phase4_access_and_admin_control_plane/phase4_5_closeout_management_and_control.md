@@ -334,6 +334,48 @@
 - `Phase 4.5` 要把它们正式纳入范围
 - 但页面实现仍应尽量复用已有 layout、导航、auth client、主题变量
 
+### 5.7 开发环境清理与初始化前置 gate
+
+`Phase 4.5` 开始实施前，必须先把开发/验证环境清到“可重新初始化”的干净状态。
+
+本阶段要求：
+
+- 清理远端 MySQL `pageindex` schema 中**仅由本仓库管理**的项目数据
+- 不删除同库或同实例中的未知/非本项目数据
+- 清理本项目 MinIO bucket/prefix 下的对象
+- 清理本地 SQLite 与本项目 runtime data
+
+原则：
+
+- 目标是“空但有效”
+- 不做粗暴的全实例删除
+- 清理后的环境应能直接进入 migration + bootstrap + API 测试
+
+### 5.8 全链路 closeout 测试要求
+
+`Phase 4.5` 不是以“单接口通过”为结束，而是以完整链路验证为结束。
+
+本阶段至少需要验证：
+
+1. platform admin 登录
+2. platform admin 创建或启用测试用户
+3. 测试用户登录
+4. 测试用户创建 workspace
+5. 测试用户创建知识库
+6. 测试用户使用项目 `.env` 的兼容 OpenAI 配置创建百炼 provider
+7. 默认模型使用 `qwen3.5-plus`
+8. 测试用户上传项目目录内 PDF
+9. parse / index / build 成功
+10. 创建 skill 并绑定 KB
+11. 完成 query / skill chat
+12. 验证 tenant / workspace / capability API 隔离
+
+说明：
+
+- `Phase 4.5` 不要求开放 public signup
+- 测试用户由 platform admin provision 即可
+- closeout 测试优先使用项目目录内 PDF，而不是外部不稳定样本
+
 ## 6. 本阶段明确不做的内容
 
 以下内容全部留给 `Phase 5` 或更后阶段：
@@ -424,6 +466,13 @@
 - visibility UI
 - platform admin pages
 
+### Batch 4.5-F: environment reset and closeout chain
+
+- 环境清理脚本或 runbook
+- 干净初始化流程
+- API 全链路验证
+- 形成 4.5 closeout 结果
+
 ## 9. 风险点
 
 ### A. 约束收紧风险
@@ -445,6 +494,11 @@
 
 - 如果后端 contract 继续不稳定，前端页面会重复返工
 - 所以本阶段应先稳定 API，再大面积铺前端页面
+
+### E. 清理与重建风险
+
+- 若远端 MySQL/MinIO 清理边界不清，会误伤共享环境中的非本项目数据
+- 若环境清理未标准化，后续验证结论不可重复
 
 ## 10. 验收标准
 
@@ -473,6 +527,14 @@
 - 未把审计与长期治理混入 `Phase 4.5`
 - 未把 purge / billing / quota / policy engine 混入 `Phase 4.5`
 - 管理页面与后端 contract 保持一一对应，而不是做无后端支撑的空壳页面
+
+### 10.4 closeout 验证
+
+- 开发/验证环境可被安全清理到空初始化状态
+- 可从干净状态完成 migration 与 bootstrap
+- 可完成 platform admin -> test user -> workspace -> KB -> provider -> PDF -> query 的完整链路
+- API 层 tenant / workspace / capability 测试覆盖关键授权边界
+- 本阶段 closeout 结果可作为 `Phase 4.7` 测试标准的输入
 
 ## 11. 与 Phase 5 的切分结论
 

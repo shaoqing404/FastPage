@@ -16,6 +16,8 @@ This folder contains the staged plan for turning the current PageIndex workspace
 - [`phase0_5_stabilization/README.md`](/Users/shaoqing/workspace/PageIndex/spec/fastapi_service/phase0_5_stabilization/README.md)
 - [`phase1_enhancement/README.md`](/Users/shaoqing/workspace/PageIndex/spec/fastapi_service/phase1_enhancement/README.md)
 - [`phase2_chat_app_extension/README.md`](/Users/shaoqing/workspace/PageIndex/spec/fastapi_service/phase2_chat_app_extension/README.md)
+- [`phase3_service_productization/README.md`](/Users/shaoqing/workspace/PageIndex/spec/fastapi_service/phase3_service_productization/README.md)
+- [`phase4_access_and_admin_control_plane/README.md`](/Users/shaoqing/workspace/PageIndex/spec/fastapi_service/phase4_access_and_admin_control_plane/README.md)
 - [`shared/api_design.md`](/Users/shaoqing/workspace/PageIndex/spec/fastapi_service/shared/api_design.md)
 - [`shared/data_model.md`](/Users/shaoqing/workspace/PageIndex/spec/fastapi_service/shared/data_model.md)
 - [`shared/frontend_handoff_for_gemini.md`](/Users/shaoqing/workspace/PageIndex/spec/fastapi_service/shared/frontend_handoff_for_gemini.md)
