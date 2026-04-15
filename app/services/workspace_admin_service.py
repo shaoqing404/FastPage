@@ -1,8 +1,10 @@
 import uuid
 from datetime import datetime
+import re
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.principal import Principal
@@ -10,6 +12,8 @@ from app.models import User, Workspace, WorkspaceMembership
 from app.services.workspace_access_service import (
     dump_workspace_permissions_override_json,
     parse_workspace_permissions_override,
+    resolve_workspace_capabilities,
+    require_workspace_capability,
 )
 from app.services.workspace_membership_service import (
     ACTIVE_STATUS,
@@ -58,6 +62,105 @@ def serialize_workspace_admin_workspace(workspace: Workspace) -> dict[str, objec
         "created_at": workspace.created_at,
         "updated_at": workspace.updated_at,
     }
+
+
+def serialize_workspace_list_item(
+    workspace: Workspace,
+    membership: WorkspaceMembership,
+    *,
+    is_current: bool,
+) -> dict[str, object]:
+    return {
+        **serialize_workspace_admin_workspace(workspace),
+        "membership_id": membership.id,
+        "membership_role": membership.role,
+        "membership_status": membership.status,
+        "permissions": resolve_workspace_capabilities(
+            membership.role,
+            membership.permissions_override_json,
+        ),
+        "permissions_override": parse_workspace_permissions_override(membership.permissions_override_json),
+        "is_current": is_current,
+    }
+
+
+def list_accessible_workspaces(
+    db: Session,
+    principal: Principal,
+) -> list[dict[str, object]]:
+    rows = db.execute(
+        select(WorkspaceMembership, Workspace)
+        .join(Workspace, WorkspaceMembership.workspace_id == Workspace.id)
+        .where(
+            WorkspaceMembership.user_id == principal.user_id,
+            WorkspaceMembership.status == ACTIVE_STATUS,
+            Workspace.tenant_id == principal.tenant_id,
+        )
+        .order_by(
+            Workspace.is_default.desc(),
+            Workspace.created_at.asc(),
+            Workspace.id.asc(),
+            WorkspaceMembership.created_at.asc(),
+            WorkspaceMembership.id.asc(),
+        )
+    ).all()
+    return [
+        serialize_workspace_list_item(
+            workspace,
+            membership,
+            is_current=workspace.id == principal.workspace_id,
+        )
+        for membership, workspace in rows
+    ]
+
+
+def update_workspace_metadata(
+    db: Session,
+    principal: Principal,
+    workspace_id: str,
+    payload,
+) -> dict[str, object]:
+    workspace = get_workspace_or_404(db, workspace_id)
+    if workspace.tenant_id != principal.tenant_id and not _is_platform_admin_actor(principal):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+
+    if not _is_platform_admin_actor(principal):
+        if workspace.id != principal.workspace_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+        require_workspace_capability(
+            principal,
+            "can_edit_workspace_metadata",
+            detail="Missing workspace capability: can_edit_workspace_metadata",
+        )
+
+    updates = payload.model_dump(exclude_unset=True)
+    if not updates:
+        return serialize_workspace_admin_workspace(workspace)
+
+    now = datetime.utcnow()
+    if "name" in updates:
+        name = (updates["name"] or "").strip()
+        if not name:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Workspace name cannot be empty")
+        workspace.name = name
+
+    if "slug" in updates:
+        slug = normalize_workspace_slug(updates["slug"])
+        existing = db.scalar(
+            select(Workspace).where(
+                Workspace.tenant_id == workspace.tenant_id,
+                Workspace.slug == slug,
+                Workspace.id != workspace.id,
+            )
+        )
+        if existing is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workspace slug already exists in this tenant")
+        workspace.slug = slug
+
+    workspace.updated_at = now
+    db.commit()
+    db.refresh(workspace)
+    return serialize_workspace_admin_workspace(workspace)
 
 
 def list_workspace_members(
@@ -225,10 +328,19 @@ def transfer_workspace_founder(
     previous_founder = current_founder
     previous_founder.role = "admin"
     previous_founder.updated_at = now
+    db.flush()
+
     target_membership.role = "founder"
     target_membership.updated_at = now
 
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        if _is_active_founder_conflict_error(exc):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workspace founder invariant is broken") from exc
+        raise
+
     founders_after = list_active_founder_memberships(db, workspace.id)
     if len(founders_after) != 1 or founders_after[0].id != target_membership.id:
         db.rollback()
@@ -368,3 +480,24 @@ def _get_membership_user_or_404(
 
 def _is_platform_admin_actor(principal: Principal) -> bool:
     return principal.kind == "session" and principal.user.is_platform_admin
+
+
+def _is_active_founder_conflict_error(exc: IntegrityError) -> bool:
+    message = str(exc.orig).lower() if exc.orig is not None else str(exc).lower()
+    return (
+        "uq_workspace_memberships_active_founder_workspace_id" in message
+        or "active_founder_workspace_id" in message
+    )
+
+
+def normalize_workspace_slug(raw_slug: str | None) -> str:
+    if raw_slug is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Workspace slug is required")
+
+    slug = raw_slug.strip().lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug).strip("-")
+    if not slug:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Workspace slug is invalid")
+    if len(slug) > 128:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Workspace slug is too long")
+    return slug

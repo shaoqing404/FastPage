@@ -14,7 +14,7 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.principal import Principal
 from app.models import ChatRun, ChatSession, ChatSkill, Document, DocumentVersion, User
-from app.services.document_service import _is_default_workspace, get_document_or_404
+from app.services.document_service import get_document_or_404
 from app.services.pageindex_service import (
     build_answer_context,
     build_answer_with_marker,
@@ -26,7 +26,7 @@ from app.services.pageindex_service import (
     load_structure_file,
 )
 from app.services.provider_service import resolve_provider_config
-from app.services.session_service import append_message, get_session_or_404, list_session_messages
+from app.services.session_service import _is_default_workspace, append_message, get_session_or_404, list_session_messages
 from app.services.skill_trace_service import SkillTraceRecorder
 from app.services.storage_service import local_artifact_path
 from app.services.task_queue_service import (
@@ -395,7 +395,7 @@ def _create_pending_run(
     session = _resolve_session_for_run(db, principal=principal, session_id=session_id, skill=skill)
     provider_config = resolve_provider_config(
         db,
-        user.tenant_id,
+        principal.tenant_id,
         skill=skill,
         explicit_provider_id=provider_id,
         workspace_id=principal.workspace_id,
@@ -415,7 +415,7 @@ def _create_pending_run(
     ) or document.workspace_id or (skill.workspace_id if skill else None)
     run = ChatRun(
         id=str(uuid.uuid4()),
-        tenant_id=user.tenant_id,
+        tenant_id=principal.tenant_id,
         workspace_id=workspace_id,
         user_id=user.id,
         session_id=session.id if session else None,
@@ -553,7 +553,7 @@ async def create_chat_run(
     )
     return await wait_for_chat_run_terminal(
         db,
-        tenant_id=user.tenant_id,
+        tenant_id=principal.tenant_id,
         run_id=run.id,
         timeout_seconds=settings.chat_run_request_timeout_seconds,
     )

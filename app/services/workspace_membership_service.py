@@ -45,6 +45,27 @@ def resolve_active_tenant_membership(
     return membership
 
 
+def resolve_auth_tenant_membership(
+    db: Session,
+    user_id: str,
+    *,
+    tenant_id: str | None = None,
+    workspace_id: str | None = None,
+    compat_tenant_id: str | None = None,
+) -> TenantMembership:
+    tenant_hint = tenant_id
+    if tenant_hint is None and workspace_id is not None:
+        tenant_hint = resolve_workspace_tenant_id_hint(db, workspace_id)
+
+    fallback_tenant_id = compat_tenant_id if tenant_hint is None and workspace_id is None else None
+    return resolve_active_tenant_membership(
+        db,
+        user_id,
+        tenant_id=tenant_hint,
+        fallback_tenant_id=fallback_tenant_id,
+    )
+
+
 def get_active_tenant_membership(
     db: Session,
     user_id: str,

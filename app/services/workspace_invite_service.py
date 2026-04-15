@@ -30,6 +30,7 @@ from datetime import datetime, timedelta
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.principal import Principal
@@ -268,7 +269,16 @@ def create_workspace_invite(
         updated_at=now,
     )
     db.add(invite)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if _is_pending_invite_conflict_error(exc):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A pending invite already exists for this email in this workspace",
+            ) from exc
+        raise
     db.refresh(invite)
     return serialize_invite(invite)
 
@@ -532,6 +542,14 @@ def _upsert_workspace_membership(
     db.add(membership)
     db.flush()
     return membership
+
+
+def _is_pending_invite_conflict_error(exc: IntegrityError) -> bool:
+    message = str(exc.orig).lower() if exc.orig is not None else str(exc).lower()
+    return (
+        "uq_workspace_invites_workspace_pending_normalized_email" in message
+        or "pending_normalized_email" in message
+    )
 
 
 # ---------------------------------------------------------------------------

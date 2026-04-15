@@ -1,12 +1,15 @@
 import sys
+import os
 import unittest
 from unittest.mock import MagicMock, patch
 from datetime import datetime
 
 # Stub jwt before app imports to avoid dependency errors in minimal environments
 sys.modules["jwt"] = MagicMock()
+os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from app.core.principal import Principal
 from app.models import User, Workspace, WorkspaceInvite, WorkspaceMembership, TenantMembership
 from app.services.workspace_invite_service import (
@@ -199,6 +202,35 @@ class TestWorkspaceInviteService(unittest.TestCase):
             create_workspace_invite(db, self.principal_admin, "ws_1", payload)
         self.assertEqual(ctx.exception.status_code, 409)
         self.assertIn("already exists", str(ctx.exception.detail))
+
+    @patch("app.services.workspace_invite_service._get_workspace_for_invite_admin")
+    def test_create_workspace_invite_translates_db_pending_conflict(self, mock_get_ws):
+        from app.services.workspace_invite_service import create_workspace_invite
+        from dataclasses import dataclass
+
+        @dataclass
+        class Payload:
+            email: str
+            role: str
+            permissions_override: dict
+            expires_at: datetime = None
+
+        db = MagicMock()
+        mock_get_ws.return_value = Workspace(id="ws_1", tenant_id="tenant_1")
+        db.scalar.return_value = None
+        db.commit.side_effect = IntegrityError("stmt", {}, Exception("pending_normalized_email"))
+
+        with self.assertRaises(HTTPException) as ctx:
+            create_workspace_invite(
+                db,
+                self.principal_admin,
+                "ws_1",
+                Payload(email="new@example.com", role="member", permissions_override={}),
+            )
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertIn("pending invite already exists", str(ctx.exception.detail).lower())
+        db.rollback.assert_called_once()
 
 if __name__ == "__main__":
     unittest.main()

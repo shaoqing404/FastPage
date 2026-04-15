@@ -17,6 +17,9 @@ class UserOut(BaseModel):
     tenant_id: str
     workspace_id: str
     username: str
+    email: str | None = None
+    can_create_workspace: bool = False
+    is_platform_admin: bool = False
     membership_role: str
     tenant_membership_role: str
     tenant_membership_status: str

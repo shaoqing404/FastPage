@@ -1,8 +1,13 @@
+import os
 import unittest
 from unittest.mock import MagicMock, patch
 from datetime import datetime
 
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
+
+os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+
 from app.core.principal import Principal
 from app.models import User, Workspace, WorkspaceMembership
 from app.services.workspace_admin_service import (
@@ -109,6 +114,24 @@ class TestWorkspaceAdminService(unittest.TestCase):
         self.assertEqual(current_founder.role, "admin")
         self.assertEqual(target_member.role, "founder")
         self.assertEqual(result["workspace_id"], "ws_1")
+
+    @patch("app.services.workspace_admin_service._get_workspace_for_admin_operation")
+    @patch("app.services.workspace_admin_service.list_active_founder_memberships")
+    def test_founder_transfer_translates_db_founder_conflict(self, mock_list_founders, mock_get_ws):
+        db = MagicMock()
+        mock_get_ws.return_value = Workspace(id="ws_1")
+        current_founder = WorkspaceMembership(id="mem_1", user_id="user_founder", role="founder", status="active")
+        target_member = WorkspaceMembership(id="mem_2", user_id="target_user", role="member", status="active")
+        mock_list_founders.return_value = [current_founder]
+        db.scalar.return_value = target_member
+        db.flush.side_effect = [None, IntegrityError("stmt", {}, Exception("active_founder_workspace_id"))]
+
+        with self.assertRaises(HTTPException) as ctx:
+            transfer_workspace_founder(db, self.principal_founder, "ws_1", target_user_id="target_user")
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertIn("founder invariant", ctx.exception.detail)
+        db.rollback.assert_called_once()
 
     @patch("app.services.workspace_admin_service._get_workspace_for_admin_operation")
     def test_default_workspace_archive_rejected(self, mock_get_ws):

@@ -15,6 +15,7 @@ from app.core.auth import (
     generate_api_key_value,
     get_api_key_prefix,
     resolve_auth_context,
+    resolve_session_auth_context,
     revoke_token,
     verify_login,
 )
@@ -73,6 +74,9 @@ def _build_token_response(db: Session, context: AuthContext) -> TokenResponse:
             tenant_id=context.tenant_id,
             workspace_id=context.workspace.id,
             username=context.user.username,
+            email=context.user.email,
+            can_create_workspace=context.user.can_create_workspace,
+            is_platform_admin=context.user.is_platform_admin,
             membership_role=context.workspace_membership.role,
             tenant_membership_role=context.tenant_membership.role,
             tenant_membership_status=context.tenant_membership.status,
@@ -99,6 +103,15 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     context = resolve_auth_context(db, user)
+    return _build_token_response(db, context)
+
+
+@router.get("/context", response_model=TokenResponse)
+def get_context(
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> TokenResponse:
+    context = resolve_session_auth_context(db, credentials)
     return _build_token_response(db, context)
 
 

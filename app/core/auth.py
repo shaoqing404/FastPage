@@ -18,9 +18,9 @@ from app.core.principal import Principal
 from app.models import ApiKey, RevokedToken, TenantMembership, User, Workspace, WorkspaceMembership
 from app.services.workspace_access_service import resolve_workspace_capabilities
 from app.services.workspace_membership_service import (
+    resolve_auth_tenant_membership,
     resolve_active_tenant_membership,
     resolve_active_workspace_membership_context,
-    resolve_workspace_tenant_id_hint,
 )
 
 
@@ -106,15 +106,12 @@ def resolve_auth_context(
     tenant_id: str | None = None,
     workspace_id: str | None = None,
 ) -> AuthContext:
-    tenant_hint = tenant_id
-    if tenant_hint is None and workspace_id is not None:
-        tenant_hint = resolve_workspace_tenant_id_hint(db, workspace_id)
-
-    tenant_membership = resolve_active_tenant_membership(
+    tenant_membership = resolve_auth_tenant_membership(
         db,
         user.id,
-        tenant_id=tenant_hint,
-        fallback_tenant_id=user.tenant_id or None,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        compat_tenant_id=user.tenant_id or None,
     )
     workspace_context = resolve_active_workspace_membership_context(
         db,
@@ -201,18 +198,21 @@ def require_user(db: Session, credentials: HTTPAuthorizationCredentials | None) 
     return user
 
 
-def _resolve_session_tenant_hint(
+def resolve_session_auth_context(
     db: Session,
-    payload: dict,
-) -> str | None:
-    tenant_hint = payload.get("tenant_id")
-    if tenant_hint is not None:
-        return tenant_hint
+    credentials: HTTPAuthorizationCredentials | None,
+) -> AuthContext:
+    if credentials is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
 
-    workspace_id = payload.get("workspace_id")
-    if workspace_id is None:
-        return None
-    return resolve_workspace_tenant_id_hint(db, workspace_id)
+    user = require_user(db, credentials)
+    payload = decode_access_token(credentials.credentials)
+    return resolve_auth_context(
+        db,
+        user,
+        tenant_id=payload.get("tenant_id"),
+        workspace_id=payload.get("workspace_id"),
+    )
 
 
 def require_active_tenant_context(
@@ -221,17 +221,10 @@ def require_active_tenant_context(
     api_key_value: str | None,
 ) -> ActiveTenantContext:
     if credentials is not None:
-        user = require_user(db, credentials)
-        payload = decode_access_token(credentials.credentials)
-        tenant_membership = resolve_active_tenant_membership(
-            db,
-            user.id,
-            tenant_id=_resolve_session_tenant_hint(db, payload),
-            fallback_tenant_id=user.tenant_id or None,
-        )
+        context = resolve_session_auth_context(db, credentials)
         return ActiveTenantContext(
-            user=user,
-            tenant_membership=tenant_membership,
+            user=context.user,
+            tenant_membership=context.tenant_membership,
         )
 
     if api_key_value:
@@ -256,20 +249,10 @@ def require_active_session_tenant_context(
     db: Session,
     credentials: HTTPAuthorizationCredentials | None,
 ) -> ActiveTenantContext:
-    if credentials is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
-
-    user = require_user(db, credentials)
-    payload = decode_access_token(credentials.credentials)
-    tenant_membership = resolve_active_tenant_membership(
-        db,
-        user.id,
-        tenant_id=_resolve_session_tenant_hint(db, payload),
-        fallback_tenant_id=user.tenant_id or None,
-    )
+    context = resolve_session_auth_context(db, credentials)
     return ActiveTenantContext(
-        user=user,
-        tenant_membership=tenant_membership,
+        user=context.user,
+        tenant_membership=context.tenant_membership,
     )
 
 
@@ -307,14 +290,7 @@ def require_principal(
     api_key_value: str | None,
 ) -> Principal:
     if credentials is not None:
-        user = require_user(db, credentials)
-        payload = decode_access_token(credentials.credentials)
-        context = resolve_auth_context(
-            db,
-            user,
-            tenant_id=payload.get("tenant_id"),
-            workspace_id=payload.get("workspace_id"),
-        )
+        context = resolve_session_auth_context(db, credentials)
         return Principal(
             kind="session",
             tenant_id=context.tenant_id,
@@ -324,7 +300,7 @@ def require_principal(
             workspace_membership_role=context.workspace_membership.role,
             workspace_membership_status=context.workspace_membership.status,
             workspace_permissions=context.workspace_permissions,
-            user=user,
+            user=context.user,
             workspace_membership_id=context.workspace_membership.id,
         )
 
