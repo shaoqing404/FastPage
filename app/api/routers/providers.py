@@ -13,6 +13,7 @@ from app.services.provider_service import (
     serialize_provider,
     update_provider,
 )
+from app.services.workspace_access_service import require_workspace_capability
 
 
 router = APIRouter(prefix="/api/v1/model-providers", tags=["providers"])
@@ -24,6 +25,11 @@ def create_provider_endpoint(
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
 ):
+    require_workspace_capability(
+        principal,
+        "can_manage_providers",
+        detail="Missing workspace capability: can_manage_providers",
+    )
     provider = create_provider(db, principal.tenant_id, payload, actor_id=principal.user_id, actor_type=principal.kind)
     return serialize_provider(provider)
 
@@ -33,6 +39,11 @@ def list_providers(
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
 ):
+    require_workspace_capability(
+        principal,
+        "can_manage_providers",
+        detail="Missing workspace capability: can_manage_providers",
+    )
     return [serialize_provider(provider) for provider in list_tenant_providers(db, principal.tenant_id)]
 
 
@@ -43,6 +54,11 @@ def patch_provider(
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
 ):
+    require_workspace_capability(
+        principal,
+        "can_manage_providers",
+        detail="Missing workspace capability: can_manage_providers",
+    )
     provider = update_provider(db, principal.tenant_id, provider_id, payload, actor_id=principal.user_id, actor_type=principal.kind)
     return serialize_provider(provider)
 
@@ -53,6 +69,11 @@ def remove_provider(
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
 ) -> Response:
+    require_workspace_capability(
+        principal,
+        "can_manage_providers",
+        detail="Missing workspace capability: can_manage_providers",
+    )
     delete_provider(db, principal.tenant_id, provider_id, actor_id=principal.user_id, actor_type=principal.kind)
     return Response(status_code=204)
 
@@ -63,6 +84,10 @@ def probe_provider_models_endpoint(
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
 ):
+    require_workspace_capability(
+        principal,
+        "can_manage_providers",
+        detail="Missing workspace capability: can_manage_providers",
+    )
     provider = probe_provider_models(db, principal.tenant_id, provider_id, actor_id=principal.user_id, actor_type=principal.kind)
     return serialize_provider(provider)
-

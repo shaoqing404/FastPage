@@ -20,20 +20,7 @@ def _hash_file(path) -> str:
     return digest.hexdigest()
 
 
-def _is_default_workspace(db: Session, tenant_id: str, workspace_id: str) -> bool:
-    return db.scalar(
-        select(Workspace.id).where(
-            Workspace.tenant_id == tenant_id,
-            Workspace.id == workspace_id,
-            Workspace.is_default.is_(True),
-        ).limit(1)
-    ) is not None
-
-
-def _document_workspace_filter(db: Session, principal: Principal):
-    if _is_default_workspace(db, principal.tenant_id, principal.workspace_id):
-        return or_(Document.workspace_id == principal.workspace_id, Document.workspace_id.is_(None))
-    return Document.workspace_id == principal.workspace_id
+from app.services.workspace_scope_service import get_workspace_visibility_filter
 
 
 def list_accessible_documents_by_ids(db: Session, principal: Principal, document_ids: list[str]) -> list[Document]:
@@ -43,7 +30,7 @@ def list_accessible_documents_by_ids(db: Session, principal: Principal, document
         select(Document).where(
             Document.id.in_(document_ids),
             Document.tenant_id == principal.tenant_id,
-            _document_workspace_filter(db, principal),
+            get_workspace_visibility_filter(db, principal, Document),
         )
     ).all()
 
@@ -53,7 +40,7 @@ def get_document_or_404(db: Session, principal: Principal, document_id: str) -> 
         select(Document).where(
             Document.id == document_id,
             Document.tenant_id == principal.tenant_id,
-            _document_workspace_filter(db, principal),
+            get_workspace_visibility_filter(db, principal, Document),
         )
     )
     if document is None:

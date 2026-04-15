@@ -1,7 +1,9 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+KnowledgeBaseVisibility = Literal["private", "workspace_read", "workspace_edit"]
 
 
 class KnowledgeBaseDocumentCreate(BaseModel):
@@ -23,6 +25,7 @@ class KnowledgeBaseCreate(BaseModel):
     name: str
     description: str | None = None
     status: str = "active"
+    visibility: KnowledgeBaseVisibility = "private"
     retrieval_profile: dict[str, Any] = Field(default_factory=dict)
     documents: list[KnowledgeBaseDocumentCreate] = Field(default_factory=list)
 
@@ -31,6 +34,7 @@ class KnowledgeBaseUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     status: str | None = None
+    visibility: KnowledgeBaseVisibility | None = None
     retrieval_profile: dict[str, Any] | None = None
 
 
@@ -53,6 +57,7 @@ class KnowledgeBaseOut(BaseModel):
     name: str
     description: str | None
     status: str
+    visibility: KnowledgeBaseVisibility
     retrieval_profile: dict[str, Any]
     created_by: str
     created_at: datetime

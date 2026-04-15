@@ -29,6 +29,7 @@ from app.services.document_service import get_document_or_404
 from app.services.session_service import create_session, get_session_or_404, get_skill_session_or_404, list_session_messages, list_sessions
 from app.services.skill_service import get_skill_or_404
 from app.services.storage_service import artifact_exists, get_trace_uri_for_run, read_json_artifact
+from app.services.workspace_access_service import require_workspace_capability
 
 
 router = APIRouter(prefix="/api/v1", tags=["chat"])
@@ -36,6 +37,22 @@ router = APIRouter(prefix="/api/v1", tags=["chat"])
 
 def _sse(event: str, data) -> str:
     return f"event: {event}\ndata: {json.dumps(jsonable_encoder(data), ensure_ascii=False)}\n\n"
+
+
+def _require_can_run_skills(principal: Principal) -> None:
+    require_workspace_capability(
+        principal,
+        "can_run_skills",
+        detail="Missing workspace capability: can_run_skills",
+    )
+
+
+def _require_can_view_runs(principal: Principal) -> None:
+    require_workspace_capability(
+        principal,
+        "can_view_runs",
+        detail="Missing workspace capability: can_view_runs",
+    )
 
 
 @router.post("/chat/ask", response_model=ChatRunOut)
@@ -66,6 +83,7 @@ async def run_skill(
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
 ):
+    _require_can_run_skills(principal)
     skill = get_skill_or_404(db, principal, skill_id)
     request_config = json.loads(skill.request_config_json or "{}")
     conversation_config = json.loads(skill.conversation_config_json or "{}")
@@ -145,6 +163,7 @@ async def run_skill_stream(
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
 ):
+    _require_can_run_skills(principal)
     skill = get_skill_or_404(db, principal, skill_id)
     request_config = json.loads(skill.request_config_json or "{}")
     conversation_config = json.loads(skill.conversation_config_json or "{}")
@@ -208,6 +227,7 @@ def list_runs(
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
 ):
+    _require_can_view_runs(principal)
     if skill_id:
         get_skill_or_404(db, principal, skill_id)
     if document_id:
@@ -226,11 +246,13 @@ def list_runs(
 
 @router.get("/runs/{run_id}", response_model=ChatRunOut)
 def get_run(run_id: str, db: Session = Depends(get_db), principal: Principal = Depends(get_current_principal)):
+    _require_can_view_runs(principal)
     return serialize_run(get_run_or_404(db, principal, run_id))
 
 
 @router.post("/runs/{run_id}/cancel", response_model=ChatRunOut)
 async def cancel_run(run_id: str, db: Session = Depends(get_db), principal: Principal = Depends(get_current_principal)):
+    _require_can_view_runs(principal)
     run = await request_run_cancel(
         db,
         principal=principal,
@@ -242,6 +264,7 @@ async def cancel_run(run_id: str, db: Session = Depends(get_db), principal: Prin
 
 @router.get("/runs/{run_id}/trace")
 def get_run_trace(run_id: str, db: Session = Depends(get_db), principal: Principal = Depends(get_current_principal)):
+    _require_can_view_runs(principal)
     run = get_run_or_404(db, principal, run_id)
     if not run.skill_id:
         from fastapi import HTTPException, status
@@ -259,6 +282,8 @@ def create_chat_session(
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
 ):
+    if payload.skill_id:
+        _require_can_run_skills(principal)
     return create_session(db, principal, payload.title, skill_id=payload.skill_id)
 
 
@@ -268,6 +293,7 @@ def list_chat_sessions(
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
 ):
+    _require_can_view_runs(principal)
     return list_sessions(db, principal, skill_id=skill_id)
 
 
@@ -277,6 +303,7 @@ def get_chat_session(
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
 ):
+    _require_can_view_runs(principal)
     return get_session_or_404(db, principal, session_id)
 
 
@@ -286,6 +313,7 @@ def get_session_messages(
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
 ):
+    _require_can_view_runs(principal)
     _ = get_session_or_404(db, principal, session_id)
     return list_session_messages(db, principal=principal, session_id=session_id)
 
@@ -297,6 +325,7 @@ def create_skill_chat_session(
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
 ):
+    _require_can_run_skills(principal)
     return create_session(db, principal, payload.title, skill_id=skill_id)
 
 
@@ -306,6 +335,7 @@ def list_skill_chat_sessions(
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
 ):
+    _require_can_view_runs(principal)
     return list_sessions(db, principal, skill_id=skill_id)
 
 
@@ -316,6 +346,7 @@ def get_skill_chat_session(
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
 ):
+    _require_can_view_runs(principal)
     return get_skill_session_or_404(db, principal, skill_id, session_id)
 
 
@@ -326,5 +357,6 @@ def get_skill_session_messages(
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
 ):
+    _require_can_view_runs(principal)
     _ = get_skill_session_or_404(db, principal, skill_id, session_id)
     return list_session_messages(db, principal=principal, session_id=session_id)

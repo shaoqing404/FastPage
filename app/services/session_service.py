@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.principal import Principal
 from app.models import ChatMessage, ChatSession, Workspace
+from app.services.workspace_access_service import require_workspace_capability
 
 
 def _is_default_workspace(db: Session, tenant_id: str, workspace_id: str) -> bool:
@@ -46,7 +47,13 @@ def create_session(
     *,
     skill_id: str | None = None,
 ) -> ChatSession:
-    _validate_skill_scope(db, principal, skill_id)
+    if skill_id:
+        require_workspace_capability(
+            principal,
+            "can_run_skills",
+            detail="Missing workspace capability: can_run_skills",
+        )
+        _validate_skill_scope(db, principal, skill_id)
     now = datetime.utcnow()
     session = ChatSession(
         id=str(uuid.uuid4()),
@@ -75,6 +82,8 @@ def get_session_or_404(db: Session, principal: Principal, session_id: str) -> Ch
     )
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    if session.skill_id:
+        _validate_skill_scope(db, principal, session.skill_id)
     return session
 
 

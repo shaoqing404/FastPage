@@ -8,6 +8,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.routers import auth, chat, documents, jobs, knowledge_bases, metrics, providers, skills
 from app.api.routers import compliance_checks, compliance_runs
+from app.api.routers import workspaces, workspace_invites
 from app.core.bootstrap import init_db
 from app.core.config import get_settings
 from app.core.errors import AppError, ErrorCode, error_envelope, status_to_error_code
@@ -121,3 +122,5 @@ app.include_router(skills.router)
 app.include_router(chat.router)
 app.include_router(providers.router)
 app.include_router(metrics.router)
+app.include_router(workspaces.router)
+app.include_router(workspace_invites.router)

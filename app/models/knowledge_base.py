@@ -15,6 +15,7 @@ class KnowledgeBase(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="active", nullable=False, index=True)
+    visibility: Mapped[str] = mapped_column(String(32), default="private", nullable=False)
     retrieval_profile_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     created_by: Mapped[str] = mapped_column(String(64), ForeignKey("users.id"), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

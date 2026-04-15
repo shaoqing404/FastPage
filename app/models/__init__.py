@@ -1,5 +1,7 @@
 from .tenant import Tenant
 from .workspace import Workspace
+from .workspace_membership import WorkspaceMembership
+from .workspace_invite import WorkspaceInvite
 from .tenant_membership import TenantMembership
 from .user import User
 from .document import Document, DocumentVersion
@@ -17,6 +19,8 @@ from .compliance import ComplianceCheck, ComplianceRun
 __all__ = [
     "Tenant",
     "Workspace",
+    "WorkspaceMembership",
+    "WorkspaceInvite",
     "TenantMembership",
     "User",
     "Document",

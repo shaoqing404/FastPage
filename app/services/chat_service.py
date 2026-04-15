@@ -35,6 +35,7 @@ from app.services.task_queue_service import (
     open_chat_event_subscription,
     publish_chat_event,
 )
+from app.services.workspace_access_service import can_read_skill
 from pageindex.utils import count_tokens, extract_json, llm_completion
 
 
@@ -295,6 +296,23 @@ def _run_workspace_filter(db: Session, principal: Principal):
     return ChatRun.workspace_id == principal.workspace_id
 
 
+def _load_visible_skill_map(db: Session, principal: Principal, skill_ids: set[str]) -> dict[str, ChatSkill]:
+    if not skill_ids:
+        return {}
+    skills = db.scalars(
+        select(ChatSkill).where(
+            ChatSkill.id.in_(skill_ids),
+            ChatSkill.tenant_id == principal.tenant_id,
+            ChatSkill.workspace_id == principal.workspace_id,
+        )
+    ).all()
+    return {
+        skill.id: skill
+        for skill in skills
+        if can_read_skill(principal, skill)
+    }
+
+
 async def _publish_chat_event(run_id: str, event: str, data: dict) -> None:
     await publish_chat_event(run_id, {"event": event, "data": data})
 
@@ -551,6 +569,10 @@ def get_run_or_404(db: Session, principal: Principal, run_id: str) -> ChatRun:
     )
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    if run.skill_id:
+        visible_skills = _load_visible_skill_map(db, principal, {run.skill_id})
+        if run.skill_id not in visible_skills:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     return run
 
 
@@ -572,7 +594,12 @@ def list_runs_for_principal(
         stmt = stmt.where(ChatRun.document_id == document_id)
     if session_id:
         stmt = stmt.where(ChatRun.session_id == session_id)
-    return db.scalars(stmt.order_by(ChatRun.created_at.desc())).all()
+    runs = db.scalars(stmt.order_by(ChatRun.created_at.desc())).all()
+    skill_ids = {run.skill_id for run in runs if run.skill_id}
+    if not skill_ids:
+        return runs
+    visible_skills = _load_visible_skill_map(db, principal, skill_ids)
+    return [run for run in runs if run.skill_id is None or run.skill_id in visible_skills]
 
 
 def _claim_session_slot(db: Session, run: ChatRun) -> bool:

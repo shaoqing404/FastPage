@@ -8,12 +8,20 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ContextSwitchRequest(BaseModel):
+    workspace_id: str
+
+
 class UserOut(BaseModel):
     id: str
     tenant_id: str
     workspace_id: str
     username: str
     membership_role: str
+    tenant_membership_role: str
+    tenant_membership_status: str
+    workspace_membership_role: str
+    workspace_membership_status: str
 
 
 class WorkspaceOut(BaseModel):
@@ -32,11 +40,23 @@ class MembershipOut(BaseModel):
     status: str
 
 
+class WorkspaceMembershipOut(BaseModel):
+    id: str
+    workspace_id: str
+    user_id: str
+    role: str
+    status: str
+    permissions_override: dict[str, bool]
+    permissions: dict[str, bool]
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserOut
     workspace: WorkspaceOut
+    tenant_membership: MembershipOut
+    workspace_membership: WorkspaceMembershipOut
     memberships: list[MembershipOut]
 
 
