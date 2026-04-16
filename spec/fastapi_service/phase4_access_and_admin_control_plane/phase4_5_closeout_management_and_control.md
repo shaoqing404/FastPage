@@ -12,6 +12,11 @@
 - 管理：把 Phase 4 选择性后置的管理页面和配套 API 明确纳入可执行范围
 - 控制：补齐平台级最小控制面，使 `workspace` / `user` / `context` 从“可用”变成“可运营”
 
+在当前调整后的执行计划中，`Phase 4.5` 还额外吸收两类此前容易被后置的工作：
+
+- invite onboarding / password lifecycle 的最小产品闭环
+- Knowledge Base / Documents 管理页面的信息架构收口
+
 边界上：
 
 - `Phase 4` 解决的是 workspace access/admin 主干能力
@@ -78,6 +83,8 @@
 - workspace 创建与自助管理入口
 - 平台级用户/工作区管理页面
 - 平台级最小控制后台
+- invite 入口到可进入 workspace 的 onboarding 面
+- KB / Documents 管理面的职责边界收口
 
 ### 4.3 控制目标
 
@@ -88,6 +95,12 @@
 - 能收口关键操作
 
 但不扩张成完整治理平台。
+
+这里的“控制”还包括：
+
+- 用户被邀请后，能够通过明确的登录 / claim / 改密路径进入 workspace
+- 平台管理员能够完成最小密码重置与账户恢复动作
+- 用户能在 KB / Documents 两个页面中理解资源管理边界，而不是依赖混合式临时页面
 
 ## 5. 本阶段明确要做的内容
 
@@ -181,6 +194,26 @@
 - 保证跨 tenant invite accept 后的后续登录/刷新行为一致
 - 明确 `User.tenant_id` 在 Phase 4.5 仍只是兼容字段，而非权限真相
 
+#### C. invite onboarding 与 account entry 闭环
+
+`Phase 4` 冻结了 invite 的 email matching 与 accept 规则，但未完成产品入口闭环。
+
+本阶段正式纳入：
+
+- invite preview contract
+- invite 链接在未登录状态下的明确入口分流
+  - 已有账号登录后 accept
+  - invite-bound claim / first-entry flow
+- invite claim 成功后的 token/context handoff
+- 已存在账号但未登录时的稳定回跳
+
+边界说明：
+
+- 这不是开放式 public signup
+- 这是 invite-bound onboarding
+- invite UUID 只作为该 invite 的 claim 凭证，不扩张成通用注册体系
+- `Phase 4.5` 的正式 closeout 主链仍以 platform-admin provisioning 为主验证链
+
 ### 5.3 兼容债清理
 
 本阶段要继续清理仍依赖 `User.tenant_id` 作为行为主导的内部路径。
@@ -253,12 +286,19 @@
 - enable / disable user
 - 调整 `can_create_workspace`
 - 调整 `is_platform_admin`
+- 平台管理员触发 password reset
+- 对需要首登改密的用户状态提供最小可见性
 
 本阶段不做：
 
 - 完整审批链
 - SSO / SCIM
 - 外部身份治理
+
+说明：
+
+- 如果 invite claim / 首登改密在本阶段实现，则平台用户管理必须提供与之配套的最小密码运营动作
+- 这仍属于 operational control，不属于长期 IAM 平台
 
 #### B. 平台级 workspace 管理
 
@@ -315,11 +355,19 @@
 - Knowledge Base visibility 配置面
 - Skill visibility 配置面
 - 对 capability / visibility 被拒绝的前端反馈
+- Knowledge Base 列表页与详情页拆分
+- KB 详情页中的文档管理入口
+- Documents 页面重新聚焦为用户个人文档管理入口
+- KB 与 Documents 两个页面间的“上传 / 关联 / 分享到 KB”边界澄清
 
 #### C. Invite 侧页面
 
 - invite accept page
 - invite accept 成功后的 token/context 替换流程
+- invite preview state
+- 未登录用户的 claim / login 分流
+- 已登录但邮箱不匹配时的稳定错误反馈
+- 首登改密页与受控跳转
 
 #### D. 平台管理侧页面
 
@@ -333,6 +381,8 @@
 - 这些页面是 `Phase 4` 选择性后置的管理页面
 - `Phase 4.5` 要把它们正式纳入范围
 - 但页面实现仍应尽量复用已有 layout、导航、auth client、主题变量
+- KB / Documents 页面重构在本阶段被视为“管理面收口”，不是新的知识产品线扩张
+- invite claim / password change / reset-password UI 在本阶段被视为“账户进入闭环”，不是新的身份平台建设
 
 ### 5.7 开发环境清理与初始化前置 gate
 
@@ -363,7 +413,8 @@
 4. 测试用户创建 workspace
 5. 测试用户创建知识库
 6. 测试用户使用项目 `.env` 的兼容 OpenAI 配置创建百炼 provider
-7. 默认模型使用 `qwen3.5-plus`
+7. 默认模型按当前运行面约定验证
+   - 当前 DashScope 兼容运行面默认模型为 `openai/qwen-plus`
 8. 测试用户上传项目目录内 PDF
 9. parse / index / build 成功
 10. 创建 skill 并绑定 KB
@@ -375,6 +426,42 @@
 - `Phase 4.5` 不要求开放 public signup
 - 测试用户由 platform admin provision 即可
 - closeout 测试优先使用项目目录内 PDF，而不是外部不稳定样本
+- 如果 invite claim / password lifecycle 在本阶段落地，应单独追加产品验证，但不得替代 provisioning-based closeout 主链
+
+### 5.9 当前 closeout 审计状态（2026-04-16）
+
+截至 `2026-04-16`，`Phase 4.5` 的正式 closeout 状态仍为 `NO-GO`。
+
+原因不是范围未定义，而是主链在真实运行面上尚未完成重新打通。
+
+当前状态拆分如下：
+
+- 已完成一次基于真实 `.env` 运行面的 closeout 审计
+  - 审计口径为远程 `MySQL + MinIO + Redis`
+  - 结论为 `NO-GO`
+- 已识别的主阻塞中，以下两项已完成代码级修复并通过回归测试复审
+  - `platform user provisioning`
+    - `POST /api/v1/platform/users` 对应的 `create_platform_user()` 已通过先写入 `User` 再附加 membership 的方式修复 FK 顺序问题
+    - 配套 contract test 已确认 user / tenant membership / default workspace membership 成功落库
+  - `query / skill chat`
+    - chat event publish 边界已改为 datetime-safe
+    - terminal wait 轮询已改为显式刷新事务视图，避免 MySQL 下的假 `504`
+    - 相关 regression tests 已通过
+- 对上述两项修复的当前判定是：
+  - 代码审计通过
+  - 可以进入真实运行面复验
+  - 但还不能据此直接把 `Phase 4.5` 结论改写为 `GO`
+- 仍需补齐或重新确认的事项包括：
+  - 在真实 `MySQL + MinIO + Redis` 运行面重新验证 `POST /api/v1/platform/users`
+  - 在真实 Redis worker 下重新验证 `POST /api/v1/chat/ask`
+  - 在真实 Redis worker 下重新验证 `POST /api/v1/chat/skills/{skill_id}/run`
+  - 修复 `alembic heads` 的 migration metadata 检查异常，避免 4.5 closeout 与 4.7 hardening 输入不一致
+
+约束说明：
+
+- SQLite 或纯单测结果只能作为辅助证据
+- `Phase 4.5` 的正式 closeout 主结论仍必须以真实 `MySQL + MinIO + Redis` 链路为准
+- 只要 `platform admin -> 新用户 -> workspace -> KB -> provider -> PDF -> query / skill chat` 任一段未重新打通，本阶段不得写 `GO`
 
 ## 6. 本阶段明确不做的内容
 
@@ -394,6 +481,7 @@
 同时，本阶段也不建议扩张到：
 
 - 重新发明身份系统
+- 通用 public signup / registration 平台
 - 外部邮件基础设施重构
 - 跨系统 IAM 集成
 
@@ -412,6 +500,7 @@
 - `GET /api/v1/platform/users`
 - `GET /api/v1/platform/users/{user_id}`
 - `PATCH /api/v1/platform/users/{user_id}`
+- `POST /api/v1/platform/users/{user_id}/reset-password`
 
 ### 7.3 平台 workspace 管理
 
@@ -425,6 +514,12 @@
 
 - `GET /api/v1/platform/tenants`
 - `GET /api/v1/platform/tenants/{tenant_id}`
+
+### 7.5 Invite onboarding / password lifecycle
+
+- `GET /api/v1/workspace-invites/{invite_id}/preview`
+- `POST /api/v1/workspace-invites/{invite_id}/claim`
+- `POST /api/v1/auth/change-password`
 
 说明：
 
@@ -457,12 +552,18 @@
 - users list/detail/patch
 - workspaces list/detail/control
 - tenant directory read-only
+- 当前补充状态：
+  - platform user provisioning 的 MySQL FK 顺序修复已完成代码审计
+  - 仍需真实运行面 API 复验后才能视为 closeout 通过
 
 ### Batch 4.5-E: frontend closeout
 
 - workspace switcher
 - workspace admin pages
 - invite accept page
+- invite preview / claim / change-password / reset-password UI
+- KB selector / KB detail page restructuring
+- Documents page refocus
 - visibility UI
 - platform admin pages
 
@@ -472,6 +573,9 @@
 - 干净初始化流程
 - API 全链路验证
 - 形成 4.5 closeout 结果
+- 当前补充状态：
+  - A/B 阻塞项已完成代码级复审
+  - 本 batch 的首要 gate 变为真实 `MySQL + MinIO + Redis` 复验与 migration metadata 对齐
 
 ## 9. 风险点
 
@@ -518,7 +622,10 @@
 
 - 用户可以发现并切换可进入的 workspace
 - 用户可以在统一主题下完成 workspace 成员/邀请/归档操作
+- invite 链接在未登录状态下有清晰的 login / claim 分流
+- 首登改密与平台重置密码形成最小闭环
 - 用户可以设置 KB / Skill visibility
+- KB 与 Documents 页面职责边界已清晰，不再依赖混合式管理页面
 - 允许创建 workspace 的用户可以完成自助创建
 - 平台 admin 可以通过后台页面管理用户和 workspace
 
@@ -532,9 +639,14 @@
 
 - 开发/验证环境可被安全清理到空初始化状态
 - 可从干净状态完成 migration 与 bootstrap
-- 可完成 platform admin -> test user -> workspace -> KB -> provider -> PDF -> query 的完整链路
+- 可完成 platform admin -> test user -> workspace -> KB -> provider -> PDF -> query / skill chat 的完整链路
 - API 层 tenant / workspace / capability 测试覆盖关键授权边界
 - 本阶段 closeout 结果可作为 `Phase 4.7` 测试标准的输入
+
+补充 gate：
+
+- 若某项阻塞已完成代码修复但尚未通过真实运行面复验，`Phase 4.5` 仍视为未 close
+- `Phase 4.7` 只能继承已经在真实运行面复验通过的 `Phase 4.5` 能力，不继承“仅单测通过”的假定结论
 
 ## 11. 与 Phase 5 的切分结论
 

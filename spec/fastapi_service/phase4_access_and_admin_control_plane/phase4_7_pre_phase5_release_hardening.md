@@ -13,6 +13,10 @@ Its purpose is to prove that the `Phase 4.x` system can be:
 - validated through API and end-to-end chains
 - handed into governance work without unresolved platform-operability questions
 
+This phase assumes product-surface closure work has already been assigned to `Phase 4.5` and relationship-truth exposure has already been assigned to `Phase 4.6`.
+
+It also assumes that any `Phase 4.5` blocker first repaired at unit-test or contract-test level has already been rerun on the real project runtime surface before being treated as a hardening baseline.
+
 ## 2. Scope
 
 ### 2.1 Environment reset and rebuild
@@ -58,6 +62,14 @@ Expected chain:
 8. query / skill chat succeeds
 9. access-control API tests still pass
 
+If `Phase 4.5` lands invite claim / password lifecycle closure, `Phase 4.7` should validate that flow as an additional product path, but it should not redefine or redesign it here.
+
+Input discipline:
+
+- `Phase 4.7` does not accept “code audit passed” as a substitute for runtime validation
+- fixes inherited from `Phase 4.5` must already have been rerun on the project `.env` resolved `MySQL + MinIO + Redis` surface
+- this specifically applies to user provisioning and query / skill-chat paths that were previously known `Phase 4.5` blockers
+
 ### 2.4 Project-specific testing skill
 
 Need a Codex skill dedicated to this repo that captures:
@@ -93,7 +105,8 @@ For default validation:
 
 - use the project `.env` compatible OpenAI settings as the source config
 - create a DashScope / BaiLian-compatible provider through the product/API flow
-- set default model to `qwen3.5-plus`
+- set default model according to the current runtime default
+  - current DashScope-compatible runtime default is `openai/qwen-plus`
 
 This validates:
 
@@ -108,6 +121,7 @@ This validates:
 - end-to-end closeout checklist
 - project testing skill
 - `Phase 4.x` GO / NO-GO report
+- explicit record of which inherited `Phase 4.5` fixes were runtime-revalidated before hardening
 
 ## 6. Non-Goals
 
@@ -118,6 +132,9 @@ This validates:
 - export/import productization
 - cross-instance migration tooling
 - org/team tree
+- invite onboarding redesign
+- password-management product redesign
+- KB / Documents page IA redesign
 
 ## 7. Acceptance Standard
 
@@ -128,3 +145,4 @@ This validates:
 - API-level isolation and capability rules are fully verified
 - the end-to-end product chain passes on repo-local PDF inputs
 - the testing process is standardized enough to be reused as a project-specific skill
+- the testing process validates the product closures already landed in `Phase 4.5` rather than re-scoping them

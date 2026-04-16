@@ -20,6 +20,13 @@ It does **not** introduce:
 - department hierarchy
 - governance workflows
 
+It also does **not** absorb work that `Phase 4.5` has already chosen to close:
+
+- invite claim / self-registration entry
+- password reset / change-password lifecycle
+- KB / Documents page information-architecture restructuring
+- basic platform user password operations
+
 ## 2. Why This Phase Exists
 
 `Phase 4.5` can make the backend operable, but that still leaves one important gap:
@@ -79,6 +86,10 @@ Need:
 - session/run visibility explanation
 - KB / skill visibility explanation
 
+This clarification is about explainability and inspectability.
+
+It is not a second frontend rewrite of the KB / Documents management pages.
+
 ## 4. Explicit Non-Goals
 
 `Phase 4.6` does not do:
@@ -90,6 +101,10 @@ Need:
 - audit center
 - policy engine
 - approval workflow
+- invite onboarding product flow
+- reset-password / change-password product flow
+- generic account activation UX
+- KB selector / KB detail / Documents IA redesign
 
 ## 5. API Direction
 
@@ -99,6 +114,11 @@ Suggested minimum backend contracts:
 - `GET /api/v1/platform/tenants/{tenant_id}`
 - `GET /api/v1/platform/users/{user_id}/access-portrait`
 - `GET /api/v1/platform/workspaces/{workspace_id}/access-portrait`
+
+Important boundary:
+
+- if existing list/detail APIs from `Phase 4.5` already expose enough relationship truth, `Phase 4.6` may extend them instead of introducing duplicate portrait APIs
+- `Phase 4.6` should prefer normalized effective-portrait read APIs, not new onboarding or management mutations
 
 Shape guidance:
 
@@ -142,3 +162,4 @@ It does not mean:
 - a developer can explain allowed/denied actions from API output alone
 - user access portraits no longer depend on manual DB inspection
 - this visibility still stays inside `Phase 4` control-plane scope and does not drift into `Phase 5` governance
+- there is no remaining confusion that invite onboarding, password lifecycle, or KB / Documents page restructuring belongs here if it already landed in `Phase 4.5`

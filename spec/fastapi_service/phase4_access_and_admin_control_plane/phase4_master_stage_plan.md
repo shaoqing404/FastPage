@@ -137,7 +137,18 @@ Main goals:
 - close context/discoverability debt
 - land workspace create
 - land minimum platform backend
+- close invite onboarding and password lifecycle gaps needed for real operation
+- finish KB / Documents management-surface restructuring that was blocking real product usability
 - reduce compat-field dependence
+
+Current stage note (`2026-04-16`):
+
+- formal closeout remains `NO-GO`
+- two previously identified main blockers have completed code-level repair and audit:
+  - platform user provisioning on real-MySQL path
+  - query / skill-chat timeout path on Redis worker mode
+- these two items are now considered ready for runtime revalidation, not yet ready for stage signoff
+- migration metadata hygiene for `alembic heads` remains part of the 4.5 closeout input discipline
 
 ### 4.3 `Phase 4.6`
 
@@ -150,6 +161,7 @@ Main goals:
 - expose user/tenant/workspace relationship truth
 - provide explainable access portrait
 - provide team-like collaboration management via workspace boundary
+- keep directory / portrait APIs separate from onboarding and page-IA work already absorbed by `Phase 4.5`
 
 Important note:
 
@@ -191,6 +203,12 @@ Registration note:
 
 - public self-signup is **not required** for `Phase 4.x`
 - platform-admin provisioning is sufficient
+- if invite-bound claim / self-registration lands in `Phase 4.5`, it is treated as product closure and does not replace the provisioning-based closeout chain
+
+Revalidation rule:
+
+- when a blocker is fixed first at code/test level, the stage status does not advance until the same chain is rerun on the real runtime surface
+- for current `Phase 4.5`, that runtime surface is the project `.env` resolved `MySQL + MinIO + Redis`
 
 ## 6. Environment Reset Rule
 
@@ -214,6 +232,8 @@ This reset must leave the environment in:
 - backend closeout implementation
 - migration updates
 - platform backend routes
+- invite onboarding and password-management minimum product closure
+- KB / Documents management-surface restructure needed for usable control-plane UX
 - API tests for access/control-plane
 
 ### `Phase 4.6`
@@ -221,6 +241,7 @@ This reset must leave the environment in:
 - tenant/workspace/user directory contracts
 - access portrait contract
 - membership visibility and explainability
+- no new invite onboarding or password-lifecycle scope unless `Phase 4.5` explicitly defers a blocking fragment
 
 ### `Phase 4.7`
 
@@ -228,6 +249,8 @@ This reset must leave the environment in:
 - end-to-end verification suite
 - project-specific testing skill
 - release gate checklist
+- verification and hardening of capabilities landed in `Phase 4.5` / `Phase 4.6`, not new product surface expansion
+- inherits only runtime-revalidated `Phase 4.5` results, not code-audited-only interim fixes
 
 ## 8. GO / NO-GO Rule
 
