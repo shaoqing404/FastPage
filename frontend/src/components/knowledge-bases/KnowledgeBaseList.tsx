@@ -84,6 +84,9 @@ export const KnowledgeBaseList: React.FC<KnowledgeBaseListProps> = ({
               <div className="flex items-center gap-2">
                 <BookMarked size={16} className="text-slate-400" />
                 <p className="truncate font-medium text-slate-900">{knowledgeBase.name}</p>
+                <StatusBadge tone={knowledgeBase.visibility === 'workspace_edit' ? 'accent' : knowledgeBase.visibility === 'workspace_read' ? 'default' : 'warning'}>
+                  {knowledgeBase.visibility}
+                </StatusBadge>
               </div>
               <p className="line-clamp-2 text-sm text-slate-500">{knowledgeBase.description || 'No description yet.'}</p>
               <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">

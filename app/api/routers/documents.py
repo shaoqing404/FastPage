@@ -1,7 +1,7 @@
 from datetime import datetime
 import json
 
-from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -14,7 +14,6 @@ from app.schemas.documents import DocumentOut, DocumentVersionOut, ParseRequest,
 from app.schemas.jobs import ParseJobOut
 from app.services.audit_service import audit_from_principal
 from app.services.document_service import (
-    _document_workspace_filter,
     create_or_append_document,
     delete_document,
     get_document_or_404,
@@ -23,6 +22,7 @@ from app.services.document_service import (
 from app.services.parse_service import schedule_parse_job
 from app.core.config import default_llm_model, get_settings
 from app.services.storage_service import read_json_artifact
+from app.services.workspace_scope_service import get_workspace_visibility_filter
 import uuid
 
 
@@ -35,6 +35,7 @@ def upload_document(
     request: Request,
     file: UploadFile = File(...),
     document_id: str | None = Form(default=None),
+    uploaded_via_kb_id: str | None = Form(default=None),
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_current_principal),
 ):
@@ -51,7 +52,11 @@ def upload_document(
         except ValueError:
             pass  # Malformed Content-Length — let the framework handle it.
 
-    document, version = create_or_append_document(db, principal, file, document_id=document_id)
+    document, version = create_or_append_document(
+        db, principal, file,
+        document_id=document_id,
+        uploaded_via_kb_id=uploaded_via_kb_id,
+    )
     audit_from_principal(
         db, principal, "document.upload",
         target_type="document", target_id=document.id,
@@ -66,18 +71,18 @@ def upload_document(
 
 
 @router.get("", response_model=list[DocumentOut])
-def list_documents(db: Session = Depends(get_db), principal: Principal = Depends(get_current_principal)):
-    workspace_filter = Document.workspace_id == principal.workspace_id
-    if db.scalar(
-        select(Document.id).where(
-            Document.tenant_id == principal.tenant_id,
-            Document.workspace_id.is_(None),
-        ).limit(1)
-    ) is not None:
-        workspace_filter = _document_workspace_filter(db, principal)
+def list_documents(
+    owner_me: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+):
+    workspace_filter = get_workspace_visibility_filter(db, principal, Document)
+    filters = [Document.tenant_id == principal.tenant_id, workspace_filter]
+    if owner_me:
+        filters.append(Document.owner_user_id == principal.user_id)
     docs = db.scalars(
         select(Document)
-        .where(Document.tenant_id == principal.tenant_id, workspace_filter)
+        .where(*filters)
         .order_by(Document.created_at.desc())
     ).all()
     return docs
@@ -179,4 +184,3 @@ def delete_document_endpoint(document_id: str, db: Session = Depends(get_db), pr
     )
     delete_document(db, principal, document_id)
     return Response(status_code=204)
-

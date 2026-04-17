@@ -9,6 +9,7 @@ import sqlalchemy as sa
 PHASE3_COMPLIANCE_REVISION = "20260407_0005"
 PHASE4_BACKFILL_REVISION = "20260410_0007"
 PHASE45_INVARIANT_REVISION = "20260415_0008"
+CURRENT_MIGRATION_HEAD = "20260416_0010"
 
 
 class TestPhase4MigrationsSmoke(unittest.TestCase):
@@ -18,6 +19,8 @@ class TestPhase4MigrationsSmoke(unittest.TestCase):
             self.Config = Config
             from alembic import command
             self.command = command
+            from alembic.script import ScriptDirectory
+            self.ScriptDirectory = ScriptDirectory
             from app.core.config import get_settings
             self.get_settings = get_settings
         except ImportError:
@@ -41,30 +44,53 @@ class TestPhase4MigrationsSmoke(unittest.TestCase):
         self.addCleanup(restore_database_url)
         self.alembic_cfg = self.Config("alembic.ini")
         self.alembic_cfg.set_main_option("sqlalchemy.url", self.db_url)
-        
+
+    def test_migration_script_directory_can_list_heads(self):
+        script = self.ScriptDirectory.from_config(self.alembic_cfg)
+        self.assertIn(CURRENT_MIGRATION_HEAD, script.get_heads())
+
     def test_local_phase4_upgrade_downgrade(self):
         # Build the pre-Phase-4 schema for real instead of stamping an empty DB.
         self.command.upgrade(self.alembic_cfg, PHASE3_COMPLIANCE_REVISION)
 
         # Upgrade to the Phase 4 head.
-        self.command.upgrade(self.alembic_cfg, PHASE45_INVARIANT_REVISION)
+        self.command.upgrade(self.alembic_cfg, CURRENT_MIGRATION_HEAD)
 
         # Downgrade back to the Phase 3 checkpoint to exercise downgrade paths.
         self.command.downgrade(self.alembic_cfg, PHASE3_COMPLIANCE_REVISION)
 
         # Upgrade again to verify the chain is repeatable.
-        self.command.upgrade(self.alembic_cfg, PHASE45_INVARIANT_REVISION)
+        self.command.upgrade(self.alembic_cfg, CURRENT_MIGRATION_HEAD)
 
         engine = sa.create_engine(self.db_url, future=True)
         self.addCleanup(engine.dispose)
         inspector = sa.inspect(engine)
         self.assertIn("active_founder_workspace_id", {col["name"] for col in inspector.get_columns("workspace_memberships")})
         self.assertIn("pending_normalized_email", {col["name"] for col in inspector.get_columns("workspace_invites")})
+        self.assertIn("must_change_password", {col["name"] for col in inspector.get_columns("users")})
+        self.assertIn("uploaded_via_kb_id", {col["name"] for col in inspector.get_columns("documents")})
         self.assertTrue(any(index["name"] == "uq_workspace_memberships_active_founder_workspace_id" for index in inspector.get_indexes("workspace_memberships")))
         self.assertTrue(any(index["name"] == "uq_workspace_invites_workspace_pending_normalized_email" for index in inspector.get_indexes("workspace_invites")))
         self.assertTrue(any(index["name"] == "ix_users_email" and index.get("unique", False) for index in inspector.get_indexes("users")))
+        self.assertTrue(any(index["name"] == "ix_documents_uploaded_via_kb_id" for index in inspector.get_indexes("documents")))
 
         self.assertTrue(True, "Migration smoke test completed successfully.")
+
+    def test_phase46_doc_kb_origin_upgrade_tolerates_existing_column_and_index(self):
+        self.command.upgrade(self.alembic_cfg, PHASE45_INVARIANT_REVISION)
+
+        engine = sa.create_engine(self.db_url, future=True)
+        self.addCleanup(engine.dispose)
+        with engine.begin() as conn:
+            conn.execute(sa.text("ALTER TABLE users ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT 0"))
+            conn.execute(sa.text("ALTER TABLE documents ADD COLUMN uploaded_via_kb_id VARCHAR(64)"))
+            conn.execute(sa.text("CREATE INDEX ix_documents_uploaded_via_kb_id ON documents (uploaded_via_kb_id)"))
+
+        self.command.upgrade(self.alembic_cfg, CURRENT_MIGRATION_HEAD)
+
+        with engine.begin() as conn:
+            version = conn.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one()
+        self.assertEqual(version, CURRENT_MIGRATION_HEAD)
 
     def test_phase45_upgrade_rejects_duplicate_normalized_user_emails(self):
         self.command.upgrade(self.alembic_cfg, PHASE4_BACKFILL_REVISION)

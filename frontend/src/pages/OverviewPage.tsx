@@ -16,7 +16,7 @@ import { formatDateTime, formatRelativeTime, resolveProviderName } from '../lib/
 export const OverviewPage: React.FC = () => {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const { data: overview } = useQuery({ queryKey: ['metrics-overview'], queryFn: metricsApi.overview });
-  const { data: documents = [] } = useQuery({ queryKey: ['documents'], queryFn: documentsApi.list });
+  const { data: documents = [] } = useQuery({ queryKey: ['documents'], queryFn: () => documentsApi.list() });
   const { data: knowledgeBases = [] } = useQuery({ queryKey: ['knowledge-bases'], queryFn: () => knowledgeBasesApi.list() });
   const { data: skills = [] } = useQuery({ queryKey: ['skills'], queryFn: skillsApi.list });
   const { data: providers = [] } = useQuery({ queryKey: ['providers'], queryFn: providersApi.list });

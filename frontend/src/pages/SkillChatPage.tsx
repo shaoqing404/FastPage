@@ -62,7 +62,7 @@ export const SkillChatPage: React.FC = () => {
   const [chatErrorMeta, setChatErrorMeta] = useState<{ code?: string; requestId?: string | null } | null>(null);
 
   const { data: skills = [] } = useQuery({ queryKey: ['skills'], queryFn: skillsApi.list });
-  const { data: documents = [] } = useQuery({ queryKey: ['documents'], queryFn: documentsApi.list });
+  const { data: documents = [] } = useQuery({ queryKey: ['documents'], queryFn: () => documentsApi.list() });
   const { data: knowledgeBases = [] } = useQuery({ queryKey: ['knowledge-bases'], queryFn: knowledgeBasesApi.list });
   const { data: providers = [] } = useQuery({ queryKey: ['providers'], queryFn: providersApi.list });
   const { data: sessions = [] } = useQuery({

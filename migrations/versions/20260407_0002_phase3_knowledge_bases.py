@@ -71,15 +71,15 @@ def upgrade() -> None:
         unique=False,
     )
 
-    op.add_column("chat_skills", sa.Column("knowledge_base_id", sa.String(length=64), nullable=True))
+    with op.batch_alter_table("chat_skills", recreate="auto") as batch_op:
+        batch_op.add_column(sa.Column("knowledge_base_id", sa.String(length=64), nullable=True))
+        batch_op.create_foreign_key(
+            op.f("fk_chat_skills_knowledge_base_id_knowledge_bases"),
+            "knowledge_bases",
+            ["knowledge_base_id"],
+            ["id"],
+        )
     op.create_index(op.f("ix_chat_skills_knowledge_base_id"), "chat_skills", ["knowledge_base_id"], unique=False)
-    op.create_foreign_key(
-        op.f("fk_chat_skills_knowledge_base_id_knowledge_bases"),
-        "chat_skills",
-        "knowledge_bases",
-        ["knowledge_base_id"],
-        ["id"],
-    )
 
     bind = op.get_bind()
     metadata = sa.MetaData()
@@ -148,14 +148,16 @@ def upgrade() -> None:
             chat_skills.update().where(chat_skills.c.id == skill["id"]).values(knowledge_base_id=knowledge_base_id)
         )
 
-    op.alter_column("knowledge_base_documents", "enabled", server_default=None)
-    op.alter_column("knowledge_base_documents", "sort_order", server_default=None)
+    with op.batch_alter_table("knowledge_base_documents", recreate="auto") as batch_op:
+        batch_op.alter_column("enabled", server_default=None)
+        batch_op.alter_column("sort_order", server_default=None)
 
 
 def downgrade() -> None:
-    op.drop_constraint(op.f("fk_chat_skills_knowledge_base_id_knowledge_bases"), "chat_skills", type_="foreignkey")
     op.drop_index(op.f("ix_chat_skills_knowledge_base_id"), table_name="chat_skills")
-    op.drop_column("chat_skills", "knowledge_base_id")
+    with op.batch_alter_table("chat_skills", recreate="auto") as batch_op:
+        batch_op.drop_constraint(op.f("fk_chat_skills_knowledge_base_id_knowledge_bases"), type_="foreignkey")
+        batch_op.drop_column("knowledge_base_id")
 
     op.drop_index(op.f("ix_knowledge_base_documents_pinned_version_id"), table_name="knowledge_base_documents")
     op.drop_table("knowledge_base_documents")

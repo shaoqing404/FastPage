@@ -27,6 +27,13 @@ It also does **not** absorb work that `Phase 4.5` has already chosen to close:
 - KB / Documents page information-architecture restructuring
 - basic platform user password operations
 
+Current closeout note (`2026-04-17`):
+
+- `Phase 4.6` is `GO`
+- the phase has landed as explicit portrait/directory read surface, not as a new management-write phase
+- runtime/API/frontend verification has been completed against the current local control-plane surface
+- any further work on this area now belongs to `Phase 4.7` hardening unless a regression is found
+
 ## 2. Why This Phase Exists
 
 `Phase 4.5` can make the backend operable, but that still leaves one important gap:
@@ -115,6 +122,18 @@ Suggested minimum backend contracts:
 - `GET /api/v1/platform/users/{user_id}/access-portrait`
 - `GET /api/v1/platform/workspaces/{workspace_id}/access-portrait`
 
+Implemented closeout surface (`2026-04-17`):
+
+- `GET /api/v1/platform/tenants`
+- `GET /api/v1/platform/tenants/{tenant_id}`
+- `GET /api/v1/platform/users/{user_id}/access-portrait`
+- `GET /api/v1/platform/workspaces/{workspace_id}/access-portrait`
+
+Implementation rule confirmed in closeout:
+
+- existing `Phase 4.5` list/detail APIs remain in place
+- `Phase 4.6` adds normalized portrait reads rather than reopening onboarding or management-write scope
+
 Important boundary:
 
 - if existing list/detail APIs from `Phase 4.5` already expose enough relationship truth, `Phase 4.6` may extend them instead of introducing duplicate portrait APIs
@@ -163,3 +182,12 @@ It does not mean:
 - user access portraits no longer depend on manual DB inspection
 - this visibility still stays inside `Phase 4` control-plane scope and does not drift into `Phase 5` governance
 - there is no remaining confusion that invite onboarding, password lifecycle, or KB / Documents page restructuring belongs here if it already landed in `Phase 4.5`
+
+Closeout record (`2026-04-17`):
+
+- the backend contract suite passed
+- migration hygiene passed
+- frontend build passed
+- real runtime verification confirmed portrait payloads on the live API surface
+- non-platform-admin and API-key access to portrait routes returned `403`
+- no additional `Phase 4.6` product/API work is required before entering `Phase 4.7`

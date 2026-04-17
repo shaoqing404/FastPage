@@ -13,6 +13,7 @@ class Document(Base):
     tenant_id: Mapped[str] = mapped_column(String(64), ForeignKey("tenants.id"), nullable=False, index=True)
     workspace_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("workspaces.id"), nullable=True, index=True)
     owner_user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.id"), nullable=False, index=True)
+    uploaded_via_kb_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     source_filename: Mapped[str] = mapped_column(String(512), nullable=False)
     active_version_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("document_versions.id"), nullable=True)

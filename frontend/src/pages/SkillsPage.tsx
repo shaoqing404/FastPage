@@ -125,7 +125,7 @@ export const SkillsPage: React.FC = () => {
   const [modelDirty, setModelDirty] = useState(false);
 
   const skillsQuery = useQuery({ queryKey: ['skills'], queryFn: listSkills });
-  const documentsQuery = useQuery({ queryKey: ['documents'], queryFn: documentsApi.list });
+  const documentsQuery = useQuery({ queryKey: ['documents'], queryFn: () => documentsApi.list() });
   const providersQuery = useQuery({ queryKey: ['providers'], queryFn: providersApi.list });
 
   const workspaceId = useMemo(() => {

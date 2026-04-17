@@ -6,18 +6,19 @@ from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_principal, get_current_user
+from app.api.deps import get_current_principal, get_current_user, get_session_user
 from app.core.auth import (
     AuthContext,
+    build_auth_response_payload,
     require_active_session_tenant_context,
     bearer_scheme,
-    create_access_token,
     generate_api_key_value,
     get_api_key_prefix,
     resolve_auth_context,
     resolve_session_auth_context,
     revoke_token,
     verify_login,
+    verify_password,
 )
 from app.core.db import get_db
 from app.core.principal import Principal
@@ -26,6 +27,7 @@ from app.schemas.auth import (
     ApiKeyCreateRequest,
     ApiKeyCreateResponse,
     ApiKeyOut,
+    ChangePasswordRequest,
     ContextSwitchRequest,
     LoginRequest,
     MembershipOut,
@@ -63,38 +65,7 @@ def _serialize_workspace_membership(context: AuthContext) -> WorkspaceMembership
 
 
 def _build_token_response(db: Session, context: AuthContext) -> TokenResponse:
-    memberships = db.scalars(
-        select(TenantMembership).where(TenantMembership.user_id == context.user.id).order_by(TenantMembership.created_at.asc())
-    ).all()
-    token = create_access_token(context)
-    return TokenResponse(
-        access_token=token,
-        user=UserOut(
-            id=context.user.id,
-            tenant_id=context.tenant_id,
-            workspace_id=context.workspace.id,
-            username=context.user.username,
-            email=context.user.email,
-            can_create_workspace=context.user.can_create_workspace,
-            is_platform_admin=context.user.is_platform_admin,
-            membership_role=context.workspace_membership.role,
-            tenant_membership_role=context.tenant_membership.role,
-            tenant_membership_status=context.tenant_membership.status,
-            workspace_membership_role=context.workspace_membership.role,
-            workspace_membership_status=context.workspace_membership.status,
-        ),
-        workspace=WorkspaceOut(
-            id=context.workspace.id,
-            tenant_id=context.workspace.tenant_id,
-            name=context.workspace.name,
-            slug=context.workspace.slug,
-            status=context.workspace.status,
-            is_default=context.workspace.is_default,
-        ),
-        tenant_membership=_serialize_tenant_membership(context.tenant_membership),
-        workspace_membership=_serialize_workspace_membership(context),
-        memberships=[_serialize_tenant_membership(membership) for membership in memberships],
-    )
+    return TokenResponse.model_validate(build_auth_response_payload(db, context))
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -103,6 +74,34 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     context = resolve_auth_context(db, user)
+    return _build_token_response(db, context)
+
+
+@router.post("/change-password", response_model=TokenResponse)
+def change_password(
+    payload: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_session_user),
+) -> TokenResponse:
+    """Change the authenticated user's password.
+
+    Requires the current password for verification.  Clears the
+    ``must_change_password`` flag if it was set.
+    """
+    from app.core.auth import hash_password as _hash_password  # noqa: PLC0415
+
+    if not verify_password(payload.current_password, current_user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
+
+    current_user.password_hash = _hash_password(payload.new_password)
+    if current_user.must_change_password:
+        current_user.must_change_password = False
+    from datetime import datetime as _dt  # noqa: PLC0415
+    current_user.updated_at = _dt.utcnow()
+    db.commit()
+    db.refresh(current_user)
+
+    context = resolve_auth_context(db, current_user)
     return _build_token_response(db, context)
 
 

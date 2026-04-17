@@ -22,6 +22,7 @@ class DocumentOut(BaseModel):
     tenant_id: str
     workspace_id: str | None
     owner_user_id: str
+    uploaded_via_kb_id: str | None = None
     display_name: str
     source_filename: str
     active_version_id: str | None

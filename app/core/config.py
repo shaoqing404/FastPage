@@ -1,14 +1,19 @@
 import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
 
 
 ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(ROOT / ".env")
+
+DATABASE_MODE_SQLITE = "sqlite"
+DATABASE_MODE_MYSQL = "mysql"
+VALID_DATABASE_MODES = frozenset({DATABASE_MODE_SQLITE, DATABASE_MODE_MYSQL})
 
 
 @dataclass
@@ -26,6 +31,7 @@ class Settings:
     llm_api_key: str
 
     # ── Database ────────────────────────────────────────────────────────────
+    database_mode: str
     database_url: str
 
     # ── CORS ────────────────────────────────────────────────────────────────
@@ -66,6 +72,80 @@ class Settings:
     api_host: str
 
 
+def _env_text(name: str) -> str | None:
+    value = os.getenv(name)
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _infer_database_mode_from_url(database_url: str) -> str:
+    lowered = database_url.lower()
+    if lowered.startswith("mysql"):
+        return DATABASE_MODE_MYSQL
+    return DATABASE_MODE_SQLITE
+
+
+def _sqlite_database_url(data_dir: Path) -> str:
+    sqlite_path = _env_text("SQLITE_PATH")
+    path = Path(sqlite_path).expanduser() if sqlite_path else data_dir / "app.db"
+    path = path.resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return f"sqlite:///{path.as_posix()}"
+
+
+def _mysql_database_url() -> str:
+    host = _env_text("MYSQL_HOST") or "127.0.0.1"
+    port = _env_text("MYSQL_PORT") or "3306"
+    database = _env_text("MYSQL_DATABASE")
+    user = _env_text("MYSQL_USER")
+    password = _env_text("MYSQL_PASSWORD")
+
+    missing: list[str] = []
+    if database is None:
+        missing.append("MYSQL_DATABASE")
+    if user is None:
+        missing.append("MYSQL_USER")
+    if password is None:
+        missing.append("MYSQL_PASSWORD")
+    if missing:
+        raise ValueError(
+            "DATABASE_MODE=mysql requires the following environment variables: "
+            + ", ".join(missing)
+        )
+
+    try:
+        port_number = int(port)
+    except ValueError as exc:
+        raise ValueError("MYSQL_PORT must be an integer") from exc
+
+    return (
+        "mysql+pymysql://"
+        f"{quote_plus(user)}:{quote_plus(password)}@{host}:{port_number}/{quote_plus(database)}"
+    )
+
+
+def _resolve_database_runtime(data_dir: Path) -> tuple[str, str]:
+    # Priority:
+    # 1. DATABASE_URL is an expert override and wins when explicitly set.
+    # 2. Otherwise DATABASE_MODE decides between local SQLite and MySQL assembly.
+    explicit_database_url = _env_text("DATABASE_URL")
+    if explicit_database_url is not None:
+        return _infer_database_mode_from_url(explicit_database_url), explicit_database_url
+
+    database_mode = (_env_text("DATABASE_MODE") or DATABASE_MODE_SQLITE).lower()
+    if database_mode not in VALID_DATABASE_MODES:
+        raise ValueError(
+            f"Unsupported DATABASE_MODE={database_mode!r}. "
+            f"Expected one of: {', '.join(sorted(VALID_DATABASE_MODES))}."
+        )
+
+    if database_mode == DATABASE_MODE_MYSQL:
+        return DATABASE_MODE_MYSQL, _mysql_database_url()
+    return DATABASE_MODE_SQLITE, _sqlite_database_url(data_dir)
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     app_env = os.getenv("APP_ENV", "dev").lower()
@@ -74,6 +154,7 @@ def get_settings() -> Settings:
 
     data_dir = Path(os.getenv("DATA_DIR", "./data")).resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
+    database_mode, database_url = _resolve_database_runtime(data_dir)
 
     # ── CORS defaults ──────────────────────────────────────────────────────
     _dev_origins = (
@@ -128,7 +209,8 @@ def get_settings() -> Settings:
         data_dir=data_dir,
         llm_base_url=os.getenv("LLM_BASE_URL", os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")),
         llm_api_key=os.getenv("LLM_API_KEY", os.getenv("OPENAI_API_KEY", "")),
-        database_url=os.getenv("DATABASE_URL", f"sqlite:///{data_dir / 'app.db'}"),
+        database_mode=database_mode,
+        database_url=database_url,
         cors_allow_origins=cors_allow_origins,
         cors_allow_origin_regex=cors_allow_origin_regex,
         storage_backend=os.getenv("STORAGE_BACKEND", "local"),

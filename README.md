@@ -75,6 +75,33 @@ PageIndex Service supports two clearly separated runtime modes:
 
 Detailed container instructions live in [docker/README.md](docker/README.md).
 
+### Database Runtime Selection
+
+Database env parsing now follows one simple priority order:
+
+1. `DATABASE_URL`
+2. `DATABASE_MODE`
+3. mode-specific parts
+
+Recommended usage:
+
+- local development: keep `DATABASE_MODE=sqlite`
+- remote or shared deployment: set `DATABASE_MODE=mysql` and fill `MYSQL_*`
+- expert override: set `DATABASE_URL` directly only when you intentionally want to bypass the normal mode-based config
+
+SQLite mode behavior:
+
+- default mode is `sqlite`
+- if `DATABASE_URL` is empty and `DATABASE_MODE` is unset, the service uses local SQLite automatically
+- default SQLite file is `${DATA_DIR}/app.db`
+- optional `SQLITE_PATH` can move the SQLite file, but it is not required
+
+MySQL mode behavior:
+
+- set `DATABASE_MODE=mysql`
+- fill `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`
+- no hand-written `DATABASE_URL` is required in the normal MySQL path
+
 ### 1. Complete Component Mode
 
 Recommended deployment mode:
@@ -95,7 +122,12 @@ Required settings:
 - `ADMIN_USERNAME`
 - `ADMIN_PASSWORD`
 - `SECRET_KEY`
-- `DATABASE_URL=mysql+pymysql://<user>:<pass>@<mysql-host>:3306/pageindex`
+- `DATABASE_MODE=mysql`
+- `MYSQL_HOST=<mysql-host>`
+- `MYSQL_PORT=3306`
+- `MYSQL_DATABASE=pageindex`
+- `MYSQL_USER=<user>`
+- `MYSQL_PASSWORD=<pass>`
 - `TASK_QUEUE_BACKEND=redis`
 - `REDIS_URL=redis://:<redis-password>@<redis-host>:6379/1`
 - `STORAGE_BACKEND=minio`
@@ -111,6 +143,10 @@ Required settings:
 - `CHAT_RUN_LEASE_TIMEOUT_SECONDS`
 - `CHAT_RUN_QUEUE_RETRY_DELAY_MS`
 - `CORS_ALLOW_ORIGINS`
+
+Optional expert override:
+
+- `DATABASE_URL=mysql+pymysql://<user>:<pass>@<mysql-host>:3306/pageindex`
 
 Startup order:
 
@@ -168,9 +204,9 @@ Minimal settings:
 - `ADMIN_USERNAME=admin`
 - `ADMIN_PASSWORD=pageindex_service123`
 - `SECRET_KEY=pageindex_service123_local_dev_only_change_me`
-- `DATABASE_URL=sqlite:///./data/app.db`
-  Or in containerized local mode:
-  `sqlite:////app/data/app.db`
+- `DATABASE_MODE=sqlite`
+- `DATA_DIR=./data`
+- optional `SQLITE_PATH=./somewhere/pageindex.db`
 - `STORAGE_BACKEND=local`
 - `TASK_QUEUE_BACKEND=local`
 - `REDIS_URL=` empty
@@ -240,7 +276,14 @@ Core:
 
 Runtime services:
 
-- `DATABASE_URL`
+- `DATABASE_MODE`
+- `SQLITE_PATH`
+- `DATABASE_URL` as an expert override
+- `MYSQL_HOST`
+- `MYSQL_PORT`
+- `MYSQL_DATABASE`
+- `MYSQL_USER`
+- `MYSQL_PASSWORD`
 - `TASK_QUEUE_BACKEND`
 - `REDIS_URL`
 - `STORAGE_BACKEND`

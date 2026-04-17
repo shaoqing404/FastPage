@@ -123,12 +123,60 @@ class TestAuthContextContract(unittest.TestCase):
             fallback_tenant_id="tenant_legacy",
         )
 
-    @patch(f"{AUTH_ROUTER_MODULE_NAME}.create_access_token", return_value="token-current")
+    @patch(f"{AUTH_ROUTER_MODULE_NAME}.build_auth_response_payload")
     @patch(f"{AUTH_ROUTER_MODULE_NAME}.resolve_session_auth_context")
-    def test_get_context_returns_current_contract(self, mock_resolve_session_auth_context, _mock_create_access_token):
+    def test_get_context_returns_current_contract(self, mock_resolve_session_auth_context, mock_build_auth_response_payload):
         auth_context = self._build_auth_context(tenant_id="tenant_target", workspace_id="ws_target")
         mock_resolve_session_auth_context.return_value = auth_context
-        self.db.scalars.return_value.all.return_value = [auth_context.tenant_membership]
+        mock_build_auth_response_payload.return_value = {
+            "access_token": "token-current",
+            "token_type": "bearer",
+            "user": {
+                "id": "user_1",
+                "tenant_id": "tenant_target",
+                "workspace_id": "ws_target",
+                "username": "tester",
+                "email": "tester@example.com",
+                "can_create_workspace": False,
+                "is_platform_admin": False,
+                "membership_role": "member",
+                "tenant_membership_role": "member",
+                "tenant_membership_status": "active",
+                "workspace_membership_role": "member",
+                "workspace_membership_status": "active",
+            },
+            "workspace": {
+                "id": "ws_target",
+                "tenant_id": "tenant_target",
+                "name": "Workspace",
+                "slug": "workspace",
+                "status": "active",
+                "is_default": False,
+            },
+            "tenant_membership": {
+                "id": "tm_1",
+                "tenant_id": "tenant_target",
+                "role": "member",
+                "status": "active",
+            },
+            "workspace_membership": {
+                "id": "wm_1",
+                "workspace_id": "ws_target",
+                "user_id": "user_1",
+                "role": "member",
+                "status": "active",
+                "permissions_override": {},
+                "permissions": {"can_view_workspace": True},
+            },
+            "memberships": [
+                {
+                    "id": "tm_1",
+                    "tenant_id": "tenant_target",
+                    "role": "member",
+                    "status": "active",
+                }
+            ],
+        }
 
         with self._client() as client:
             response = client.get(
@@ -143,14 +191,14 @@ class TestAuthContextContract(unittest.TestCase):
         self.assertEqual(payload["tenant_membership"]["tenant_id"], "tenant_target")
         self.assertEqual(payload["workspace_membership"]["workspace_id"], "ws_target")
 
-    @patch(f"{AUTH_ROUTER_MODULE_NAME}.create_access_token", return_value="token-switched")
+    @patch(f"{AUTH_ROUTER_MODULE_NAME}.build_auth_response_payload")
     @patch(f"{AUTH_ROUTER_MODULE_NAME}.resolve_auth_context")
     @patch(f"{AUTH_ROUTER_MODULE_NAME}.require_active_session_tenant_context")
     def test_switch_context_uses_active_tenant_membership_not_user_compat_tenant(
         self,
         mock_require_active_session_tenant_context,
         mock_resolve_auth_context,
-        _mock_create_access_token,
+        mock_build_auth_response_payload,
     ):
         user = User(
             id="user_1",
@@ -173,7 +221,55 @@ class TestAuthContextContract(unittest.TestCase):
             tenant_id="tenant_target",
             workspace_id="ws_target",
         )
-        self.db.scalars.return_value.all.return_value = [tenant_context.tenant_membership]
+        mock_build_auth_response_payload.return_value = {
+            "access_token": "token-switched",
+            "token_type": "bearer",
+            "user": {
+                "id": "user_1",
+                "tenant_id": "tenant_target",
+                "workspace_id": "ws_target",
+                "username": "tester",
+                "email": "tester@example.com",
+                "can_create_workspace": False,
+                "is_platform_admin": False,
+                "membership_role": "member",
+                "tenant_membership_role": "member",
+                "tenant_membership_status": "active",
+                "workspace_membership_role": "member",
+                "workspace_membership_status": "active",
+            },
+            "workspace": {
+                "id": "ws_target",
+                "tenant_id": "tenant_target",
+                "name": "Workspace",
+                "slug": "workspace",
+                "status": "active",
+                "is_default": False,
+            },
+            "tenant_membership": {
+                "id": "tm_1",
+                "tenant_id": "tenant_target",
+                "role": "member",
+                "status": "active",
+            },
+            "workspace_membership": {
+                "id": "wm_1",
+                "workspace_id": "ws_target",
+                "user_id": "user_1",
+                "role": "member",
+                "status": "active",
+                "permissions_override": {},
+                "permissions": {"can_view_workspace": True},
+            },
+            "memberships": [
+                {
+                    "id": "tm_1",
+                    "tenant_id": "tenant_target",
+                    "role": "member",
+                    "status": "active",
+                }
+            ],
+        }
 
         with self._client() as client:
             response = client.post(

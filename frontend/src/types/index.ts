@@ -29,6 +29,28 @@ export interface WorkspaceContext {
   membership_role: string | null;
 }
 
+export type WorkspaceMembershipRole = 'founder' | 'admin' | 'member' | 'guest';
+export type WorkspaceMembershipStatus = 'active' | 'disabled' | 'removed';
+export type WorkspaceInviteRole = 'admin' | 'member' | 'guest';
+export type WorkspaceInviteStatus = 'pending' | 'accepted' | 'expired' | 'revoked';
+export type ResourceVisibility = 'private' | 'workspace_read' | 'workspace_edit';
+
+export type WorkspaceCapabilityKey =
+  | 'can_view_workspace'
+  | 'can_edit_workspace_metadata'
+  | 'can_manage_members'
+  | 'can_manage_invites'
+  | 'can_transfer_founder'
+  | 'can_archive_workspace'
+  | 'can_manage_api_keys'
+  | 'can_manage_providers'
+  | 'can_manage_knowledge_bases'
+  | 'can_manage_skills'
+  | 'can_run_skills'
+  | 'can_view_runs';
+
+export type WorkspacePermissions = Partial<Record<WorkspaceCapabilityKey, boolean>>;
+
 export interface Workspace {
   id: string;
   tenant_id: string;
@@ -36,6 +58,15 @@ export interface Workspace {
   slug: string;
   status: string;
   is_default: boolean;
+  archived_at?: string | null;
+  archived_by?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface WorkspaceCreateInput {
+  name: string;
+  slug?: string;
 }
 
 export interface TenantMembership {
@@ -48,6 +79,104 @@ export interface TenantMembership {
 export interface User extends WorkspaceContext {
   id: string;
   username: string;
+  email: string | null;
+  can_create_workspace: boolean;
+  is_platform_admin: boolean;
+  must_change_password?: boolean;
+  membership_role: string | null;
+  tenant_membership_role: string | null;
+  tenant_membership_status: string | null;
+  workspace_membership_role: WorkspaceMembershipRole | null;
+  workspace_membership_status: WorkspaceMembershipStatus | null;
+}
+
+export interface WorkspaceMembership {
+  id: string;
+  workspace_id: string;
+  user_id: string;
+  role: WorkspaceMembershipRole;
+  status: WorkspaceMembershipStatus;
+  permissions_override: WorkspacePermissions;
+  permissions: WorkspacePermissions;
+}
+
+export interface WorkspaceListItem extends Workspace {
+  membership_id: string;
+  membership_role: WorkspaceMembershipRole;
+  membership_status: WorkspaceMembershipStatus;
+  permissions: WorkspacePermissions;
+  permissions_override: WorkspacePermissions;
+  is_current: boolean;
+}
+
+export interface WorkspaceMember {
+  id: string;
+  workspace_id: string;
+  user_id: string;
+  email: string | null;
+  role: WorkspaceMembershipRole;
+  status: WorkspaceMembershipStatus;
+  permissions_override: WorkspacePermissions;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkspaceInvite {
+  id: string;
+  workspace_id: string;
+  email: string;
+  role: WorkspaceInviteRole;
+  status: WorkspaceInviteStatus;
+  permissions_override: WorkspacePermissions;
+  invited_by: string;
+  accepted_user_id: string | null;
+  expires_at: string;
+  accepted_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AuthTokenResponse {
+  access_token: string;
+  token_type: string;
+  user: User;
+  workspace: Workspace;
+  tenant_membership: TenantMembership;
+  workspace_membership: WorkspaceMembership;
+  memberships: TenantMembership[];
+}
+
+export interface WorkspaceInviteAcceptResponse {
+  invite: WorkspaceInvite;
+  access_token: string;
+  token_type: string;
+  user?: User;
+  workspace: Workspace;
+  tenant_membership: TenantMembership;
+  workspace_membership: WorkspaceMembership;
+}
+
+export interface InvitePreviewResponse {
+  valid: boolean;
+  workspace_name: string;
+  role: string;
+  inviter_username: string;
+  email_masked: string;
+}
+
+export interface InviteClaimRequest {
+  password: string;
+  username?: string;
+}
+
+export interface ChangePasswordRequest {
+  current_password: string;
+  new_password: string;
+}
+
+export interface ResetPasswordResponse {
+  temporary_password: string;
 }
 
 export interface ApiKey {
@@ -95,6 +224,7 @@ export interface Document {
   tenant_id: string;
   workspace_id: string | null;
   owner_user_id: string;
+  uploaded_via_kb_id?: string | null;
   display_name: string;
   source_filename: string;
   active_version_id: string | null;
@@ -179,6 +309,7 @@ export interface KnowledgeBase {
   name: string;
   description: string | null;
   status: string;
+  visibility: ResourceVisibility;
   retrieval_profile: KnowledgeBaseRetrievalProfile;
   created_by: string;
   created_at: string;
@@ -190,6 +321,7 @@ export interface KnowledgeBaseCreateInput {
   name: string;
   description?: string | null;
   status?: string;
+  visibility?: ResourceVisibility;
   retrieval_profile?: KnowledgeBaseRetrievalProfile;
   documents?: KnowledgeBaseDocumentMembershipInput[];
 }
@@ -198,6 +330,7 @@ export interface KnowledgeBaseUpdateInput {
   name?: string;
   description?: string | null;
   status?: string;
+  visibility?: ResourceVisibility;
   retrieval_profile?: KnowledgeBaseRetrievalProfile;
 }
 
@@ -504,6 +637,7 @@ export interface ChatSkill {
   retrieval_config: Record<string, unknown>;
   generation_config: Record<string, unknown>;
   is_active?: boolean;
+  visibility: ResourceVisibility;
   created_at: string;
   updated_at: string;
   document_ids: string[];
@@ -522,6 +656,7 @@ export interface ChatSkillMutationInput {
   retrieval_config?: Record<string, unknown>;
   generation_config?: Record<string, unknown>;
   document_scope_type?: string;
+  visibility?: ResourceVisibility;
   is_active?: boolean;
 }
 
@@ -648,4 +783,258 @@ export interface MetricsOverview {
   documents: number;
   parse_jobs: number;
   chat_runs: number;
+}
+
+// ---------------------------------------------------------------------------
+// Platform admin types (mirrors app/schemas/platform.py)
+// ---------------------------------------------------------------------------
+
+export interface PlatformTenantMembership {
+  id: string;
+  tenant_id: string;
+  tenant_name: string;
+  role: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlatformWorkspaceMembership {
+  id: string;
+  workspace_id: string;
+  workspace_name: string;
+  workspace_slug: string;
+  tenant_id: string;
+  tenant_name: string;
+  role: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlatformUserListItem {
+  id: string;
+  tenant_id: string;
+  username: string;
+  email: string | null;
+  is_active: boolean;
+  can_create_workspace: boolean;
+  is_platform_admin: boolean;
+  tenant_membership_count: number;
+  workspace_membership_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlatformUserDetail extends PlatformUserListItem {
+  tenant_memberships: PlatformTenantMembership[];
+  workspace_memberships: PlatformWorkspaceMembership[];
+}
+
+export interface PlatformUserUpdateInput {
+  is_active?: boolean;
+  can_create_workspace?: boolean;
+  is_platform_admin?: boolean;
+}
+
+export interface PlatformWorkspaceMemberOverview {
+  id: string;
+  user_id: string;
+  username: string;
+  email: string | null;
+  role: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlatformWorkspaceListItem {
+  id: string;
+  tenant_id: string;
+  tenant_name: string;
+  name: string;
+  slug: string;
+  status: string;
+  is_default: boolean;
+  archived_at: string | null;
+  archived_by: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  founder_user_id: string | null;
+  founder_username: string | null;
+  founder_email: string | null;
+  member_count: number;
+  active_member_count: number;
+}
+
+export interface PlatformWorkspaceDetail extends PlatformWorkspaceListItem {
+  members: PlatformWorkspaceMemberOverview[];
+}
+
+export interface PlatformTenantListItem {
+  id: string;
+  name: string;
+  status: string;
+  created_at: string;
+  user_count: number;
+  workspace_count: number;
+}
+
+export interface PlatformTenantUserOverview {
+  id: string;
+  user_id: string;
+  username: string;
+  email: string | null;
+  role: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlatformTenantWorkspaceOverview {
+  id: string;
+  name: string;
+  slug: string;
+  status: string;
+  is_default: boolean;
+  archived_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlatformTenantDetail extends PlatformTenantListItem {
+  users: PlatformTenantUserOverview[];
+  workspaces: PlatformTenantWorkspaceOverview[];
+}
+
+export interface PlatformUserFlags {
+  is_active: boolean;
+  can_create_workspace: boolean;
+  is_platform_admin: boolean;
+  must_change_password: boolean;
+}
+
+export interface PlatformRequestedContext {
+  tenant_id: string | null;
+  workspace_id: string | null;
+}
+
+export interface PlatformResolvedContext {
+  tenant_id: string | null;
+  workspace_id: string | null;
+  source: string;
+}
+
+export interface PlatformEffectiveTenantMembership {
+  id: string | null;
+  tenant_id: string | null;
+  role: string | null;
+  status: string | null;
+}
+
+export interface PlatformEffectiveWorkspaceMembership {
+  id: string | null;
+  workspace_id: string | null;
+  user_id: string | null;
+  role: string | null;
+  status: string | null;
+  permissions_override: WorkspacePermissions;
+  effective_permissions: WorkspacePermissions;
+}
+
+export interface PlatformEffectivePermissions {
+  can_access_platform_control_plane: boolean;
+  can_create_workspace: boolean;
+}
+
+export interface PlatformExplainability {
+  allowed_reasons: string[];
+  denied_reasons: string[];
+}
+
+export interface PlatformResourceRule {
+  scope: string;
+  explanation: string;
+  counts: Record<string, number>;
+}
+
+export interface PlatformUserAccessPortraitUser {
+  id: string;
+  username: string;
+  email: string | null;
+  flags: PlatformUserFlags;
+  compat_tenant_id: string | null;
+}
+
+export interface PlatformUserRawMemberships {
+  tenant_memberships: PlatformTenantMembership[];
+  workspace_memberships: PlatformWorkspaceMembership[];
+}
+
+export interface PlatformUserEffectivePortrait {
+  requested_context: PlatformRequestedContext;
+  resolved_context: PlatformResolvedContext | null;
+  tenant_membership: PlatformEffectiveTenantMembership;
+  workspace_membership: PlatformEffectiveWorkspaceMembership;
+  platform_permissions: PlatformEffectivePermissions;
+  explainability: PlatformExplainability;
+}
+
+export interface PlatformUserAccessPortrait {
+  user: PlatformUserAccessPortraitUser;
+  raw_memberships: PlatformUserRawMemberships;
+  effective_portrait: PlatformUserEffectivePortrait;
+  resource_rules: Record<string, PlatformResourceRule>;
+}
+
+export interface PlatformWorkspaceFounder {
+  membership_id: string | null;
+  user_id: string | null;
+  username: string | null;
+  email: string | null;
+}
+
+export interface PlatformWorkspaceMembershipSummary {
+  total: number;
+  active: number;
+  by_role: Record<string, number>;
+  active_founder_invariant_ok: boolean;
+}
+
+export interface PlatformWorkspacePortraitMember {
+  id: string;
+  user_id: string;
+  username: string;
+  email: string | null;
+  role: string;
+  status: string;
+  permissions_override: WorkspacePermissions;
+  effective_permissions: WorkspacePermissions;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlatformWorkspaceInviteSummary {
+  pending: number;
+  accepted: number;
+  expired: number;
+  revoked: number;
+}
+
+export interface PlatformWorkspaceArchiveState {
+  status: string;
+  archived_at: string | null;
+  archived_by: string | null;
+}
+
+export interface PlatformWorkspaceAccessPortrait {
+  workspace: Pick<PlatformWorkspaceListItem, 'id' | 'tenant_id' | 'name' | 'slug' | 'status' | 'is_default'>;
+  tenant: Pick<PlatformTenantListItem, 'id' | 'name' | 'status'>;
+  founder: PlatformWorkspaceFounder;
+  membership_summary: PlatformWorkspaceMembershipSummary;
+  members: PlatformWorkspacePortraitMember[];
+  invite_summary: PlatformWorkspaceInviteSummary;
+  resource_scope: Record<string, PlatformResourceRule>;
+  archive_state: PlatformWorkspaceArchiveState;
 }

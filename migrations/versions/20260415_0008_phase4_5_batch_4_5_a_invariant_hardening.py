@@ -19,7 +19,7 @@ branch_labels = None
 depends_on = None
 
 
-USERS_EMAIL_INDEX = op.f("ix_users_email")
+USERS_EMAIL_INDEX = "ix_users_email"
 ACTIVE_FOUNDER_INDEX = "uq_workspace_memberships_active_founder_workspace_id"
 PENDING_INVITE_INDEX = "uq_workspace_invites_workspace_pending_normalized_email"
 
@@ -149,8 +149,23 @@ def _add_active_founder_key_column(inspector: sa.Inspector) -> None:
     if _has_column(inspector, "workspace_memberships", "active_founder_workspace_id"):
         return
 
-    with op.batch_alter_table("workspace_memberships", recreate="always") as batch_op:
-        batch_op.add_column(
+    bind = op.get_bind()
+    if bind.dialect.name == "sqlite":
+        with op.batch_alter_table("workspace_memberships", recreate="always") as batch_op:
+            batch_op.add_column(
+                sa.Column(
+                    "active_founder_workspace_id",
+                    sa.String(length=64),
+                    sa.Computed(
+                        "CASE WHEN role = 'founder' AND status = 'active' THEN workspace_id ELSE NULL END",
+                        persisted=True,
+                    ),
+                    nullable=True,
+                )
+            )
+    else:
+        op.add_column(
+            "workspace_memberships",
             sa.Column(
                 "active_founder_workspace_id",
                 sa.String(length=64),
@@ -167,8 +182,23 @@ def _add_pending_normalized_email_column(inspector: sa.Inspector) -> None:
     if _has_column(inspector, "workspace_invites", "pending_normalized_email"):
         return
 
-    with op.batch_alter_table("workspace_invites", recreate="always") as batch_op:
-        batch_op.add_column(
+    bind = op.get_bind()
+    if bind.dialect.name == "sqlite":
+        with op.batch_alter_table("workspace_invites", recreate="always") as batch_op:
+            batch_op.add_column(
+                sa.Column(
+                    "pending_normalized_email",
+                    sa.String(length=255),
+                    sa.Computed(
+                        "CASE WHEN status = 'pending' THEN lower(trim(email)) ELSE NULL END",
+                        persisted=True,
+                    ),
+                    nullable=True,
+                )
+            )
+    else:
+        op.add_column(
+            "workspace_invites",
             sa.Column(
                 "pending_normalized_email",
                 sa.String(length=255),
@@ -248,8 +278,11 @@ def downgrade() -> None:
         op.drop_index(PENDING_INVITE_INDEX, table_name="workspace_invites")
         inspector = sa.inspect(bind)
     if _has_table(inspector, "workspace_invites") and _has_column(inspector, "workspace_invites", "pending_normalized_email"):
-        with op.batch_alter_table("workspace_invites", recreate="always") as batch_op:
-            batch_op.drop_column("pending_normalized_email")
+        if bind.dialect.name == "sqlite":
+            with op.batch_alter_table("workspace_invites", recreate="always") as batch_op:
+                batch_op.drop_column("pending_normalized_email")
+        else:
+            op.drop_column("workspace_invites", "pending_normalized_email")
         inspector = sa.inspect(bind)
 
     if _has_table(inspector, "workspace_memberships") and _get_index(inspector, "workspace_memberships", ACTIVE_FOUNDER_INDEX) is not None:
@@ -258,8 +291,11 @@ def downgrade() -> None:
     if _has_table(inspector, "workspace_memberships") and _has_column(
         inspector, "workspace_memberships", "active_founder_workspace_id"
     ):
-        with op.batch_alter_table("workspace_memberships", recreate="always") as batch_op:
-            batch_op.drop_column("active_founder_workspace_id")
+        if bind.dialect.name == "sqlite":
+            with op.batch_alter_table("workspace_memberships", recreate="always") as batch_op:
+                batch_op.drop_column("active_founder_workspace_id")
+        else:
+            op.drop_column("workspace_memberships", "active_founder_workspace_id")
         inspector = sa.inspect(bind)
 
     if _has_table(inspector, "users"):

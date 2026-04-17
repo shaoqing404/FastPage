@@ -600,3 +600,231 @@ def revoke_workspace_invite(
     db.commit()
     db.refresh(invite)
     return serialize_invite(invite, now=now)
+
+
+# ---------------------------------------------------------------------------
+# Public API: preview (no auth required)
+# ---------------------------------------------------------------------------
+
+
+def _mask_email(email: str) -> str:
+    """Return a masked version of an email, e.g. ``j***@example.com``."""
+    parts = email.split("@", 1)
+    if len(parts) != 2:
+        return "***"
+    local = parts[0]
+    domain = parts[1]
+    if len(local) <= 1:
+        return f"*@{domain}"
+    return f"{local[0]}***@{domain}"
+
+
+def preview_workspace_invite(
+    db: Session,
+    invite_id: str,
+) -> dict[str, object]:
+    """Return a desensitized preview of an invite for unauthenticated users.
+
+    Only returns minimal information needed to render the claim form.
+    """
+    invite = db.get(WorkspaceInvite, invite_id)
+    if invite is None:
+        return {"valid": False, "workspace_name": "", "role": "", "inviter_username": "", "email_masked": ""}
+
+    now = datetime.utcnow()
+    eff_status = _effective_status(invite, now)
+    if eff_status != "pending":
+        return {"valid": False, "workspace_name": "", "role": "", "inviter_username": "", "email_masked": ""}
+
+    workspace = db.get(Workspace, invite.workspace_id)
+    workspace_name = workspace.name if workspace else "Unknown workspace"
+
+    inviter = db.get(User, invite.invited_by)
+    inviter_username = inviter.username if inviter else "Unknown"
+
+    return {
+        "valid": True,
+        "workspace_name": workspace_name,
+        "role": invite.role,
+        "inviter_username": inviter_username,
+        "email_masked": _mask_email(invite.email),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Public API: claim (no auth required — invite UUID is the credential)
+# ---------------------------------------------------------------------------
+
+
+def claim_workspace_invite(
+    db: Session,
+    invite_id: str,
+    password: str,
+    username: str | None = None,
+) -> dict[str, object]:
+    """Claim an invite by setting a password and optionally a username.
+
+    Two branches:
+      A) invite email matches an existing User → set password if user has no
+         real password yet, otherwise reject (ask them to log in).
+      B) no matching User → auto-create User + TenantMembership, then accept.
+
+    Returns a full auth handoff response (token + workspace + memberships).
+    """
+    from app.core.auth import create_access_token, hash_password, resolve_auth_context  # noqa: PLC0415
+
+    now = datetime.utcnow()
+
+    # --- Load invite ---
+    invite = db.get(WorkspaceInvite, invite_id)
+    if invite is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found")
+
+    # --- Validate invite state ---
+    eff_status = _effective_status(invite, now)
+    if eff_status == "expired":
+        invite.status = "expired"
+        invite.updated_at = now
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Invite has expired")
+    if eff_status == "revoked":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Invite has been revoked")
+    if eff_status == "accepted":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Invite has already been accepted")
+    if eff_status != "pending":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Invite is not pending (status={eff_status})")
+
+    # --- Load workspace ---
+    workspace = db.get(Workspace, invite.workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+    if is_workspace_archived(workspace) or workspace.status != ACTIVE_STATUS:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workspace is archived")
+
+    invite_email = invite.email  # already normalized at create-time
+    target_tenant_id = workspace.tenant_id
+
+    # --- Resolve or create user ---
+    existing_user = db.scalar(select(User).where(User.email == invite_email))
+
+    if existing_user is not None:
+        # Branch A: existing user
+        # Check if they already have a proper password
+        if existing_user.password_hash and not existing_user.password_hash.startswith("PLACEHOLDER"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This email already has an account with a password. Please log in and accept the invite from your dashboard.",
+            )
+        # Set password for user with placeholder/empty hash
+        existing_user.password_hash = hash_password(password)
+        if username:
+            # Check uniqueness
+            conflict = db.scalar(select(User).where(User.username == username, User.id != existing_user.id))
+            if conflict:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already exists")
+            existing_user.username = username
+        existing_user.updated_at = now
+        user = existing_user
+    else:
+        # Branch B: auto-create user
+        final_username = username or invite_email.split("@")[0]
+        # Ensure username uniqueness
+        if db.scalar(select(User).where(User.username == final_username)):
+            # Append a short suffix
+            final_username = f"{final_username}_{uuid.uuid4().hex[:6]}"
+
+        user = User(
+            id=f"user_{uuid.uuid4().hex}",
+            tenant_id=target_tenant_id,
+            username=final_username,
+            email=invite_email,
+            password_hash=hash_password(password),
+            is_active=True,
+            can_create_workspace=False,
+            is_platform_admin=False,
+            must_change_password=False,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(user)
+        db.flush()
+
+    # --- Ensure tenant membership ---
+    _ensure_active_tenant_membership(db, user, target_tenant_id, now=now)
+
+    # --- Create or reactivate workspace membership ---
+    membership = _upsert_workspace_membership(db, user, workspace, invite, now=now)
+
+    # --- Mark invite as accepted ---
+    invite.status = "accepted"
+    invite.accepted_user_id = user.id
+    invite.accepted_at = now
+    invite.updated_at = now
+
+    # --- Align compat field ---
+    if user.tenant_id != target_tenant_id:
+        user.tenant_id = target_tenant_id
+        user.updated_at = now
+
+    db.flush()
+    db.commit()
+    db.refresh(invite)
+    db.refresh(membership)
+    db.refresh(user)
+
+    # --- Build auth handoff ---
+    auth_context = resolve_auth_context(
+        db,
+        user,
+        tenant_id=target_tenant_id,
+        workspace_id=workspace.id,
+    )
+    new_token = create_access_token(auth_context)
+
+    wm = auth_context.workspace_membership
+    tm = auth_context.tenant_membership
+    ws = auth_context.workspace
+
+    return {
+        "invite": serialize_invite(invite, now=now),
+        "access_token": new_token,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "tenant_id": tm.tenant_id,
+            "workspace_id": ws.id,
+            "username": user.username,
+            "email": user.email,
+            "can_create_workspace": user.can_create_workspace,
+            "is_platform_admin": user.is_platform_admin,
+            "membership_role": wm.role,
+            "tenant_membership_role": tm.role,
+            "tenant_membership_status": tm.status,
+            "workspace_membership_role": wm.role,
+            "workspace_membership_status": wm.status,
+        },
+        "workspace": {
+            "id": ws.id,
+            "tenant_id": ws.tenant_id,
+            "name": ws.name,
+            "slug": ws.slug,
+            "status": ws.status,
+            "is_default": ws.is_default,
+        },
+        "tenant_membership": {
+            "id": tm.id,
+            "tenant_id": tm.tenant_id,
+            "role": tm.role,
+            "status": tm.status,
+        },
+        "workspace_membership": {
+            "id": wm.id,
+            "workspace_id": wm.workspace_id,
+            "user_id": wm.user_id,
+            "role": wm.role,
+            "status": wm.status,
+            "permissions_override": parse_workspace_permissions_override(wm.permissions_override_json),
+            "permissions": auth_context.workspace_permissions,
+        },
+    }
+

@@ -114,6 +114,67 @@ def list_accessible_workspaces(
     ]
 
 
+def create_workspace(
+    db: Session,
+    principal: Principal,
+    payload,
+) -> Workspace:
+    _require_workspace_create_actor(principal)
+
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Workspace name cannot be empty")
+
+    raw_slug = payload.slug if payload.slug is not None else name
+    slug = normalize_workspace_slug(raw_slug)
+
+    existing = db.scalar(
+        select(Workspace.id).where(
+            Workspace.tenant_id == principal.tenant_id,
+            Workspace.slug == slug,
+        )
+    )
+    if existing is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workspace slug already exists in this tenant")
+
+    now = datetime.utcnow()
+    workspace = Workspace(
+        id=str(uuid.uuid4()),
+        tenant_id=principal.tenant_id,
+        name=name,
+        slug=slug,
+        status=ACTIVE_STATUS,
+        is_default=False,
+        created_by=principal.user_id,
+        created_at=now,
+        updated_at=now,
+    )
+    founder_membership = WorkspaceMembership(
+        id=str(uuid.uuid4()),
+        workspace_id=workspace.id,
+        user_id=principal.user_id,
+        role="founder",
+        status=ACTIVE_STATUS,
+        permissions_override_json="{}",
+        created_by=principal.user_id,
+        created_at=now,
+        updated_at=now,
+    )
+
+    db.add(workspace)
+    db.add(founder_membership)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if _is_workspace_slug_conflict_error(exc):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workspace slug already exists in this tenant") from exc
+        raise
+
+    db.refresh(workspace)
+    return workspace
+
+
 def update_workspace_metadata(
     db: Session,
     principal: Principal,
@@ -403,6 +464,15 @@ def _require_member_management_actor(principal: Principal) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Missing workspace capability: can_manage_members")
 
 
+def _require_workspace_create_actor(principal: Principal) -> None:
+    if principal.kind != "session":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Workspace creation requires a user session")
+    if principal.user.is_platform_admin:
+        return
+    if not principal.user.can_create_workspace:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Workspace creation is not allowed for this user")
+
+
 def _require_founder_transfer_actor(principal: Principal) -> None:
     if _is_platform_admin_actor(principal):
         return
@@ -487,6 +557,15 @@ def _is_active_founder_conflict_error(exc: IntegrityError) -> bool:
     return (
         "uq_workspace_memberships_active_founder_workspace_id" in message
         or "active_founder_workspace_id" in message
+    )
+
+
+def _is_workspace_slug_conflict_error(exc: IntegrityError) -> bool:
+    message = str(exc.orig).lower() if exc.orig is not None else str(exc).lower()
+    return (
+        "uq_workspaces_tenant_slug" in message
+        or ("workspaces.slug" in message and "tenant_id" in message)
+        or ("tenant_id, slug" in message)
     )
 
 

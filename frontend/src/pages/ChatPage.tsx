@@ -14,7 +14,7 @@ export const ChatPage: React.FC = () => {
   const navigate = useNavigate();
   const { data: skills = [] } = useQuery({ queryKey: ['skills'], queryFn: skillsApi.list });
   const { data: providers = [] } = useQuery({ queryKey: ['providers'], queryFn: providersApi.list });
-  const { data: documents = [] } = useQuery({ queryKey: ['documents'], queryFn: documentsApi.list });
+  const { data: documents = [] } = useQuery({ queryKey: ['documents'], queryFn: () => documentsApi.list() });
   const { data: runs = [] } = useQuery({ queryKey: ['all-runs'], queryFn: () => chatApi.listRuns() });
 
   const skillStats = useMemo(() => {

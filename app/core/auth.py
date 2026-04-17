@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.principal import Principal
 from app.models import ApiKey, RevokedToken, TenantMembership, User, Workspace, WorkspaceMembership
-from app.services.workspace_access_service import resolve_workspace_capabilities
+from app.services.workspace_access_service import parse_workspace_permissions_override, resolve_workspace_capabilities
 from app.services.workspace_membership_service import (
     resolve_auth_tenant_membership,
     resolve_active_tenant_membership,
@@ -166,6 +166,64 @@ def create_access_token(context: AuthContext, expires_minutes: int = 720) -> str
         "exp": int((now + timedelta(minutes=expires_minutes)).timestamp()),
     }
     return jwt.encode(payload, settings.secret_key, algorithm="HS256")
+
+
+def build_auth_response_payload(db: Session, context: AuthContext) -> dict[str, object]:
+    memberships = db.scalars(
+        select(TenantMembership).where(TenantMembership.user_id == context.user.id).order_by(TenantMembership.created_at.asc())
+    ).all()
+    token = create_access_token(context)
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "id": context.user.id,
+            "tenant_id": context.tenant_id,
+            "workspace_id": context.workspace.id,
+            "username": context.user.username,
+            "email": context.user.email,
+            "can_create_workspace": context.user.can_create_workspace,
+            "is_platform_admin": context.user.is_platform_admin,
+            "must_change_password": context.user.must_change_password,
+            "membership_role": context.workspace_membership.role,
+            "tenant_membership_role": context.tenant_membership.role,
+            "tenant_membership_status": context.tenant_membership.status,
+            "workspace_membership_role": context.workspace_membership.role,
+            "workspace_membership_status": context.workspace_membership.status,
+        },
+        "workspace": {
+            "id": context.workspace.id,
+            "tenant_id": context.workspace.tenant_id,
+            "name": context.workspace.name,
+            "slug": context.workspace.slug,
+            "status": context.workspace.status,
+            "is_default": context.workspace.is_default,
+        },
+        "tenant_membership": {
+            "id": context.tenant_membership.id,
+            "tenant_id": context.tenant_membership.tenant_id,
+            "role": context.tenant_membership.role,
+            "status": context.tenant_membership.status,
+        },
+        "workspace_membership": {
+            "id": context.workspace_membership.id,
+            "workspace_id": context.workspace_membership.workspace_id,
+            "user_id": context.workspace_membership.user_id,
+            "role": context.workspace_membership.role,
+            "status": context.workspace_membership.status,
+            "permissions_override": parse_workspace_permissions_override(context.workspace_membership.permissions_override_json),
+            "permissions": context.workspace_permissions,
+        },
+        "memberships": [
+            {
+                "id": membership.id,
+                "tenant_id": membership.tenant_id,
+                "role": membership.role,
+                "status": membership.status,
+            }
+            for membership in memberships
+        ],
+    }
 
 
 def decode_access_token(token: str) -> dict:

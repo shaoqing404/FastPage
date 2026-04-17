@@ -2,26 +2,34 @@ from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_principal
+from app.core.auth import build_auth_response_payload, resolve_auth_context
 from app.core.db import get_db
 from app.core.principal import Principal
+from app.schemas.auth import TokenResponse
 from app.schemas.workspace_invites import (
     WorkspaceInviteCreateRequest,
     WorkspaceInviteOut,
 )
 from app.schemas.workspaces import (
     WorkspaceArchiveOut,
+    WorkspaceCreateRequest,
     WorkspaceFounderTransferRequest,
     WorkspaceFounderTransferResponse,
+    WorkspaceListItemOut,
     WorkspaceMemberCreateRequest,
     WorkspaceMemberOut,
     WorkspaceMemberUpdateRequest,
+    WorkspaceUpdateRequest,
 )
 from app.services.workspace_admin_service import (
     archive_workspace,
+    create_workspace,
     create_workspace_member,
+    list_accessible_workspaces,
     list_workspace_members,
     remove_workspace_member,
     transfer_workspace_founder,
+    update_workspace_metadata,
     update_workspace_member,
 )
 from app.services.workspace_invite_service import (
@@ -31,7 +39,33 @@ from app.services.workspace_invite_service import (
 )
 
 
-router = APIRouter(prefix="/api/v1/workspaces/{workspace_id}", tags=["workspaces"])
+router = APIRouter(tags=["workspaces"])
+root_router = APIRouter(prefix="/api/v1/workspaces", tags=["workspaces"])
+workspace_router = APIRouter(prefix="/api/v1/workspaces/{workspace_id}", tags=["workspaces"])
+
+
+@root_router.get("", response_model=list[WorkspaceListItemOut])
+def list_accessible_workspaces_endpoint(
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+):
+    return list_accessible_workspaces(db, principal)
+
+
+@root_router.post("", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+def create_workspace_endpoint(
+    payload: WorkspaceCreateRequest,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+):
+    workspace = create_workspace(db, principal, payload)
+    context = resolve_auth_context(
+        db,
+        principal.user,
+        tenant_id=principal.tenant_id,
+        workspace_id=workspace.id,
+    )
+    return TokenResponse.model_validate(build_auth_response_payload(db, context))
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +73,17 @@ router = APIRouter(prefix="/api/v1/workspaces/{workspace_id}", tags=["workspaces
 # ---------------------------------------------------------------------------
 
 
-@router.get("/members", response_model=list[WorkspaceMemberOut])
+@workspace_router.patch("", response_model=WorkspaceArchiveOut)
+def update_workspace_metadata_endpoint(
+    workspace_id: str,
+    payload: WorkspaceUpdateRequest,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+):
+    return update_workspace_metadata(db, principal, workspace_id, payload)
+
+
+@workspace_router.get("/members", response_model=list[WorkspaceMemberOut])
 def list_workspace_members_endpoint(
     workspace_id: str,
     db: Session = Depends(get_db),
@@ -48,7 +92,7 @@ def list_workspace_members_endpoint(
     return list_workspace_members(db, principal, workspace_id)
 
 
-@router.post("/members", response_model=WorkspaceMemberOut, status_code=status.HTTP_201_CREATED)
+@workspace_router.post("/members", response_model=WorkspaceMemberOut, status_code=status.HTTP_201_CREATED)
 def create_workspace_member_endpoint(
     workspace_id: str,
     payload: WorkspaceMemberCreateRequest,
@@ -58,7 +102,7 @@ def create_workspace_member_endpoint(
     return create_workspace_member(db, principal, workspace_id, payload)
 
 
-@router.patch("/members/{membership_id}", response_model=WorkspaceMemberOut)
+@workspace_router.patch("/members/{membership_id}", response_model=WorkspaceMemberOut)
 def update_workspace_member_endpoint(
     workspace_id: str,
     membership_id: str,
@@ -69,7 +113,7 @@ def update_workspace_member_endpoint(
     return update_workspace_member(db, principal, workspace_id, membership_id, payload)
 
 
-@router.delete("/members/{membership_id}", status_code=status.HTTP_204_NO_CONTENT)
+@workspace_router.delete("/members/{membership_id}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_workspace_member_endpoint(
     workspace_id: str,
     membership_id: str,
@@ -85,7 +129,7 @@ def remove_workspace_member_endpoint(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/founder-transfer", response_model=WorkspaceFounderTransferResponse)
+@workspace_router.post("/founder-transfer", response_model=WorkspaceFounderTransferResponse)
 def transfer_workspace_founder_endpoint(
     workspace_id: str,
     payload: WorkspaceFounderTransferRequest,
@@ -100,7 +144,7 @@ def transfer_workspace_founder_endpoint(
     )
 
 
-@router.post("/archive", response_model=WorkspaceArchiveOut)
+@workspace_router.post("/archive", response_model=WorkspaceArchiveOut)
 def archive_workspace_endpoint(
     workspace_id: str,
     db: Session = Depends(get_db),
@@ -114,7 +158,7 @@ def archive_workspace_endpoint(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/invites", response_model=list[WorkspaceInviteOut])
+@workspace_router.get("/invites", response_model=list[WorkspaceInviteOut])
 def list_workspace_invites_endpoint(
     workspace_id: str,
     db: Session = Depends(get_db),
@@ -127,7 +171,7 @@ def list_workspace_invites_endpoint(
     return list_workspace_invites(db, principal, workspace_id)
 
 
-@router.post("/invites", response_model=WorkspaceInviteOut, status_code=status.HTTP_201_CREATED)
+@workspace_router.post("/invites", response_model=WorkspaceInviteOut, status_code=status.HTTP_201_CREATED)
 def create_workspace_invite_endpoint(
     workspace_id: str,
     payload: WorkspaceInviteCreateRequest,
@@ -144,7 +188,7 @@ def create_workspace_invite_endpoint(
     return create_workspace_invite(db, principal, workspace_id, payload)
 
 
-@router.post("/invites/{invite_id}/revoke", response_model=WorkspaceInviteOut)
+@workspace_router.post("/invites/{invite_id}/revoke", response_model=WorkspaceInviteOut)
 def revoke_workspace_invite_endpoint(
     workspace_id: str,
     invite_id: str,
@@ -159,3 +203,6 @@ def revoke_workspace_invite_endpoint(
     """
     return revoke_workspace_invite(db, principal, workspace_id, invite_id)
 
+
+router.include_router(root_router)
+router.include_router(workspace_router)

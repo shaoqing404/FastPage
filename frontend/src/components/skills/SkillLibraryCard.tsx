@@ -27,6 +27,9 @@ export const SkillLibraryCard: React.FC<{
           <Settings2 size={16} className="text-slate-400" />
           <p className="font-medium text-slate-900">{skill.name}</p>
           <StatusBadge tone={active ? 'success' : 'warning'}>{active ? 'Active' : 'Inactive'}</StatusBadge>
+          <StatusBadge tone={skill.visibility === 'workspace_edit' ? 'accent' : skill.visibility === 'workspace_read' ? 'default' : 'warning'}>
+            {skill.visibility}
+          </StatusBadge>
         </div>
         <p className="line-clamp-2 text-sm text-slate-500">{skill.description || skill.system_prompt}</p>
         <div className="flex flex-wrap gap-2">

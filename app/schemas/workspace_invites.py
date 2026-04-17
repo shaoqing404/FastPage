@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
@@ -115,3 +115,25 @@ class WorkspaceInviteAcceptOut(BaseModel):
     workspace: InviteAcceptWorkspaceOut
     tenant_membership: InviteAcceptTenantMembershipOut
     workspace_membership: InviteAcceptWorkspaceMembershipOut
+
+
+# ---------------------------------------------------------------------------
+# Invite claim (public, no auth required)
+# ---------------------------------------------------------------------------
+
+
+class InviteClaimRequest(BaseModel):
+    """Payload for POST /api/v1/workspace-invites/{invite_id}/claim."""
+
+    password: str = Field(..., min_length=8)
+    username: str | None = None
+
+
+class InvitePreviewResponse(BaseModel):
+    """Response for GET /api/v1/workspace-invites/{invite_id}/preview."""
+
+    valid: bool
+    workspace_name: str
+    role: str
+    inviter_username: str
+    email_masked: str

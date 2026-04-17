@@ -17,6 +17,12 @@ This phase assumes product-surface closure work has already been assigned to `Ph
 
 It also assumes that any `Phase 4.5` blocker first repaired at unit-test or contract-test level has already been rerun on the real project runtime surface before being treated as a hardening baseline.
 
+Current inherited baseline (`2026-04-17`):
+
+- `Phase 4.5` enters `4.7` as `Conditional GO`
+- `Phase 4.6` enters `4.7` as `GO`
+- `4.7` therefore inherits a runtime-revalidated control-plane/product baseline rather than a code-audited-only baseline
+
 ## 2. Scope
 
 ### 2.1 Environment reset and rebuild
@@ -45,6 +51,8 @@ Need repeatable tests for:
 - platform admin visibility
 - capability enforcement
 - founder/archive invariants
+- platform user/workspace portrait contracts
+- platform portrait route access control
 
 ### 2.3 End-to-end product chain
 
@@ -84,6 +92,21 @@ Need a Codex skill dedicated to this repo that captures:
 
 This skill is a required `Phase 4.7` deliverable, not optional polish.
 
+### 2.5 Verification artifact discipline
+
+Need a standard process for:
+
+- naming temporary validation users
+- naming temporary validation API keys
+- recording when a validation password reset was performed
+- deciding which verification artifacts must be deleted, archived, or retained
+
+Reason:
+
+- `Phase 4.5` / `Phase 4.6` closeout can now be completed on the real runtime surface
+- that validation necessarily creates temporary operator/test artifacts
+- `Phase 4.7` should make this reproducible and low-risk instead of ad hoc
+
 ## 3. Test Data Rule
 
 Tests in this stage should use PDFs inside the project directory first.
@@ -122,6 +145,8 @@ This validates:
 - project testing skill
 - `Phase 4.x` GO / NO-GO report
 - explicit record of which inherited `Phase 4.5` fixes were runtime-revalidated before hardening
+- operationalized runtime verification checklist for portrait/control-plane validation
+- verification-artifact cleanup/retention rule
 
 ## 6. Non-Goals
 
@@ -146,3 +171,4 @@ This validates:
 - the end-to-end product chain passes on repo-local PDF inputs
 - the testing process is standardized enough to be reused as a project-specific skill
 - the testing process validates the product closures already landed in `Phase 4.5` rather than re-scoping them
+- runtime verification artifacts can be created and cleaned up without ambiguity or drift

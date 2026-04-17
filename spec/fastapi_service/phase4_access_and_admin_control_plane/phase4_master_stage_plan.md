@@ -141,14 +141,23 @@ Main goals:
 - finish KB / Documents management-surface restructuring that was blocking real product usability
 - reduce compat-field dependence
 
-Current stage note (`2026-04-16`):
+Current stage note (`2026-04-17`):
 
-- formal closeout remains `NO-GO`
-- two previously identified main blockers have completed code-level repair and audit:
-  - platform user provisioning on real-MySQL path
-  - query / skill-chat timeout path on Redis worker mode
-- these two items are now considered ready for runtime revalidation, not yet ready for stage signoff
-- migration metadata hygiene for `alembic heads` remains part of the 4.5 closeout input discipline
+- formal closeout is now `Conditional GO`
+- the real project `.env` runtime chain has been rerun on `MySQL + MinIO + Redis`
+- the previously known main blockers have completed both code-level repair and real runtime revalidation:
+  - platform user provisioning on the real-MySQL path
+  - query / skill-chat execution on Redis worker mode
+- migration metadata hygiene has been brought back into a clean state
+  - `uv run alembic heads` => single head `20260416_0010`
+  - `uv run alembic current` => `20260416_0010`
+- the end-to-end closeout chain has been confirmed on the real runtime surface:
+  - platform admin -> new user -> workspace -> KB -> provider -> repo-local PDF -> query / skill chat
+- remaining condition:
+  - direct product-surface runtime proof for cross-tenant negative-path checks is still limited because tenant creation is not yet a first-class operator workflow
+- handoff to `Phase 4.7`:
+  - standardize the runtime verification process
+  - clean up temporary verification artifacts
 
 ### 4.3 `Phase 4.6`
 
@@ -167,6 +176,23 @@ Important note:
 
 - this is still not a real team/org tree phase
 
+Current stage note (`2026-04-17`):
+
+- formal closeout is `GO`
+- landed surfaces include:
+  - `GET /api/v1/platform/users/{user_id}/access-portrait`
+  - `GET /api/v1/platform/workspaces/{workspace_id}/access-portrait`
+  - normalized portrait schemas and explainability payloads
+  - platform user/workspace detail pages consuming portrait payloads directly
+- verification completed through:
+  - backend contract suite
+  - migration hygiene checks
+  - frontend build gate
+  - real local runtime verification on `127.0.0.1:22223`
+- `Phase 4.7` inherits `Phase 4.6` as a closed product/API surface
+  - `4.7` may harden and standardize its validation
+  - `4.7` should not reopen `4.6` scope or add new portrait features
+
 ### 4.4 `Phase 4.7`
 
 Theme:
@@ -179,6 +205,16 @@ Main goals:
 - standardize API/integration verification
 - standardize closeout test chain
 - produce project-specific testing skill
+
+Current stage note (`2026-04-17`):
+
+- this phase now inherits:
+  - `Phase 4.5` at `Conditional GO`
+  - `Phase 4.6` at `GO`
+- its main carry-forward work is operational hardening rather than product completion:
+  - make the runtime verification flow reproducible
+  - define cleanup rules for verification artifacts such as temporary users, reset passwords, and API keys
+  - capture the full closeout chain in runbook/skill form
 
 ## 5. Phase 4.x Closeout Test Chain
 
@@ -251,6 +287,77 @@ This reset must leave the environment in:
 - release gate checklist
 - verification and hardening of capabilities landed in `Phase 4.5` / `Phase 4.6`, not new product surface expansion
 - inherits only runtime-revalidated `Phase 4.5` results, not code-audited-only interim fixes
+- operationalization of the current manual runtime verification flow
+- cleanup/retention rules for temporary verification artifacts
+
+## 7.5 Overlap Audit Before Phase 5
+
+The stages before `Phase 5` intentionally touch some of the same entities, but the overlap should be interpreted by responsibility, not by page or table name alone.
+
+### `Phase 4.5` vs `Phase 4.6`
+
+Overlap level: `moderate`
+
+Shared entities:
+
+- users
+- tenants
+- workspaces
+- memberships
+- KB / Documents ownership presentation
+
+Split:
+
+- `Phase 4.5` closes product and management surfaces
+- `Phase 4.6` exposes relationship truth and explainability
+
+Rule:
+
+- mutations / entry flows / management closure belong to `4.5`
+- portrait / directory / why-allowed-or-denied read truth belongs to `4.6`
+
+### `Phase 4.5` vs `Phase 4.7`
+
+Overlap level: `low`
+
+Shared concern:
+
+- `4.7` must validate closures that `4.5` already landed
+
+Rule:
+
+- `4.7` validates `4.5`
+- `4.7` does not redesign `4.5`
+
+### `Phase 4.6` vs `Phase 4.7`
+
+Overlap level: `low`
+
+Shared concern:
+
+- `4.7` must standardize verification for the access-portrait and directory contracts landed in `4.6`
+
+Rule:
+
+- `4.6` defines and lands explainability contracts
+- `4.7` proves they are reproducibly verifiable
+
+### `Phase 4.x` vs `Phase 5`
+
+Overlap level: `low in scope, moderate in terminology`
+
+The terms `control`, `visibility`, and `auditability` appear before `Phase 5`, but they remain pre-governance preparation until:
+
+- audit center
+- governance workflows
+- policy / quota / billing surfaces
+- long-term operational analytics
+
+Therefore:
+
+- the Claude interim batch audited on `2026-04-16` should be recorded as `Phase 4.5` closure work
+- it should not be relabeled as `Phase 4.6`
+- it does not justify opening `Phase 5`
 
 ## 8. GO / NO-GO Rule
 

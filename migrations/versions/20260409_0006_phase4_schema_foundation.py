@@ -209,16 +209,13 @@ def downgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
 
-    op.drop_index("ix_workspace_invites_workspace_email_status", table_name="workspace_invites")
-    op.drop_index(op.f("ix_workspace_invites_accepted_user_id"), table_name="workspace_invites")
-    op.drop_index(op.f("ix_workspace_invites_invited_by"), table_name="workspace_invites")
-    op.drop_index(op.f("ix_workspace_invites_workspace_id"), table_name="workspace_invites")
-    op.drop_table("workspace_invites")
+    if _has_table(inspector, "workspace_invites"):
+        op.drop_table("workspace_invites")
+        inspector = sa.inspect(bind)
 
-    op.drop_index(op.f("ix_workspace_memberships_created_by"), table_name="workspace_memberships")
-    op.drop_index(op.f("ix_workspace_memberships_user_id"), table_name="workspace_memberships")
-    op.drop_index(op.f("ix_workspace_memberships_workspace_id"), table_name="workspace_memberships")
-    op.drop_table("workspace_memberships")
+    if _has_table(inspector, "workspace_memberships"):
+        op.drop_table("workspace_memberships")
+        inspector = sa.inspect(bind)
 
     op.drop_column("chat_skills", "visibility")
     op.drop_column("knowledge_bases", "visibility")

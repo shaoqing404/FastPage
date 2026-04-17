@@ -1,20 +1,30 @@
 import { apiClient } from '../../lib/api/client';
-import type { ApiKey, ApiKeyCreateResponse, User } from '../../types';
-
-export interface LoginResponse {
-  access_token: string;
-  token_type: string;
-  user: User;
-}
+import type { ApiKey, ApiKeyCreateResponse, AuthTokenResponse, ChangePasswordRequest } from '../../types';
 
 export interface LoginCredentials {
   username: string;
   password: string;
 }
 
+export interface ContextSwitchRequest {
+  workspace_id: string;
+}
+
 export const authApi = {
-  login: async (credentials: LoginCredentials): Promise<LoginResponse> => {
-    const { data } = await apiClient.post<LoginResponse>('/auth/login', credentials);
+  login: async (credentials: LoginCredentials): Promise<AuthTokenResponse> => {
+    const { data } = await apiClient.post<AuthTokenResponse>('/auth/login', credentials);
+    return data;
+  },
+  changePassword: async (payload: ChangePasswordRequest): Promise<AuthTokenResponse> => {
+    const { data } = await apiClient.post<AuthTokenResponse>('/auth/change-password', payload);
+    return data;
+  },
+  getContext: async (): Promise<AuthTokenResponse> => {
+    const { data } = await apiClient.get<AuthTokenResponse>('/auth/context');
+    return data;
+  },
+  switchContext: async (payload: ContextSwitchRequest): Promise<AuthTokenResponse> => {
+    const { data } = await apiClient.post<AuthTokenResponse>('/auth/context/switch', payload);
     return data;
   },
   logout: async () => {

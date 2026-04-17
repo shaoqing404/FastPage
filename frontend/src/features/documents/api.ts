@@ -2,18 +2,21 @@ import { apiClient } from '../../lib/api/client';
 import type { Document, DocumentRestoreResponse, DocumentUploadResponse, DocumentVersion, ParseJob } from '../../types';
 
 export const documentsApi = {
-  list: async (): Promise<Document[]> => {
-    const { data } = await apiClient.get<Document[]>('/documents');
+  list: async (options?: { ownerMe?: boolean }): Promise<Document[]> => {
+    const { data } = await apiClient.get<Document[]>('/documents', {
+      params: options?.ownerMe ? { owner_me: true } : undefined,
+    });
     return data;
   },
   get: async (id: string): Promise<Document> => {
     const { data } = await apiClient.get<Document>(`/documents/${id}`);
     return data;
   },
-  upload: async (file: File, document_id?: string): Promise<DocumentUploadResponse> => {
+  upload: async (file: File, document_id?: string, uploaded_via_kb_id?: string): Promise<DocumentUploadResponse> => {
     const formData = new FormData();
     formData.append('file', file);
     if (document_id) formData.append('document_id', document_id);
+    if (uploaded_via_kb_id) formData.append('uploaded_via_kb_id', uploaded_via_kb_id);
     const { data } = await apiClient.post<DocumentUploadResponse>('/documents/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });

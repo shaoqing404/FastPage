@@ -47,7 +47,7 @@ export const KnowledgeBasesPage: React.FC = () => {
     error: documentsError,
   } = useQuery({
     queryKey: ['documents'],
-    queryFn: documentsApi.list,
+    queryFn: () => documentsApi.list(),
   });
 
   const effectiveSelectedKnowledgeBaseId = useMemo(() => {

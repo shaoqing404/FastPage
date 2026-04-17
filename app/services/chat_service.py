@@ -25,7 +25,7 @@ from app.services.pageindex_service import (
     format_history_context,
     load_structure_file,
 )
-from app.services.provider_service import resolve_provider_config
+from app.services.provider_service import normalize_execution_model, resolve_provider_config
 from app.services.session_service import _is_default_workspace, append_message, get_session_or_404, list_session_messages
 from app.services.skill_trace_service import SkillTraceRecorder
 from app.services.storage_service import local_artifact_path
@@ -272,6 +272,21 @@ def _json_loads(text: str | None, fallback):
         return fallback
 
 
+def _load_run_snapshot(
+    db: Session,
+    *,
+    tenant_id: str,
+    run_id: str,
+    refresh_transaction: bool = False,
+) -> ChatRun:
+    if refresh_transaction:
+        db.rollback()
+    run = db.get(ChatRun, run_id)
+    if run is None or run.tenant_id != tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    return run
+
+
 def _run_metrics_with_error(run: ChatRun, error: str) -> str:
     metrics = _json_loads(run.metrics_json, {})
     metrics["error"] = error
@@ -340,9 +355,9 @@ def serialize_run(run: ChatRun) -> dict:
         "citations": _json_loads(run.citations_json, []),
         "metrics": _json_loads(run.metrics_json, {}),
         "last_error": run.last_error,
-        "started_at": run.started_at,
-        "finished_at": run.finished_at,
-        "created_at": run.created_at,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
     }
 
 
@@ -400,7 +415,10 @@ def _create_pending_run(
         explicit_provider_id=provider_id,
         workspace_id=principal.workspace_id,
     )
-    resolved_model = model or (skill.model if skill else None) or provider_config.get("default_model")
+    resolved_model = normalize_execution_model(
+        provider_config.get("provider_type"),
+        model or (skill.model if skill else None) or provider_config.get("default_model"),
+    )
     if not resolved_model:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No model resolved for this request")
 
@@ -507,14 +525,16 @@ async def wait_for_chat_run_terminal(
 ) -> ChatRun:
     started = time.monotonic()
     while True:
-        run = db.get(ChatRun, run_id)
-        if run is None or run.tenant_id != tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        run = _load_run_snapshot(
+            db,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            refresh_transaction=True,
+        )
         if run.status in TERMINAL_RUN_STATUSES:
             return run
         if timeout_seconds is not None and time.monotonic() - started > timeout_seconds:
             raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Timed out waiting for chat run")
-        db.expire_all()
         await asyncio.sleep(settings.chat_run_poll_interval_ms / 1000)
 
 
@@ -802,7 +822,7 @@ async def run_chat_run(run_id: str) -> None:
             skill=skill,
             explicit_provider_id=run.provider_id,
         )
-        resolved_model = run.model
+        resolved_model = normalize_execution_model(provider_config.get("provider_type"), run.model)
 
         history_messages: list[dict] = []
         history_info = {
@@ -1185,8 +1205,13 @@ async def stream_skill_run_events(
             try:
                 event = await subscription.next_event(timeout=max(settings.chat_run_poll_interval_ms / 1000, 0.2))
             except asyncio.TimeoutError:
-                current = db.get(ChatRun, run.id)
-                if current is not None and current.status in TERMINAL_RUN_STATUSES:
+                current = _load_run_snapshot(
+                    db,
+                    tenant_id=run.tenant_id,
+                    run_id=run.id,
+                    refresh_transaction=True,
+                )
+                if current.status in TERMINAL_RUN_STATUSES:
                     if current.status == "completed":
                         yield {"event": "status", "data": {"status": "completed"}}
                         yield {"event": "run_completed", "data": serialize_run(current)}
@@ -1208,13 +1233,18 @@ async def stream_skill_run_events(
                     return
                 continue
             except StopAsyncIteration:
-                current = db.get(ChatRun, run.id)
-                if current is not None and current.status == "completed":
+                current = _load_run_snapshot(
+                    db,
+                    tenant_id=run.tenant_id,
+                    run_id=run.id,
+                    refresh_transaction=True,
+                )
+                if current.status == "completed":
                     yield {"event": "status", "data": {"status": "completed"}}
                     yield {"event": "run_completed", "data": serialize_run(current)}
-                elif current is not None and current.status == "cancelled":
+                elif current.status == "cancelled":
                     yield {"event": "status", "data": {"status": "cancelled"}}
-                elif current is not None and current.status == "failed":
+                elif current.status == "failed":
                     yield {"event": "status", "data": {"status": "failed"}}
                     yield {
                         "event": "error",

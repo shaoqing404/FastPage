@@ -53,3 +53,32 @@ class WorkspaceArchiveOut(BaseModel):
     archived_by: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class WorkspaceUpdateRequest(BaseModel):
+    name: str | None = None
+    slug: str | None = None
+
+
+class WorkspaceCreateRequest(BaseModel):
+    name: str
+    slug: str | None = None
+
+
+class WorkspaceListItemOut(BaseModel):
+    id: str
+    tenant_id: str
+    name: str
+    slug: str
+    status: str
+    is_default: bool
+    archived_at: datetime | None
+    archived_by: str | None
+    created_at: datetime
+    updated_at: datetime
+    membership_id: str
+    membership_role: WorkspaceMembershipRole
+    membership_status: WorkspaceMembershipStatus
+    permissions: dict[str, bool]
+    permissions_override: dict[str, bool]
+    is_current: bool

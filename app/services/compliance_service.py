@@ -15,7 +15,7 @@ from app.models.knowledge_base import KnowledgeBase
 from app.services.document_service import list_accessible_documents_by_ids
 from app.services.knowledge_base_service import ensure_workspace_access, get_knowledge_base_or_404
 from app.services.pageindex_service import build_answer_context, choose_relevant_nodes, load_structure_file
-from app.services.provider_service import resolve_provider_config
+from app.services.provider_service import normalize_execution_model, resolve_provider_config
 from app.services.storage_service import local_artifact_path
 from pageindex.utils import count_tokens, extract_json, llm_completion
 
@@ -979,7 +979,10 @@ def create_compliance_run(db: Session, principal: Principal, workspace_id: str, 
         explicit_provider_id=payload.provider_id,
         workspace_id=workspace_id,
     )
-    resolved_model = payload.model or provider_config.get("default_model")
+    resolved_model = normalize_execution_model(
+        provider_config.get("provider_type"),
+        payload.model or provider_config.get("default_model"),
+    )
     if not resolved_model:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No model resolved for this compliance run")
     run = _create_pending_run(
@@ -1046,7 +1049,10 @@ def create_compliance_run_from_check(
         explicit_provider_id=payload.provider_id,
         workspace_id=workspace_id,
     )
-    resolved_model = payload.model or provider_config.get("default_model")
+    resolved_model = normalize_execution_model(
+        provider_config.get("provider_type"),
+        payload.model or provider_config.get("default_model"),
+    )
     if not resolved_model:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No model resolved for this compliance run")
 

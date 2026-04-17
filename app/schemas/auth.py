@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class LoginRequest(BaseModel):
@@ -20,6 +20,7 @@ class UserOut(BaseModel):
     email: str | None = None
     can_create_workspace: bool = False
     is_platform_admin: bool = False
+    must_change_password: bool = False
     membership_role: str
     tenant_membership_role: str
     tenant_membership_status: str
@@ -89,3 +90,12 @@ class ApiKeyOut(BaseModel):
     last_used_at: datetime | None
     revoked_at: datetime | None
     created_at: datetime
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=8)
+
+
+class ResetPasswordResponse(BaseModel):
+    temporary_password: str

@@ -21,6 +21,18 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+def normalize_execution_model(provider_type: str | None, model: str | None) -> str | None:
+    if model is None:
+        return None
+    normalized = model.strip()
+    if not normalized:
+        return normalized
+    normalized = normalized.removeprefix("litellm/")
+    if provider_type == "openai_compatible" and not normalized.startswith("openai/"):
+        return f"openai/{normalized}"
+    return normalized
+
+
 def _normalize_supported_models(default_model: str, supported_models: list[str] | None) -> list[str]:
     normalized: list[str] = []
     for model in [default_model, *(supported_models or [])]:

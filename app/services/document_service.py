@@ -69,6 +69,7 @@ def create_or_append_document(
     principal: Principal,
     file: UploadFile,
     document_id: str | None = None,
+    uploaded_via_kb_id: str | None = None,
 ) -> tuple[Document, DocumentVersion]:
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise AppError(
@@ -90,6 +91,7 @@ def create_or_append_document(
             tenant_id=principal.tenant_id,
             workspace_id=principal.workspace_id,
             owner_user_id=principal.user_id,
+            uploaded_via_kb_id=uploaded_via_kb_id,
             display_name=file.filename,
             source_filename=file.filename,
             status="uploaded",

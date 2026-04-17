@@ -428,40 +428,73 @@
 - closeout 测试优先使用项目目录内 PDF，而不是外部不稳定样本
 - 如果 invite claim / password lifecycle 在本阶段落地，应单独追加产品验证，但不得替代 provisioning-based closeout 主链
 
-### 5.9 当前 closeout 审计状态（2026-04-16）
+### 5.9 当前 closeout 审计状态（2026-04-17）
 
-截至 `2026-04-16`，`Phase 4.5` 的正式 closeout 状态仍为 `NO-GO`。
+截至 `2026-04-17`，`Phase 4.5` 的正式 closeout 状态更新为 `Conditional GO`。
 
-原因不是范围未定义，而是主链在真实运行面上尚未完成重新打通。
+原因不是主链仍未打通，而是主链已经在真实运行面上完成重跑，但仍保留少量应记录到 `Phase 4.7` 的 hardening 条件。
 
 当前状态拆分如下：
 
-- 已完成一次基于真实 `.env` 运行面的 closeout 审计
-  - 审计口径为远程 `MySQL + MinIO + Redis`
-  - 结论为 `NO-GO`
-- 已识别的主阻塞中，以下两项已完成代码级修复并通过回归测试复审
+- 已完成基于真实 `.env` 运行面的 closeout 复验
+  - 复验口径为远程 `MySQL + MinIO + Redis`
+  - 当前结论为 `Conditional GO`
+  - 已通过的真实链路包括：
+    - bootstrap admin 登录
+    - `POST /api/v1/platform/users`
+    - 新用户登录
+    - workspace 创建 / context 自动切换 / workspace list / context switch
+    - invite create + accept
+    - founder transfer / archive 抽样
+    - KB -> provider -> repo-local PDF -> parse/index/build -> skill -> query / skill chat
+    - platform users / workspaces / tenants 管理面抽样
+    - 非 platform admin 与 API key 访问 `/api/v1/platform/*` 的 `403`
+    - 跨 workspace 资源访问负向验证
+- 已完成一次针对 Claude 中间实现批的代码审计
+  - 审计对象为基于中间 implementation plan 的实现批，而不是正式 `Phase 4.5` 结项
+  - 该批次的范围归属应并入 `Phase 4.5 frontend closeout`
+  - 该批次覆盖：
+    - invite preview / claim / accept handoff
+    - change-password / platform reset-password 最小闭环
+    - KB selector / KB detail 页面拆分
+    - Documents 页面重聚焦为个人文档入口
+    - `uploaded_via_kb_id` 文档来源链路
+  - 该批次在修复 `Documents` owner scope 后，代码级结论可记为 `GO for this batch`
+  - 该结论只表示“可并入 4.5 收口证据”，不等于 `Phase 4.5` 总体 closeout 已转为 `GO`
+- 已识别的主阻塞中，以下两项已完成代码级修复，并已在真实运行面完成复验
   - `platform user provisioning`
     - `POST /api/v1/platform/users` 对应的 `create_platform_user()` 已通过先写入 `User` 再附加 membership 的方式修复 FK 顺序问题
     - 配套 contract test 已确认 user / tenant membership / default workspace membership 成功落库
+    - 真实 MySQL 运行面已确认平台管理员可完成测试用户创建与后续登录
   - `query / skill chat`
     - chat event publish 边界已改为 datetime-safe
     - terminal wait 轮询已改为显式刷新事务视图，避免 MySQL 下的假 `504`
     - 相关 regression tests 已通过
+    - 真实 Redis worker 运行面已确认 `POST /api/v1/chat/ask` 与 `POST /api/v1/chat/skills/{skill_id}/run` 成功
 - 对上述两项修复的当前判定是：
   - 代码审计通过
-  - 可以进入真实运行面复验
-  - 但还不能据此直接把 `Phase 4.5` 结论改写为 `GO`
-- 仍需补齐或重新确认的事项包括：
-  - 在真实 `MySQL + MinIO + Redis` 运行面重新验证 `POST /api/v1/platform/users`
-  - 在真实 Redis worker 下重新验证 `POST /api/v1/chat/ask`
-  - 在真实 Redis worker 下重新验证 `POST /api/v1/chat/skills/{skill_id}/run`
-  - 修复 `alembic heads` 的 migration metadata 检查异常，避免 4.5 closeout 与 4.7 hardening 输入不一致
+  - 真实运行面复验通过
+  - 可以计入 `Phase 4.5` 正式 closeout 证据
+- 对 Claude 中间实现批的当前判定是：
+  - 应按 `Phase 4.5` 中间批次归档，而不是重标为 `Phase 4.6`
+  - invite onboarding / password lifecycle 的最小产品闭环已具备可审计实现
+  - KB / Documents 页面 IA 收口已具备可审计实现
+  - 但其正式有效性仍需在 `Phase 4.7` 的真实运行面链路中补手动 / 端到端验证
+- migration metadata hygiene 已不再是当前阻塞项
+  - `uv run alembic heads` 已收敛到单 head `20260416_0010`
+  - `uv run alembic current` 已与该 head 一致
+- 仍需记录并滚入 `Phase 4.7` 的事项包括：
+  - 将当前偏手工的 runtime closeout 流程标准化为 runbook / skill / checklist
+  - 为验证过程中产生的临时用户、临时 API key、密码重置等工件定义 cleanup 规则
+  - 在后续 hardening 中补齐更标准化的 cross-tenant 负向验证证据
 
 约束说明：
 
 - SQLite 或纯单测结果只能作为辅助证据
-- `Phase 4.5` 的正式 closeout 主结论仍必须以真实 `MySQL + MinIO + Redis` 链路为准
-- 只要 `platform admin -> 新用户 -> workspace -> KB -> provider -> PDF -> query / skill chat` 任一段未重新打通，本阶段不得写 `GO`
+- `Phase 4.5` 的正式 closeout 主结论必须以真实 `MySQL + MinIO + Redis` 链路为准
+- 目前之所以仍记录为 `Conditional GO` 而不是无条件 `GO`，是因为：
+  - 产品面上尚未把 cross-tenant 负向验证标准化为一个稳定、低人工成本的 operator 流程
+  - 运行面 closeout 过程仍需 `Phase 4.7` 做 operationalization
 
 ## 6. 本阶段明确不做的内容
 
@@ -566,6 +599,11 @@
 - Documents page refocus
 - visibility UI
 - platform admin pages
+- 当前补充状态：
+  - 已完成一次针对 Claude 基于中间 implementation plan 产出批次的代码审计
+  - 该批次不是正式 `Phase 4.5` closeout，而是 4.5 范围内的中间实现批
+  - 该批次在修复 `Documents` owner scope 后，代码级判定可记为 `GO for this batch`
+  - 后续应将其作为 `Phase 4.5 frontend closeout` 的已审计输入，进入 `Phase 4.7` 运行面验证
 
 ### Batch 4.5-F: environment reset and closeout chain
 
@@ -657,3 +695,89 @@
 - `Phase 5`: 审计、治理、长期平台化能力
 
 这条边界在本文件中固定，不再反复讨论。
+
+## 12. Phase 5 前阶段重叠梳理
+
+在进入 `Phase 5` 前，`Phase 4.5 / 4.6 / 4.7` 会共享同一批实体、API 和页面，但职责不同。
+
+### 12.1 `Phase 4.5` 与 `Phase 4.6`
+
+重叠程度：`中等`
+
+共享对象：
+
+- platform users / tenants / workspaces
+- membership 信息
+- invite / workspace / KB / Documents 的可见性边界
+
+职责切分：
+
+- `Phase 4.5` 负责：
+  - operational control
+  - onboarding / password / 页面收口
+  - 最小管理动作与产品闭环
+- `Phase 4.6` 负责：
+  - relationship truth
+  - explainability
+  - access portrait / directory read model
+
+判断规则：
+
+- 主要回答“怎么进入、怎么管理、怎么收口”的工作归 `4.5`
+- 主要回答“为什么允许、为什么拒绝、当前关系真相是什么”的工作归 `4.6`
+
+### 12.2 `Phase 4.5` 与 `Phase 4.7`
+
+重叠程度：`低`
+
+共享点只有一个：
+
+- `4.7` 要验证 `4.5` 已落地的能力
+
+但边界很硬：
+
+- `4.5` 做实现与收口
+- `4.7` 做 reset / rebuild / integration / end-to-end hardening
+
+因此：
+
+- `4.7` 可以继承 `4.5` 的 invite/password/KB/Documents 收口结果
+- `4.7` 不应再次设计这些产品面
+
+### 12.3 `Phase 4.6` 与 `Phase 4.7`
+
+重叠程度：`低`
+
+共享点：
+
+- `4.7` 会验证 `4.6` 的 directory / access portrait 输出是否稳定可复验
+
+边界：
+
+- `4.6` 负责定义和落地 relationship-truth contract
+- `4.7` 负责把这些 contract 放入 release gate
+
+### 12.4 `Phase 4.x` 与 `Phase 5`
+
+重叠程度：`概念上接近，职责上应保持低重叠`
+
+容易混淆的词：
+
+- auditability
+- operator visibility
+- control plane
+- platform management
+
+这些在 `Phase 4.x` 中都仍然属于“为进入治理做准备”，不等于已经进入 `Phase 5`。
+
+`Phase 5` 才正式吸收：
+
+- audit center / audit platform
+- governance workflow
+- quota / billing / policy
+- 长期运营分析与平台化治理
+
+结论：
+
+- 这次 Claude 中间实现批与 `Phase 5` 的直接重叠很低
+- 它应被视为 `Phase 4.5 frontend/product closure` 的一部分，而不是提前进入治理阶段
