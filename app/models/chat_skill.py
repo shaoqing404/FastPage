@@ -30,6 +30,7 @@ class ChatSkill(Base):
     retrieval_config_json: Mapped[str] = mapped_column(Text, nullable=False)
     generation_config_json: Mapped[str] = mapped_column(Text, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    visibility: Mapped[str] = mapped_column(String(32), default="private", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 

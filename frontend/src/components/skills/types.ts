@@ -15,6 +15,7 @@ export interface KnowledgeBaseSummary {
   name: string;
   description: string | null;
   status: string;
+  visibility: 'private' | 'workspace_read' | 'workspace_edit';
   retrieval_profile: Record<string, unknown>;
   created_by: string;
   created_at: string;

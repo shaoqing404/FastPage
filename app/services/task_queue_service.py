@@ -1,6 +1,8 @@
 import asyncio
 import json
 
+from fastapi.encoders import jsonable_encoder
+
 from app.core.config import get_settings
 
 
@@ -156,7 +158,7 @@ class RedisChatEventSubscription(BaseChatEventSubscription):
 
 
 async def publish_chat_event(run_id: str, event: dict) -> None:
-    payload = json.dumps(event, ensure_ascii=False)
+    payload = json.dumps(jsonable_encoder(event), ensure_ascii=False)
     channel = chat_event_channel(run_id)
     if settings.task_queue_backend == "redis":
         import redis.asyncio as redis_async

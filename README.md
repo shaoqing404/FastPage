@@ -1,90 +1,108 @@
 # PageIndex Service
 
-`pageindex-service` is a service and console layer built on top of PageIndex. It packages the current Phase 3 FastAPI API, background worker, migrations, and React workspace console into an OSS-ready baseline for document ingest, knowledge-base management, skill chat, and compliance-style review flows.
+`PageIndex Service` is a deployable service and console layer built on top of [PageIndex](https://github.com/VectifyAI/PageIndex). It packages the current Phase 3 FastAPI API, workspace console, migrations, and background execution model into a runnable baseline for document ingest, knowledge bases, skill chat, and compliance-style review flows.
 
-![PageIndex_Workspace](img/WorkSpace.png)
-![PageIndex_KnowledgeBase](img/KnowledgeBases.png)
-![PageIndex_Skill](img/Skill.png)
-![PageIndex_SkillChat](img/SkillChat.png)
+This repository is based on and derived from PageIndex, keeps the upstream [MIT license](LICENSE), and does not claim to be the upstream PageIndex project itself. The role of this repo is the service surface around PageIndex capabilities. Thanks to the PageIndex team for the upstream framework and open-source release this work builds on.
 
-
-This repository is based on and derived from [PageIndex](https://github.com/VectifyAI/PageIndex). It keeps the upstream [MIT license](/Users/shaoqing/workspace/PageIndex-main-integration/LICENSE) and does not claim to be the upstream PageIndex project itself. The role of this repo is the service surface around PageIndex capabilities.
-
-Thanks to the PageIndex team for the upstream framework, open-source release, and the document-retrieval foundation this project builds on. This repository should be read as an implementation-oriented packaging of PageIndex into a more directly deployable service baseline, not as a replacement for the upstream project.
+This project should be read as an implementation-oriented packaging of PageIndex into a more directly deployable service baseline. Future roadmap work will consider Kubernetes-friendly deployment and equivalent substitutions for Redis, MySQL, and MinIO in domestic or environment-specific stacks.
 
 ## Project Positioning
 
-PageIndex Service exposes a workspace-aware service surface for:
+PageIndex Service currently exposes a workspace-aware service surface for:
 
 - document ingest and parse jobs
-- knowledge bases and document membership
+- knowledge bases and document membership management
 - skill authoring and skill chat
-- queue-backed chat execution with a worker
 - compliance checks and compliance runs
-- tenant/workspace-aware data model foundations
+- queue-backed chat execution
+- tenant and workspace-aware data modeling
 
-Current branch baseline:
+Current scope:
 
-- `main` is intended to carry the public Phase 3 baseline
-- `codex/phase3-backend` remains the working branch for follow-up fixes
-- this OSS packaging targets Phase 3 only and intentionally does not expand Phase 4 product scope
+- this repository targets the Phase 3 baseline
+- the goal is integration and productization, not Phase 4 feature expansion
+- follow-up work should stay in the range of fixes, hardening, and packaging improvements
+
+## API Surface Overview
+
+The current API is organized into 10 route groups under `app/api/routers`:
+
+- `auth`: admin login and token issuance
+- `documents`: document upload, parse lifecycle, and retrieval metadata
+- `jobs`: parse job status and job-oriented operations
+- `knowledge_bases`: knowledge base CRUD and document membership
+- `skills`: skill definitions, traces, and skill execution metadata
+- `chat`: chat sessions, chat runs, and queue-backed runtime flow
+- `compliance_checks`: compliance check definitions
+- `compliance_runs`: compliance execution and results
+- `providers`: LLM/provider configuration surfaces
+- `metrics`: basic service metrics endpoints
+
+Core runtime entrypoints:
+
+- API: `app/main.py`
+- worker: `app/worker.py`
+- config: `app/core/config.py`
+- storage: `app/services/storage_service.py`
+- migrations: `migrations/`
+- frontend console: `frontend/`
 
 ## Current Capabilities
 
-Backend:
-
-- FastAPI API under `app/`
-- Alembic migrations under `migrations/`
-- Redis-backed worker entrypoint in `app/worker.py`
+- document ingest and parse
+- knowledge base management
+- skill chat
+- compliance checks and runs
+- queue-backed worker execution
 - local or MinIO-backed artifact storage
-- MySQL or SQLite-compatible SQLAlchemy runtime
-- auth, providers, documents, jobs, knowledge bases, chat, compliance, and metrics routes
+- SQLite or MySQL-backed database runtime
+- React workspace console for documents, KB, skills, chat, and compliance flows
 
-Frontend:
+## Architecture
 
-- React + Vite workspace console under `frontend/`
-- workspace overview
-- documents
-- knowledge bases
-- skills and skill chat
-- compliance checks and compliance runs
-- provider/control-plane views
-
-## Architecture & Design Philosophy
-
-### Component Architecture
-
-- API: FastAPI app in [app/main.py](/Users/shaoqing/workspace/PageIndex-main-integration/app/main.py)
-- Worker: Redis queue consumer in [app/worker.py](/Users/shaoqing/workspace/PageIndex-main-integration/app/worker.py)
-- DB: SQLAlchemy models plus Alembic migrations in [migrations/](/Users/shaoqing/workspace/PageIndex-main-integration/migrations)
-- Storage: local filesystem or MinIO via [app/services/storage_service.py](/Users/shaoqing/workspace/PageIndex-main-integration/app/services/storage_service.py)
-- Frontend: React/Vite console in [frontend/](/Users/shaoqing/workspace/PageIndex-main-integration/frontend)
-
-### Core Concepts & Isolation Model
-PageIndex Service implements a strict, multi-layered isolation and execution model:
-
-1. **Tenant & Workspace**: The foundational layer. A `Tenant` represents an organization, while `Workspace` provides isolated sandbox environments for resources. All knowledge, skills, and chat histories are strictly scoped to both `tenant_id` and `workspace_id`.
-2. **Knowledge**: Answers *"Where do we retrieve semantic data?"* Defines a logical index across multiple documents and controls their retrieval profiles.
-3. **Skills**: Answers *"How do we behave?"* Binds LLM configurations (prompts, model selection, parameters) with either explicit documents or a broader semantic Knowledge Base.
-4. **Skills Chat**: Answers *"What is the context and status?"* Tracks persistent chat sessions and multi-turn message histories between users and skills.
-
-### Asynchronous Execution (ChatRun State Machine)
-Because generative retrieval (RAG) involves heavy I/O operations, inference tracking is queue-backed. Every turn of interaction generates a `ChatRun` with explicit state transitions:
-- **Accepted**: Request safely ingested and queued to the Redis worker pool.
-- **Running (Claimed)**: Picked up by a background worker, actively generating.
-- **Completed**: Answer successfully generated, immediately writing back citations, selected sections, and resource metrics.
-- **Failed / Cancelled**: Graceful failure tracking or safe interruption via user cancellation signals.
+- API: FastAPI app serving `/api/v1/*` and `/healthz`
+- Worker: separate queue consumer process, only used when `TASK_QUEUE_BACKEND=redis`
+- DB: SQLAlchemy + Alembic, compatible with SQLite for local mode and MySQL for full mode
+- Storage: local filesystem or MinIO object storage
+- Frontend: Vite + React console under `frontend/`
 
 ## Deployment Modes
 
-PageIndex Service supports two deployment/runtime modes that map directly to the current code:
+PageIndex Service supports two clearly separated runtime modes:
 
-1. Full component mode
-2. Minimal startup mode
+1. complete component mode
+2. minimal startup mode
 
-Detailed Docker instructions live in [docker/README.md](/Users/shaoqing/workspace/PageIndex-main-integration/docker/README.md).
+Detailed container instructions live in [docker/README.md](docker/README.md).
 
-### 1. Full Component Mode
+### Database Runtime Selection
+
+Database env parsing now follows one simple priority order:
+
+1. `DATABASE_URL`
+2. `DATABASE_MODE`
+3. mode-specific parts
+
+Recommended usage:
+
+- local development: keep `DATABASE_MODE=sqlite`
+- remote or shared deployment: set `DATABASE_MODE=mysql` and fill `MYSQL_*`
+- expert override: set `DATABASE_URL` directly only when you intentionally want to bypass the normal mode-based config
+
+SQLite mode behavior:
+
+- default mode is `sqlite`
+- if `DATABASE_URL` is empty and `DATABASE_MODE` is unset, the service uses local SQLite automatically
+- default SQLite file is `${DATA_DIR}/app.db`
+- optional `SQLITE_PATH` can move the SQLite file, but it is not required
+
+MySQL mode behavior:
+
+- set `DATABASE_MODE=mysql`
+- fill `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`
+- no hand-written `DATABASE_URL` is required in the normal MySQL path
+
+### 1. Complete Component Mode
 
 Recommended deployment mode:
 
@@ -94,9 +112,9 @@ Recommended deployment mode:
 - API
 - Worker
 
-Use this mode for any production-style deployment.
+This is the recommended production-style deployment shape.
 
-Key settings:
+Required settings:
 
 - `APP_ENV=prod` or `APP_ENV=dev`
 - `API_HOST`
@@ -104,7 +122,12 @@ Key settings:
 - `ADMIN_USERNAME`
 - `ADMIN_PASSWORD`
 - `SECRET_KEY`
-- `DATABASE_URL=mysql+pymysql://<user>:<pass>@<mysql-host>:3306/pageindex`
+- `DATABASE_MODE=mysql`
+- `MYSQL_HOST=<mysql-host>`
+- `MYSQL_PORT=3306`
+- `MYSQL_DATABASE=pageindex`
+- `MYSQL_USER=<user>`
+- `MYSQL_PASSWORD=<pass>`
 - `TASK_QUEUE_BACKEND=redis`
 - `REDIS_URL=redis://:<redis-password>@<redis-host>:6379/1`
 - `STORAGE_BACKEND=minio`
@@ -121,6 +144,10 @@ Key settings:
 - `CHAT_RUN_QUEUE_RETRY_DELAY_MS`
 - `CORS_ALLOW_ORIGINS`
 
+Optional expert override:
+
+- `DATABASE_URL=mysql+pymysql://<user>:<pass>@<mysql-host>:3306/pageindex`
+
 Startup order:
 
 1. Start MySQL, Redis, and MinIO.
@@ -130,7 +157,7 @@ Startup order:
 5. Start the Worker.
 6. Then access the frontend or API.
 
-Compose entrypoint:
+Docker Compose entrypoint:
 
 ```bash
 cd docker
@@ -142,15 +169,15 @@ docker compose --profile full exec api alembic upgrade head
 Important notes:
 
 - `worker` only runs when `TASK_QUEUE_BACKEND=redis`
-- production should prefer full mode
-- `API_HOST=0.0.0.0` is only appropriate behind a reverse proxy / TLS boundary
-- reverse-proxy upload limits must match `MAX_UPLOAD_BYTES`
+- production should prefer complete component mode
+- if the API is exposed externally, `API_HOST=0.0.0.0` should only be used behind a reverse proxy and TLS
+- reverse-proxy upload limits must be aligned with `MAX_UPLOAD_BYTES`
 
-Demo compose defaults intentionally use `pageindex_service123` for:
+Demo credentials in the Docker examples intentionally use `pageindex_service123` for:
 
-- MySQL root/user passwords
+- MySQL root and application passwords
 - Redis password
-- MinIO access/secret
+- MinIO access key and secret key
 - `ADMIN_PASSWORD`
 
 These defaults are only for:
@@ -163,10 +190,11 @@ Production warning:
 
 - replace every demo password
 - generate a separate long random `SECRET_KEY`
+- do not use plain `pageindex_service123` as a production `SECRET_KEY`
 
 ### 2. Minimal Startup Mode
 
-Use this mode when you want to validate the backend and UI locally without MySQL, Redis, or MinIO.
+Use this mode when MySQL, Redis, and MinIO are unavailable and you still want to validate the service locally.
 
 Minimal settings:
 
@@ -174,11 +202,11 @@ Minimal settings:
 - `API_HOST=127.0.0.1`
 - `API_PORT=22223`
 - `ADMIN_USERNAME=admin`
-- `ADMIN_PASSWORD=pageindex_service123`
-- `SECRET_KEY=pageindex_service123_local_dev_only_change_me`
-- `DATABASE_URL=sqlite:///./data/app.db`
-  Or in containerized local mode:
-  `sqlite:////app/data/app.db`
+- `ADMIN_PASSWORD=change-me-local-admin-password`
+- `SECRET_KEY=change-me-local-dev-secret-key`
+- `DATABASE_MODE=sqlite`
+- `DATA_DIR=./data`
+- optional `SQLITE_PATH=./somewhere/pageindex.db`
 - `STORAGE_BACKEND=local`
 - `TASK_QUEUE_BACKEND=local`
 - `REDIS_URL=` empty
@@ -186,17 +214,16 @@ Minimal settings:
 - `LLM_BASE_URL`
 - `LLM_API_KEY`
 
-Behavior:
+Minimal mode behavior:
 
-- SQLite is used for the database
-- files are written into `DATA_DIR`
-- local filesystem storage replaces MinIO
-- parse/chat do not require Redis worker mode
+- uses SQLite
+- writes files to local `DATA_DIR`
+- parse/chat do not require a Redis worker
 - no standalone worker process is needed
-- good for development, self-test, and page/API integration
-- not suitable for high concurrency or formal production use
+- best for local development, self-test, and frontend/API integration
+- not suitable for high concurrency or formal production deployment
 
-Source startup:
+Recommended source startup with Python 3.12 and `uv`:
 
 ```bash
 cp .env.example .env
@@ -205,7 +232,7 @@ uv run alembic upgrade head
 uv run uvicorn app.main:app --host 127.0.0.1 --port 22223 --reload
 ```
 
-Dockerized minimal mode:
+Minimal Docker startup:
 
 ```bash
 cd docker
@@ -214,11 +241,11 @@ docker compose --profile local up -d --build
 docker compose --profile local exec api-local alembic upgrade head
 ```
 
-If you need a non-`uv` fallback, [requirements.txt](/Users/shaoqing/workspace/PageIndex-main-integration/requirements.txt) still supports a manual `venv + pip install -r requirements.txt` path.
+Phase 4.7 canonical operator docs live in [docs/phase4_7/README.md](docs/phase4_7/README.md), with companion scripts under `scripts/phase47/` and the Phase 4.7 verification suite in `tests/phase4/test_phase47_api_verification.py`.
 
-### Updating
+## Updating
 
-Full mode update flow:
+### Updating Complete Component Mode
 
 1. Pull new code or images.
 2. Stop API and Worker.
@@ -229,7 +256,7 @@ Full mode update flow:
 7. Check `/healthz`.
 8. Validate KB, Skills, Chat, and Compliance pages.
 
-Minimal mode update flow:
+### Updating Minimal Startup Mode
 
 1. Stop API.
 2. Back up the `data/` directory, including SQLite and local files.
@@ -251,12 +278,19 @@ Core:
 
 Runtime services:
 
-- `DATABASE_URL`
-- `REDIS_URL`
+- `DATABASE_MODE`
+- `SQLITE_PATH`
+- `DATABASE_URL` as an expert override
+- `MYSQL_HOST`
+- `MYSQL_PORT`
+- `MYSQL_DATABASE`
+- `MYSQL_USER`
+- `MYSQL_PASSWORD`
 - `TASK_QUEUE_BACKEND`
+- `REDIS_URL`
+- `STORAGE_BACKEND`
 - `QUEUE_NAME_PARSE`
 - `QUEUE_NAME_CHAT`
-- `STORAGE_BACKEND`
 
 Object storage:
 
@@ -267,16 +301,17 @@ Object storage:
 - `MINIO_PREFIX_PATH`
 - `MINIO_SECURE`
 
-LLM/provider bootstrap:
+LLM/provider:
 
 - `LLM_BASE_URL`
 - `LLM_API_KEY`
+- `PROVIDER_URL_ALLOW_PRIVATE_NETS`
 
-Chat worker behavior:
+Chat runtime:
 
+- `CHAT_RUN_POLL_INTERVAL_MS`
 - `CHAT_RUN_REQUEST_TIMEOUT_SECONDS`
 - `CHAT_RUN_LEASE_TIMEOUT_SECONDS`
-- `CHAT_RUN_POLL_INTERVAL_MS`
 - `CHAT_RUN_QUEUE_RETRY_DELAY_MS`
 
 Browser/runtime:
@@ -284,48 +319,21 @@ Browser/runtime:
 - `CORS_ALLOW_ORIGINS`
 - `CORS_ALLOW_ORIGIN_REGEX`
 - `MAX_UPLOAD_BYTES`
-- `PROVIDER_URL_ALLOW_PRIVATE_NETS`
 
-Use [docker/.env.example](/Users/shaoqing/workspace/PageIndex-main-integration/docker/.env.example) for Docker runtime examples and [.env.example](/Users/shaoqing/workspace/PageIndex-main-integration/.env.example) for minimal source startup.
+## Frontend
 
-## Upstream Relationship
+Run the frontend separately:
 
-- Based on / derived from PageIndex
-- Keeps the upstream MIT license
-- Explicitly credits and thanks the upstream PageIndex project
-- Focuses on the service and console layer around PageIndex capabilities
-- Does not rename the Python package tree aggressively; project-level naming is `PageIndex Service`
+```bash
+cd frontend
+npm install
+VITE_API_BASE_URL=http://127.0.0.1:22223/api/v1 npm run dev
+```
 
-## Phase Status
+The frontend is expected to connect to the API at `http://127.0.0.1:22223` during local development.
 
-This public baseline represents the current Phase 3 service productization state:
+## Open Source Note
 
-- tenant/workspace model foundation is present
-- knowledge bases and compliance resources are present
-- queue-backed chat worker plumbing is present
-- README / Docker / env / runtime packaging have been tightened for OSS publication
-
-Expected follow-up after this baseline:
-
-- small fixes and closeout work
-- additional runtime hardening
-- no new Phase 4-scale feature expansion in this packaging pass
-
-## Roadmap Direction
-
-Near-term roadmap themes:
-
-- improve deployability beyond single-host compose
-- add Kubernetes-friendly deployment packaging
-- keep the service surface compatible with alternative infrastructure components often used in domestic deployments
-- evaluate substitutes for Redis, MySQL, and MinIO where equivalent runtime roles are needed
-- workspace, user, and permission design work is in progress and is expected to land in `v0.2.0`
-
-Repository rename and release guidance lives in [RELEASING.md](/Users/shaoqing/workspace/PageIndex-main-integration/RELEASING.md).
-
-## Important Notes
-
-- The frontend is a separate build from the API service. The root Dockerfiles package the backend API and worker, not a production frontend server.
-- The recommended runtime baseline for source development is Python 3.12 plus `uv`.
-- Do not expose raw uvicorn directly to the public internet without a reverse proxy, TLS termination, and explicit CORS configuration.
-- Some Phase 3 semantics remain foundational rather than fully expanded product flows; the public repository focuses on runnable service packaging rather than shipping internal design docs.
+- this repository is a Phase 3 baseline
+- small fixes and packaging updates are expected to continue
+- future roadmap work may add Kubernetes deployment guidance and equivalent replacements for Redis, MySQL, and MinIO

@@ -1,26 +1,32 @@
 [project]
-name = "pageindex-service"
+name = "pageindex"
 version = "0.1.0"
-description = "Service and console layer built on top of PageIndex."
+description = "PageIndex service and frontend workspace"
 readme = "README.md"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.10,<3.13"
 dependencies = [
-  "alembic==1.14.1",
-  "cryptography==45.0.4",
-  "fastapi==0.115.12",
-  "litellm==1.83.0",
-  "minio==7.2.15",
-  "pymupdf==1.26.4",
-  "PyJWT==2.10.1",
-  "PyMySQL==1.1.1",
-  "PyPDF2==3.0.1",
-  "python-dotenv==1.1.0",
-  "python-multipart==0.0.20",
-  "pyyaml==6.0.2",
-  "redis==5.2.1",
-  "SQLAlchemy==2.0.40",
-  "uvicorn==0.34.0",
+    "alembic==1.14.1",
+    "cryptography==45.0.4",
+    "fastapi==0.115.12",
+    "litellm==1.82.0",
+    "minio==7.2.15",
+    "PyJWT==2.10.1",
+    "PyMuPDF==1.26.4",
+    "PyMySQL==1.1.1",
+    "PyPDF2==3.0.1",
+    "python-dotenv==1.1.0",
+    "python-multipart==0.0.20",
+    "PyYAML==6.0.2",
+    "redis==5.2.1",
+    "SQLAlchemy==2.0.40",
+    "uvicorn==0.34.0",
 ]
 
-[tool.uv]
-package = false
+[project.optional-dependencies]
+agents = [
+    "openai-agents",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

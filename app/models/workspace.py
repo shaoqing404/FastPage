@@ -25,5 +25,7 @@ class Workspace(Base):
         nullable=True,
         index=True,
     )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    archived_by: Mapped[str | None] = mapped_column(String(64), ForeignKey("users.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

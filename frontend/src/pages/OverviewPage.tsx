@@ -11,15 +11,17 @@ import { metricsApi, jobsApi } from '../features/metrics/api';
 import { providersApi } from '../features/providers/api';
 import { skillsApi } from '../features/skills/api';
 import { GlassPanel, KeyMetric, SectionToolbar, StatusBadge } from '../components/ui/workbench';
-import { formatDateTime, formatRelativeTime, resolveProviderName } from '../lib/utils';
+import { formatDateTime, formatRelativeTime, resolveProviderName, resolveWorkspaceDefaultProvider } from '../lib/utils';
+import { resolveStoredWorkspace } from '../lib/api/client';
 
 export const OverviewPage: React.FC = () => {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const workspace = resolveStoredWorkspace();
   const { data: overview } = useQuery({ queryKey: ['metrics-overview'], queryFn: metricsApi.overview });
-  const { data: documents = [] } = useQuery({ queryKey: ['documents'], queryFn: documentsApi.list });
+  const { data: documents = [] } = useQuery({ queryKey: ['documents'], queryFn: () => documentsApi.list() });
   const { data: knowledgeBases = [] } = useQuery({ queryKey: ['knowledge-bases'], queryFn: () => knowledgeBasesApi.list() });
   const { data: skills = [] } = useQuery({ queryKey: ['skills'], queryFn: skillsApi.list });
-  const { data: providers = [] } = useQuery({ queryKey: ['providers'], queryFn: providersApi.list });
+  const { data: providers = [] } = useQuery({ queryKey: ['provider-catalog'], queryFn: providersApi.listCatalog });
   const { data: directAskSessions = [] } = useQuery({ queryKey: ['chat-sessions'], queryFn: () => chatApi.listSessions() });
   const { data: skillSessions = [] } = useQuery({
     queryKey: ['all-skill-sessions', ...skills.map((skill) => skill.id)],
@@ -40,7 +42,8 @@ export const OverviewPage: React.FC = () => {
   );
   const failedRuns = useMemo(() => runs.filter((run) => run.status === 'failed'), [runs]);
   const activeJobs = useMemo(() => jobs.filter((job) => ['uploaded', 'queued', 'parsing'].includes(job.status)), [jobs]);
-  const defaultProvider = providers.find((provider) => provider.is_default) || null;
+  const workspaceDefaultProvider = resolveWorkspaceDefaultProvider(workspace?.default_provider_id ?? null, providers);
+  const tenantDefaultProvider = providers.find((provider) => provider.is_default) || null;
   const sessions = useMemo(
     () => [...directAskSessions, ...skillSessions].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()),
     [directAskSessions, skillSessions],
@@ -75,7 +78,17 @@ export const OverviewPage: React.FC = () => {
             <KeyMetric label="Documents" value={overview?.documents ?? 0} hint={`${readyDocuments} ready for chat`} />
             <KeyMetric label="Knowledge Bases" value={knowledgeBases.length} hint="Reusable retrieval scopes" />
             <KeyMetric label="Runs" value={overview?.chat_runs ?? 0} hint={`${failedRuns.length} failed recently`} />
-            <KeyMetric label="Providers" value={providers.length} hint={defaultProvider ? `${defaultProvider.name} is Workspace default` : 'No Workspace default yet'} />
+            <KeyMetric
+              label="Providers"
+              value={providers.length}
+              hint={
+                workspaceDefaultProvider
+                  ? `${workspaceDefaultProvider.name} is workspace default`
+                  : tenantDefaultProvider
+                    ? `${tenantDefaultProvider.name} is tenant default fallback`
+                    : 'No workspace default yet'
+              }
+            />
           </div>
         </div>
 
@@ -132,9 +145,9 @@ export const OverviewPage: React.FC = () => {
               <span>Provider path</span>
             </div>
             <div className="space-y-1">
-              <p className="text-lg font-semibold text-slate-900">{defaultProvider?.name || 'Backend resolved'}</p>
+              <p className="text-lg font-semibold text-slate-900">{workspaceDefaultProvider?.name || tenantDefaultProvider?.name || 'Backend resolved'}</p>
               <p className="text-sm text-slate-500">
-                {defaultProvider?.default_model || 'System default execution may be used'} · {apiKeys.length} workspace API keys issued.
+                {workspaceDefaultProvider?.default_model || tenantDefaultProvider?.default_model || 'System default execution may be used'} · {apiKeys.length} workspace API keys issued.
               </p>
             </div>
             <Link to="/providers" className="btn-secondary mt-auto">
@@ -208,7 +221,7 @@ export const OverviewPage: React.FC = () => {
               <div>
                 <p className="font-medium text-slate-900">Provider resolution</p>
                 <p className="text-sm text-slate-500">
-                  Skill-bound provider overrides request provider. Workspace default is {defaultProvider?.name || 'not configured'}, then backend system default takes over.
+                  Skill-bound provider overrides runtime test override. Workspace default is {workspaceDefaultProvider?.name || 'not configured'}, then tenant default {tenantDefaultProvider?.name || 'not configured'}, then backend system fallback.
                 </p>
               </div>
             </div>

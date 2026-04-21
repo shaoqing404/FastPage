@@ -190,11 +190,19 @@ def get_storage_backend() -> BaseArtifactStorage:
     return LocalArtifactStorage()
 
 
-storage_backend = get_storage_backend()
+_storage_backend: BaseArtifactStorage | None = None
+
+
+def _get_storage_backend() -> BaseArtifactStorage:
+    """Lazy singleton — defers MinIO connection to first actual use."""
+    global _storage_backend
+    if _storage_backend is None:
+        _storage_backend = get_storage_backend()
+    return _storage_backend
 
 
 def save_uploaded_pdf(file: UploadFile, *, tenant_id: str, document_id: str, version_id: str) -> str:
-    return storage_backend.save_upload(
+    return _get_storage_backend().save_upload(
         file,
         tenant_id=tenant_id,
         document_id=document_id,
@@ -204,7 +212,7 @@ def save_uploaded_pdf(file: UploadFile, *, tenant_id: str, document_id: str, ver
 
 
 def write_document_structure(*, tenant_id: str, document_id: str, version_id: str, data: Any) -> str:
-    return storage_backend.write_json(
+    return _get_storage_backend().write_json(
         data,
         tenant_id=tenant_id,
         object_path=f"documents/{document_id}/versions/{version_id}/structure.json",
@@ -212,7 +220,7 @@ def write_document_structure(*, tenant_id: str, document_id: str, version_id: st
 
 
 def write_skill_trace(*, tenant_id: str, skill_id: str, run_id: str, data: Any) -> str:
-    return storage_backend.write_json(
+    return _get_storage_backend().write_json(
         data,
         tenant_id=tenant_id,
         object_path=f"skill_traces/{skill_id}/{run_id}.json",
@@ -228,22 +236,22 @@ def get_trace_uri_for_run(tenant_id: str, skill_id: str, run_id: str) -> str:
 
 
 def read_json_artifact(uri: str) -> Any:
-    return storage_backend.read_json(uri)
+    return _get_storage_backend().read_json(uri)
 
 
 def artifact_exists(uri: str) -> bool:
-    return storage_backend.exists(uri)
+    return _get_storage_backend().exists(uri)
 
 
 @contextmanager
 def local_artifact_path(uri: str) -> Iterator[Path]:
-    with storage_backend.local_path(uri) as path:
+    with _get_storage_backend().local_path(uri) as path:
         yield path
 
 
 def delete_document_tree(tenant_id: str, document_id: str) -> None:
-    storage_backend.delete_document_tree(tenant_id, document_id)
+    _get_storage_backend().delete_document_tree(tenant_id, document_id)
 
 
 def delete_skill_trace_tree(tenant_id: str, skill_id: str) -> None:
-    storage_backend.delete_skill_trace_tree(tenant_id, skill_id)
+    _get_storage_backend().delete_skill_trace_tree(tenant_id, skill_id)

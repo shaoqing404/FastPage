@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class LoginRequest(BaseModel):
@@ -8,12 +8,24 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ContextSwitchRequest(BaseModel):
+    workspace_id: str
+
+
 class UserOut(BaseModel):
     id: str
     tenant_id: str
     workspace_id: str
     username: str
+    email: str | None = None
+    can_create_workspace: bool = False
+    is_platform_admin: bool = False
+    must_change_password: bool = False
     membership_role: str
+    tenant_membership_role: str
+    tenant_membership_status: str
+    workspace_membership_role: str
+    workspace_membership_status: str
 
 
 class WorkspaceOut(BaseModel):
@@ -23,6 +35,7 @@ class WorkspaceOut(BaseModel):
     slug: str
     status: str
     is_default: bool
+    default_provider_id: str | None
 
 
 class MembershipOut(BaseModel):
@@ -32,11 +45,23 @@ class MembershipOut(BaseModel):
     status: str
 
 
+class WorkspaceMembershipOut(BaseModel):
+    id: str
+    workspace_id: str
+    user_id: str
+    role: str
+    status: str
+    permissions_override: dict[str, bool]
+    permissions: dict[str, bool]
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserOut
     workspace: WorkspaceOut
+    tenant_membership: MembershipOut
+    workspace_membership: WorkspaceMembershipOut
     memberships: list[MembershipOut]
 
 
@@ -66,3 +91,12 @@ class ApiKeyOut(BaseModel):
     last_used_at: datetime | None
     revoked_at: datetime | None
     created_at: datetime
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=8)
+
+
+class ResetPasswordResponse(BaseModel):
+    temporary_password: str

@@ -1,13 +1,18 @@
 from fastapi import APIRouter, Depends, Response
-from sqlalchemy import select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_principal
 from app.core.db import get_db
 from app.core.principal import Principal
-from app.models import ChatSkill, KnowledgeBase
 from app.schemas.skills import ChatSkillCreate, ChatSkillOut, ChatSkillUpdate
-from app.services.skill_service import create_skill, delete_skill as delete_skill_with_cleanup, get_skill_or_404, serialize_skill, update_skill
+from app.services.skill_service import (
+    create_skill,
+    delete_skill as delete_skill_with_cleanup,
+    get_skill_or_404,
+    list_skills as list_skills_for_principal,
+    serialize_skill,
+    update_skill,
+)
 
 
 router = APIRouter(prefix="/api/v1/skills", tags=["skills"])
@@ -21,18 +26,7 @@ def create_skill_endpoint(payload: ChatSkillCreate, db: Session = Depends(get_db
 
 @router.get("", response_model=list[ChatSkillOut])
 def list_skills(db: Session = Depends(get_db), principal: Principal = Depends(get_current_principal)):
-    skills = db.scalars(
-        select(ChatSkill)
-        .where(
-            ChatSkill.tenant_id == principal.tenant_id,
-            ChatSkill.workspace_id == principal.workspace_id,
-        )
-        .options(
-            selectinload(ChatSkill.documents),
-            selectinload(ChatSkill.knowledge_base).selectinload(KnowledgeBase.documents),
-        )
-    ).all()
-    return [serialize_skill(skill) for skill in skills]
+    return [serialize_skill(skill) for skill in list_skills_for_principal(db, principal)]
 
 
 @router.get("/{skill_id}", response_model=ChatSkillOut)

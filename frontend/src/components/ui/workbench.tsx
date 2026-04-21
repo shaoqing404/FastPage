@@ -95,7 +95,9 @@ export const ExpertDrawer: React.FC<{
   description?: string;
   onClose: () => void;
   children: React.ReactNode;
-}> = ({ open, title, description, onClose, children }) => (
+  side?: 'left' | 'right';
+  widthClassName?: string;
+}> = ({ open, title, description, onClose, children, side = 'right', widthClassName }) => (
   <AnimatePresence>
     {open && (
       <>
@@ -108,10 +110,10 @@ export const ExpertDrawer: React.FC<{
           onClick={onClose}
         />
         <motion.aside
-          className="expert-drawer"
-          initial={{ x: 32, opacity: 0 }}
+          className={cn('expert-drawer', side === 'left' ? 'expert-drawer-left' : 'expert-drawer-right', widthClassName)}
+          initial={{ x: side === 'left' ? -32 : 32, opacity: 0 }}
           animate={{ x: 0, opacity: 1 }}
-          exit={{ x: 32, opacity: 0 }}
+          exit={{ x: side === 'left' ? -32 : 32, opacity: 0 }}
           transition={{ type: 'spring', stiffness: 280, damping: 28 }}
         >
           <div className="glass-panel-header">
@@ -125,6 +127,55 @@ export const ExpertDrawer: React.FC<{
           </div>
           <div className="glass-panel-body overflow-auto">{children}</div>
         </motion.aside>
+      </>
+    )}
+  </AnimatePresence>
+);
+
+export const SurfaceModal: React.FC<{
+  open: boolean;
+  title: string;
+  subtitle?: string;
+  onClose: () => void;
+  actions?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+  bodyClassName?: string;
+}> = ({ open, title, subtitle, onClose, actions, children, className, bodyClassName }) => (
+  <AnimatePresence>
+    {open && (
+      <>
+        <motion.button
+          type="button"
+          className="drawer-backdrop"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={onClose}
+        />
+        <div className="modal-shell">
+          <motion.div
+            className={cn('surface-modal', className)}
+            initial={{ y: 18, opacity: 0, scale: 0.98 }}
+            animate={{ y: 0, opacity: 1, scale: 1 }}
+            exit={{ y: 18, opacity: 0, scale: 0.98 }}
+            transition={{ type: 'spring', stiffness: 320, damping: 28 }}
+          >
+            <div className="glass-panel-header">
+              <div>
+                <h3 className="panel-title">{title}</h3>
+                {subtitle && <p className="panel-subtitle">{subtitle}</p>}
+              </div>
+              <div className="flex items-center gap-2">
+                {actions}
+                <button type="button" className="icon-button" onClick={onClose}>
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+            <div className={cn('glass-panel-body overflow-auto', bodyClassName)}>{children}</div>
+          </motion.div>
+        </div>
       </>
     )}
   </AnimatePresence>
@@ -153,47 +204,49 @@ export const CopyOnceModal: React.FC<{
           exit={{ opacity: 0 }}
           onClick={onClose}
         />
-        <motion.div
-          className="copy-once-modal"
-          initial={{ y: 18, opacity: 0, scale: 0.98 }}
-          animate={{ y: 0, opacity: 1, scale: 1 }}
-          exit={{ y: 18, opacity: 0, scale: 0.98 }}
-          transition={{ type: 'spring', stiffness: 320, damping: 28 }}
-        >
-          <div className="glass-panel-header">
-            <div>
-              <h3 className="panel-title">{title}</h3>
-              <p className="panel-subtitle">{subtitle || 'Copy this secret before closing this window.'}</p>
-            </div>
-            <button type="button" className="icon-button" onClick={onClose}>
-              <X size={16} />
-            </button>
-          </div>
-          <div className="glass-panel-body space-y-4">
-            {meta && <div className="rounded-2xl bg-white/65 p-4 text-sm text-slate-600">{meta}</div>}
-            <div className="rounded-2xl border border-white/80 bg-white/80 p-4">
-              <textarea readOnly value={value} className="min-h-[120px] w-full resize-none bg-transparent text-[13px] leading-6 text-slate-900 outline-none" />
-            </div>
-            {copyError && <InlineAlert tone="warning" title="Clipboard copy failed">{copyError}</InlineAlert>}
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-2 text-sm text-slate-500">
-                <AlertCircle size={16} />
-                <span>{copyError ? 'The key is still visible above. Manually select and copy it before closing.' : footerNote || 'Handle this secret carefully after copying.'}</span>
+        <div className="modal-shell">
+          <motion.div
+            className="copy-once-modal"
+            initial={{ y: 18, opacity: 0, scale: 0.98 }}
+            animate={{ y: 0, opacity: 1, scale: 1 }}
+            exit={{ y: 18, opacity: 0, scale: 0.98 }}
+            transition={{ type: 'spring', stiffness: 320, damping: 28 }}
+          >
+            <div className="glass-panel-header">
+              <div>
+                <h3 className="panel-title">{title}</h3>
+                <p className="panel-subtitle">{subtitle || 'Copy this secret before closing this window.'}</p>
               </div>
-              <button type="button" className="btn-primary" onClick={onCopy}>
-                {copied ? <Check size={16} /> : <Copy size={16} />}
-                <span>{copied ? 'Copied' : 'Copy key'}</span>
+              <button type="button" className="icon-button" onClick={onClose}>
+                <X size={16} />
               </button>
             </div>
-          </div>
-        </motion.div>
+            <div className="glass-panel-body space-y-4 overflow-auto">
+              {meta && <div className="rounded-2xl bg-white/65 p-4 text-sm text-slate-600">{meta}</div>}
+              <div className="rounded-2xl border border-white/80 bg-white/80 p-4">
+                <textarea readOnly value={value} className="min-h-[120px] w-full resize-none bg-transparent text-[13px] leading-6 text-slate-900 outline-none" />
+              </div>
+              {copyError && <InlineAlert tone="warning" title="Clipboard copy failed">{copyError}</InlineAlert>}
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-2 text-sm text-slate-500">
+                  <AlertCircle size={16} />
+                  <span>{copyError ? 'The key is still visible above. Manually select and copy it before closing.' : footerNote || 'Handle this secret carefully after copying.'}</span>
+                </div>
+                <button type="button" className="btn-primary" onClick={onCopy}>
+                  {copied ? <Check size={16} /> : <Copy size={16} />}
+                  <span>{copied ? 'Copied' : 'Copy key'}</span>
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
       </>
     )}
   </AnimatePresence>
 );
 
 export const InlineAlert: React.FC<{
-  tone?: 'danger' | 'warning' | 'success';
+  tone?: 'danger' | 'warning' | 'success' | 'default';
   title?: string;
   children: React.ReactNode;
   action?: React.ReactNode;
@@ -204,5 +257,28 @@ export const InlineAlert: React.FC<{
       <div className="text-sm text-slate-700">{children}</div>
     </div>
     {action && <div className="shrink-0">{action}</div>}
+  </div>
+);
+
+export const SegmentedControl: React.FC<{
+  items: Array<{ value: string; label: string; count?: React.ReactNode }>;
+  value: string;
+  onChange: (value: string) => void;
+}> = ({ items, value, onChange }) => (
+  <div className="segmented">
+    {items.map((item) => {
+      const active = item.value === value;
+      return (
+        <button
+          key={item.value}
+          type="button"
+          className={cn('segmented-item', active && 'segmented-item-active')}
+          onClick={() => onChange(item.value)}
+        >
+          <span>{item.label}</span>
+          {item.count !== undefined && <span className="text-xs text-slate-400">{item.count}</span>}
+        </button>
+      );
+    })}
   </div>
 );

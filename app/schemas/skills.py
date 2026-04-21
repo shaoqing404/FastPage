@@ -1,7 +1,9 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+SkillVisibility = Literal["private", "workspace_read", "workspace_edit"]
 
 
 class ChatSkillCreate(BaseModel):
@@ -17,6 +19,7 @@ class ChatSkillCreate(BaseModel):
     retrieval_config: dict[str, Any] = Field(default_factory=dict)
     generation_config: dict[str, Any] = Field(default_factory=dict)
     document_scope_type: str = "explicit"
+    visibility: SkillVisibility = "private"
 
 
 class ChatSkillUpdate(BaseModel):
@@ -33,6 +36,7 @@ class ChatSkillUpdate(BaseModel):
     generation_config: dict[str, Any] | None = None
     document_scope_type: str | None = None
     is_active: bool | None = None
+    visibility: SkillVisibility | None = None
 
 
 class ChatSkillOut(BaseModel):
@@ -53,5 +57,6 @@ class ChatSkillOut(BaseModel):
     generation_config: dict[str, Any]
     document_ids: list[str]
     is_active: bool
+    visibility: SkillVisibility
     created_at: datetime
     updated_at: datetime

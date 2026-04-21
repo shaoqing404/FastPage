@@ -19,8 +19,15 @@ from app.models import (
     User,
 )
 from app.services.document_service import list_accessible_documents_by_ids
-from app.services.provider_service import can_bind_provider_to_workspace
+from app.services.provider_service import can_bind_provider_to_workspace_via_db, validate_provider_model_selection
 from app.services.storage_service import delete_skill_trace_tree
+from app.services.workspace_access_service import (
+    assert_can_edit_skill,
+    assert_can_read_skill,
+    can_read_knowledge_base,
+    can_read_skill,
+    require_workspace_capability,
+)
 
 
 def serialize_skill(skill: ChatSkill) -> dict:
@@ -46,6 +53,7 @@ def serialize_skill(skill: ChatSkill) -> dict:
         "generation_config": json.loads(skill.generation_config_json or "{}"),
         "document_ids": document_ids,
         "is_active": skill.is_active,
+        "visibility": skill.visibility,
         "created_at": skill.created_at,
         "updated_at": skill.updated_at,
     }
@@ -69,7 +77,24 @@ def get_skill_or_404(db: Session, actor: Principal | User, skill_id: str) -> Cha
     workspace_id = _principal_workspace_id(actor)
     if workspace_id is not None and skill.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
+    if isinstance(actor, Principal):
+        assert_can_read_skill(actor, skill)
     return skill
+
+
+def list_skills(db: Session, principal: Principal) -> list[ChatSkill]:
+    skills = db.scalars(
+        select(ChatSkill)
+        .where(
+            ChatSkill.tenant_id == principal.tenant_id,
+            ChatSkill.workspace_id == principal.workspace_id,
+        )
+        .options(
+            selectinload(ChatSkill.documents),
+            selectinload(ChatSkill.knowledge_base).selectinload(KnowledgeBase.documents),
+        )
+    ).all()
+    return [skill for skill in skills if can_read_skill(principal, skill)]
 
 
 def validate_document_ids(db: Session, actor: Principal | User, document_ids: list[str]) -> None:
@@ -99,15 +124,16 @@ def replace_skill_documents_from_knowledge_base(skill: ChatSkill, knowledge_base
     )
 
 
-def validate_provider_id(db: Session, actor: Principal | User, provider_id: str | None) -> None:
+def validate_provider_id(db: Session, actor: Principal | User, provider_id: str | None) -> ModelProvider | None:
     if not provider_id:
-        return
+        return None
     provider = db.get(ModelProvider, provider_id)
     if provider is None or provider.tenant_id != actor.tenant_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="provider_id is invalid")
     workspace_id = _principal_workspace_id(actor)
-    if workspace_id is not None and not can_bind_provider_to_workspace(provider, workspace_id):
+    if workspace_id is not None and not can_bind_provider_to_workspace_via_db(db, provider, workspace_id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="provider_id is not accessible from this workspace")
+    return provider
 
 
 def validate_knowledge_base_id(db: Session, actor: Principal | User, knowledge_base_id: str | None) -> KnowledgeBase | None:
@@ -123,11 +149,28 @@ def validate_knowledge_base_id(db: Session, actor: Principal | User, knowledge_b
     workspace_id = _principal_workspace_id(actor)
     if workspace_id is not None and knowledge_base.workspace_id != workspace_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="knowledge_base_id is invalid")
+    if isinstance(actor, Principal) and not can_read_knowledge_base(actor, knowledge_base):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="knowledge_base_id is invalid")
     return knowledge_base
 
 
 def create_skill(db: Session, principal: Principal, payload) -> ChatSkill:
-    validate_provider_id(db, principal, payload.provider_id)
+    require_workspace_capability(
+        principal,
+        "can_manage_skills",
+        detail="Missing workspace capability: can_manage_skills",
+    )
+    provider = validate_provider_id(db, principal, payload.provider_id)
+    if provider is not None:
+        validate_provider_model_selection(
+            provider_id=provider.id,
+            provider_type=provider.provider_type,
+            provider_name=provider.name,
+            default_model=provider.default_model,
+            supported_models=json.loads(provider.supported_models_json or "[]"),
+            model=payload.model,
+            subject="Skill model",
+        )
     knowledge_base = validate_knowledge_base_id(db, principal, payload.knowledge_base_id)
     if knowledge_base is None:
         validate_document_ids(db, principal, payload.document_ids)
@@ -149,6 +192,7 @@ def create_skill(db: Session, principal: Principal, payload) -> ChatSkill:
         retrieval_config_json=json.dumps(payload.retrieval_config, ensure_ascii=False),
         generation_config_json=json.dumps(payload.generation_config, ensure_ascii=False),
         is_active=True,
+        visibility=payload.visibility,
         created_at=now,
         updated_at=now,
     )
@@ -164,13 +208,28 @@ def create_skill(db: Session, principal: Principal, payload) -> ChatSkill:
 
 def update_skill(db: Session, principal: Principal, skill_id: str, payload) -> ChatSkill:
     skill = get_skill_or_404(db, principal, skill_id)
+    assert_can_edit_skill(principal, skill)
     update_dict = payload.model_dump(exclude_unset=True)
     next_knowledge_base = skill.knowledge_base
     document_ids_payload = None
     if "document_ids" in update_dict:
         document_ids_payload = update_dict.pop("document_ids")
+    next_provider = None
     if "provider_id" in update_dict:
-        validate_provider_id(db, principal, update_dict["provider_id"])
+        next_provider = validate_provider_id(db, principal, update_dict["provider_id"])
+    elif skill.provider_id:
+        next_provider = validate_provider_id(db, principal, skill.provider_id)
+
+    if next_provider is not None:
+        validate_provider_model_selection(
+            provider_id=next_provider.id,
+            provider_type=next_provider.provider_type,
+            provider_name=next_provider.name,
+            default_model=next_provider.default_model,
+            supported_models=json.loads(next_provider.supported_models_json or "[]"),
+            model=update_dict.get("model", skill.model),
+            subject="Skill model",
+        )
     if "knowledge_base_id" in update_dict:
         next_knowledge_base = validate_knowledge_base_id(db, principal, update_dict["knowledge_base_id"])
     if document_ids_payload is not None:
@@ -197,6 +256,7 @@ def update_skill(db: Session, principal: Principal, skill_id: str, payload) -> C
 
 def delete_skill(db: Session, principal: Principal, skill_id: str) -> None:
     skill = get_skill_or_404(db, principal, skill_id)
+    assert_can_edit_skill(principal, skill)
     run_ids = list(
         db.scalars(
             select(ChatRun.id).where(

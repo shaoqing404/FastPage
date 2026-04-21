@@ -19,13 +19,13 @@ set +a
 
 case "${PROFILE}" in
   full)
-    docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile full up -d --build --scale worker="${WORKER_REPLICAS}"
+    docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile full up -d --build --scale worker="${WORKER_REPLICAS}" mysql redis minio api worker
     ;;
   local)
-    docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile local up -d --build
+    docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile local up -d --build api-local
     ;;
   *)
-    echo "Unsupported PAGEINDEX_COMPOSE_PROFILE=${PROFILE}. Use 'full' or 'local'." >&2
+    echo "Unsupported PAGEINDEX_COMPOSE_PROFILE=${PROFILE}. Use full or local." >&2
     exit 1
     ;;
 esac

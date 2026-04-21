@@ -7,9 +7,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.principal import Principal
-from app.models import ChatSkill, Document, DocumentVersion, KnowledgeBase, KnowledgeBaseDocument
+from app.models import ChatSkill, DocumentVersion, KnowledgeBase, KnowledgeBaseDocument
 from app.services.document_service import list_accessible_documents_by_ids
 from app.services.skill_service import replace_skill_documents_from_knowledge_base
+from app.services.workspace_access_service import (
+    assert_can_edit_knowledge_base,
+    assert_can_read_knowledge_base,
+    can_read_knowledge_base,
+    require_workspace_capability,
+)
 
 
 def ensure_workspace_access(principal: Principal, workspace_id: str) -> None:
@@ -35,6 +41,7 @@ def serialize_knowledge_base(knowledge_base: KnowledgeBase) -> dict:
         "name": knowledge_base.name,
         "description": knowledge_base.description,
         "status": knowledge_base.status,
+        "visibility": knowledge_base.visibility,
         "retrieval_profile": json.loads(knowledge_base.retrieval_profile_json or "{}"),
         "created_by": knowledge_base.created_by,
         "created_at": knowledge_base.created_at,
@@ -45,7 +52,7 @@ def serialize_knowledge_base(knowledge_base: KnowledgeBase) -> dict:
 
 def list_knowledge_bases(db: Session, principal: Principal, workspace_id: str) -> list[KnowledgeBase]:
     ensure_workspace_access(principal, workspace_id)
-    return db.scalars(
+    knowledge_bases = db.scalars(
         select(KnowledgeBase)
         .where(
             KnowledgeBase.tenant_id == principal.tenant_id,
@@ -54,6 +61,7 @@ def list_knowledge_bases(db: Session, principal: Principal, workspace_id: str) -
         .options(selectinload(KnowledgeBase.documents))
         .order_by(KnowledgeBase.created_at.desc())
     ).all()
+    return [knowledge_base for knowledge_base in knowledge_bases if can_read_knowledge_base(principal, knowledge_base)]
 
 
 def get_knowledge_base_or_404(db: Session, principal: Principal, workspace_id: str, knowledge_base_id: str) -> KnowledgeBase:
@@ -69,6 +77,7 @@ def get_knowledge_base_or_404(db: Session, principal: Principal, workspace_id: s
     )
     if knowledge_base is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base not found")
+    assert_can_read_knowledge_base(principal, knowledge_base)
     return knowledge_base
 
 
@@ -135,6 +144,11 @@ def sync_knowledge_base_skills(db: Session, knowledge_base: KnowledgeBase) -> No
 
 def create_knowledge_base(db: Session, principal: Principal, workspace_id: str, payload) -> KnowledgeBase:
     ensure_workspace_access(principal, workspace_id)
+    require_workspace_capability(
+        principal,
+        "can_manage_knowledge_bases",
+        detail="Missing workspace capability: can_manage_knowledge_bases",
+    )
     _validate_knowledge_base_documents(db, principal, workspace_id, payload.documents)
     now = datetime.utcnow()
     knowledge_base = KnowledgeBase(
@@ -144,6 +158,7 @@ def create_knowledge_base(db: Session, principal: Principal, workspace_id: str, 
         name=payload.name,
         description=payload.description,
         status=payload.status,
+        visibility=payload.visibility,
         retrieval_profile_json=json.dumps(payload.retrieval_profile, ensure_ascii=False),
         created_by=principal.user_id,
         created_at=now,
@@ -158,6 +173,7 @@ def create_knowledge_base(db: Session, principal: Principal, workspace_id: str, 
 
 def update_knowledge_base(db: Session, principal: Principal, workspace_id: str, knowledge_base_id: str, payload) -> KnowledgeBase:
     knowledge_base = get_knowledge_base_or_404(db, principal, workspace_id, knowledge_base_id)
+    assert_can_edit_knowledge_base(principal, knowledge_base)
     update_dict = payload.model_dump(exclude_unset=True)
     if update_dict.get("status") is None and "status" in update_dict:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="status cannot be null")
@@ -179,6 +195,7 @@ def replace_knowledge_base_documents_for_id(
     documents_payload: list,
 ) -> KnowledgeBase:
     knowledge_base = get_knowledge_base_or_404(db, principal, workspace_id, knowledge_base_id)
+    assert_can_edit_knowledge_base(principal, knowledge_base)
     _validate_knowledge_base_documents(db, principal, workspace_id, documents_payload)
     replace_knowledge_base_documents(knowledge_base, documents_payload)
     sync_knowledge_base_skills(db, knowledge_base)
@@ -196,6 +213,7 @@ def add_knowledge_base_document(
     payload,
 ) -> KnowledgeBase:
     knowledge_base = get_knowledge_base_or_404(db, principal, workspace_id, knowledge_base_id)
+    assert_can_edit_knowledge_base(principal, knowledge_base)
     if any(document.document_id == payload.document_id for document in knowledge_base.documents):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Document is already bound to this knowledge base")
     _validate_knowledge_base_documents(db, principal, workspace_id, [payload])
@@ -228,6 +246,7 @@ def update_knowledge_base_document(
     payload,
 ) -> KnowledgeBase:
     knowledge_base = get_knowledge_base_or_404(db, principal, workspace_id, knowledge_base_id)
+    assert_can_edit_knowledge_base(principal, knowledge_base)
     document_binding = next((document for document in knowledge_base.documents if document.document_id == document_id), None)
     if document_binding is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base document not found")
@@ -264,6 +283,7 @@ def delete_knowledge_base_document(
     document_id: str,
 ) -> None:
     knowledge_base = get_knowledge_base_or_404(db, principal, workspace_id, knowledge_base_id)
+    assert_can_edit_knowledge_base(principal, knowledge_base)
     document_binding = next((document for document in knowledge_base.documents if document.document_id == document_id), None)
     if document_binding is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base document not found")
@@ -275,6 +295,7 @@ def delete_knowledge_base_document(
 
 def delete_knowledge_base(db: Session, principal: Principal, workspace_id: str, knowledge_base_id: str) -> None:
     knowledge_base = get_knowledge_base_or_404(db, principal, workspace_id, knowledge_base_id)
+    assert_can_edit_knowledge_base(principal, knowledge_base)
     skill_ref = db.scalar(
         select(ChatSkill.id).where(
             ChatSkill.tenant_id == principal.tenant_id,

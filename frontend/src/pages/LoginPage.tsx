@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowRight, Lock, ShieldCheck, User } from 'lucide-react';
 
 import { authApi } from '../features/auth/api';
+import { storeAuthTokenResponse } from '../lib/api/client';
 import { getErrorMessage } from '../lib/utils';
 
 export const LoginPage: React.FC = () => {
@@ -10,7 +11,9 @@ export const LoginPage: React.FC = () => {
   const [password, setPassword] = useState('changeme');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const location = useLocation();
   const navigate = useNavigate();
+  const redirectTarget = new URLSearchParams(location.search).get('redirect');
 
   const handleLogin = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -19,9 +22,8 @@ export const LoginPage: React.FC = () => {
 
     try {
       const response = await authApi.login({ username, password });
-      localStorage.setItem('token', response.access_token);
-      localStorage.setItem('user', JSON.stringify(response.user));
-      navigate('/overview');
+      storeAuthTokenResponse(response);
+      navigate(redirectTarget || '/workspace', { replace: true });
     } catch (error: unknown) {
       setError(getErrorMessage(error, 'Authentication failed'));
     } finally {
@@ -53,7 +55,7 @@ export const LoginPage: React.FC = () => {
 
             <div className="grid grid-cols-3 gap-4">
               <Feature label="Session-aware chat" hint="Persistent conversation continuity for document work." />
-              <Feature label="Provider control" hint="Tenant-scoped model provider profiles and API keys." />
+              <Feature label="Provider control" hint="Workspace API keys and provider profiles stay available in the same console shell." />
               <Feature label="Readable diagnostics" hint="Runs, citations, and pipeline state in one place." />
             </div>
           </div>
@@ -63,7 +65,9 @@ export const LoginPage: React.FC = () => {
           <div className="glass-panel-header">
             <div>
               <h2 className="panel-title">Sign in</h2>
-              <p className="panel-subtitle">Use your tenant credentials to enter the workbench.</p>
+              <p className="panel-subtitle">
+                Use your account credentials to enter the active workspace context.
+              </p>
             </div>
           </div>
           <form onSubmit={handleLogin} className="glass-panel-body space-y-5">

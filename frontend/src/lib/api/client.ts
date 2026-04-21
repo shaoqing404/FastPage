@@ -1,19 +1,60 @@
 import axios from 'axios';
 
-import type { ApiErrorDetails, ApiErrorEnvelope, ApiErrorPayload, User, ValidationErrorDetail } from '../../types';
+import type {
+  ApiErrorDetails,
+  ApiErrorEnvelope,
+  ApiErrorPayload,
+  AuthTokenResponse,
+  TenantMembership,
+  User,
+  ValidationErrorDetail,
+  Workspace,
+  WorkspaceListItem,
+  WorkspaceInviteAcceptResponse,
+  WorkspaceMembership,
+} from '../../types';
 
 const BASENAME = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') || '/';
 const browserOriginApiBase =
   typeof window !== 'undefined'
     ? `${window.location.protocol}//${window.location.hostname}:22223/api/v1`
     : 'http://localhost:22223/api/v1';
-const inferredApiBase =
-  BASENAME === '/'
-    ? browserOriginApiBase
-    : `${BASENAME.replace(/\/web$/, '')}/api/v1`;
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || inferredApiBase;
+
+const isLoopbackHostname = (hostname: string) => hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+
+const resolveConfiguredApiBase = () => {
+  const configured = import.meta.env.VITE_API_BASE_URL?.trim();
+  if (!configured) return browserOriginApiBase;
+  if (typeof window === 'undefined') return configured;
+
+  try {
+    const configuredUrl = new URL(configured);
+    const browserHostname = window.location.hostname;
+
+    // If the frontend is opened through a LAN/IP hostname but the build-time
+    // API target still points to localhost, prefer the current browser host.
+    if (!isLoopbackHostname(browserHostname) && isLoopbackHostname(configuredUrl.hostname)) {
+      return browserOriginApiBase;
+    }
+  } catch {
+    // Keep explicit non-URL values untouched and let requests fail loudly.
+  }
+
+  return configured;
+};
+
+export const API_BASE_URL = resolveConfiguredApiBase();
 
 const REQUEST_ID_HEADER = 'x-request-id';
+const SESSION_EVENT = 'pageindex:session-changed';
+const STORAGE_KEYS = {
+  token: 'token',
+  user: 'user',
+  workspace: 'workspace',
+  memberships: 'memberships',
+  tenantMembership: 'tenant_membership',
+  workspaceMembership: 'workspace_membership',
+} as const;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 
@@ -138,18 +179,47 @@ export class ApiClientError extends Error {
 
 export const isApiClientError = (error: unknown): error is ApiClientError => error instanceof ApiClientError;
 
-export const resolveStoredUser = (): Partial<User> | null => {
+const parseStoredJson = <T>(key: string): T | null => {
   try {
-    const raw = localStorage.getItem('user');
+    const raw = localStorage.getItem(key);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as unknown;
-    return isRecord(parsed) ? (parsed as Partial<User>) : null;
+    return JSON.parse(raw) as T;
   } catch {
     return null;
   }
 };
 
+export const resolveStoredUser = (): Partial<User> | null => {
+  const parsed = parseStoredJson<unknown>(STORAGE_KEYS.user);
+  return isRecord(parsed) ? (parsed as Partial<User>) : null;
+};
+
+export const resolveStoredWorkspace = (): Partial<Workspace> | null => {
+  const parsed = parseStoredJson<unknown>(STORAGE_KEYS.workspace);
+  return isRecord(parsed) ? (parsed as Partial<Workspace>) : null;
+};
+
+export const resolveStoredTenantMembership = (): Partial<TenantMembership> | null => {
+  const parsed = parseStoredJson<unknown>(STORAGE_KEYS.tenantMembership);
+  return isRecord(parsed) ? (parsed as Partial<TenantMembership>) : null;
+};
+
+export const resolveStoredWorkspaceMembership = (): Partial<WorkspaceMembership> | null => {
+  const parsed = parseStoredJson<unknown>(STORAGE_KEYS.workspaceMembership);
+  return isRecord(parsed) ? (parsed as Partial<WorkspaceMembership>) : null;
+};
+
+export const resolveStoredMemberships = (): TenantMembership[] => {
+  const parsed = parseStoredJson<unknown>(STORAGE_KEYS.memberships);
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter((item): item is TenantMembership => isRecord(item) && typeof item.id === 'string') as TenantMembership[];
+};
+
 export const resolveActiveWorkspaceId = () => {
+  const workspace = resolveStoredWorkspace();
+  if (typeof workspace?.id === 'string' && workspace.id.trim().length > 0) {
+    return workspace.id;
+  }
   const user = resolveStoredUser();
   if (typeof user?.workspace_id === 'string' && user.workspace_id.trim().length > 0) {
     return user.workspace_id;
@@ -157,20 +227,124 @@ export const resolveActiveWorkspaceId = () => {
   throw new Error('No active workspace found in local session');
 };
 
+export const resolveAppPath = (path: string) => {
+  const basePath = BASENAME === '/' ? '' : BASENAME;
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  return `${basePath}${normalizedPath}`;
+};
+
 export const resolveApiUrl = (path: string) => {
   const baseUrl = API_BASE_URL.endsWith('/') ? API_BASE_URL : `${API_BASE_URL}/`;
   return new URL(path.replace(/^\//, ''), baseUrl).toString();
 };
 
-const clearStoredAuth = () => {
-  localStorage.removeItem('token');
-  localStorage.removeItem('user');
+const dispatchSessionChange = () => {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event(SESSION_EVENT));
+};
+
+const writeStoredJson = (key: string, value: unknown) => {
+  localStorage.setItem(key, JSON.stringify(value));
+};
+
+const mergeMemberships = (memberships: TenantMembership[], nextMembership: TenantMembership) => {
+  const merged = memberships.filter((membership) => membership.id !== nextMembership.id && membership.tenant_id !== nextMembership.tenant_id);
+  return [...merged, nextMembership];
+};
+
+export const storeAuthTokenResponse = (response: AuthTokenResponse) => {
+  localStorage.setItem(STORAGE_KEYS.token, response.access_token);
+  writeStoredJson(STORAGE_KEYS.user, response.user);
+  writeStoredJson(STORAGE_KEYS.workspace, response.workspace);
+  writeStoredJson(STORAGE_KEYS.memberships, response.memberships);
+  writeStoredJson(STORAGE_KEYS.tenantMembership, response.tenant_membership);
+  writeStoredJson(STORAGE_KEYS.workspaceMembership, response.workspace_membership);
+  dispatchSessionChange();
+};
+
+export const storeInviteAcceptResponse = (response: WorkspaceInviteAcceptResponse) => {
+  const currentUser = resolveStoredUser() || {};
+  const nextUser: Partial<User> = {
+    ...currentUser,
+    tenant_id: response.tenant_membership.tenant_id,
+    workspace_id: response.workspace.id,
+    membership_role: response.workspace_membership.role,
+    tenant_membership_role: response.tenant_membership.role,
+    tenant_membership_status: response.tenant_membership.status,
+    workspace_membership_role: response.workspace_membership.role,
+    workspace_membership_status: response.workspace_membership.status,
+  };
+
+  localStorage.setItem(STORAGE_KEYS.token, response.access_token);
+  writeStoredJson(STORAGE_KEYS.user, nextUser);
+  writeStoredJson(STORAGE_KEYS.workspace, response.workspace);
+  writeStoredJson(STORAGE_KEYS.memberships, mergeMemberships(resolveStoredMemberships(), response.tenant_membership));
+  writeStoredJson(STORAGE_KEYS.tenantMembership, response.tenant_membership);
+  writeStoredJson(STORAGE_KEYS.workspaceMembership, response.workspace_membership);
+  dispatchSessionChange();
+};
+
+export const storeClaimResponse = (response: WorkspaceInviteAcceptResponse) => {
+  const nextUser: Partial<User> = response.user ? {
+    ...response.user,
+    tenant_id: response.tenant_membership.tenant_id,
+    workspace_id: response.workspace.id,
+    membership_role: response.workspace_membership.role,
+    tenant_membership_role: response.tenant_membership.role,
+    tenant_membership_status: response.tenant_membership.status,
+    workspace_membership_role: response.workspace_membership.role,
+    workspace_membership_status: response.workspace_membership.status,
+  } : {
+    tenant_id: response.tenant_membership.tenant_id,
+    workspace_id: response.workspace.id,
+    membership_role: response.workspace_membership.role,
+    tenant_membership_role: response.tenant_membership.role,
+    tenant_membership_status: response.tenant_membership.status,
+    workspace_membership_role: response.workspace_membership.role,
+    workspace_membership_status: response.workspace_membership.status,
+  };
+
+  localStorage.setItem(STORAGE_KEYS.token, response.access_token);
+  writeStoredJson(STORAGE_KEYS.user, nextUser);
+  writeStoredJson(STORAGE_KEYS.workspace, response.workspace);
+  writeStoredJson(STORAGE_KEYS.memberships, [response.tenant_membership]);
+  writeStoredJson(STORAGE_KEYS.tenantMembership, response.tenant_membership);
+  writeStoredJson(STORAGE_KEYS.workspaceMembership, response.workspace_membership);
+  dispatchSessionChange();
+};
+
+export const updateStoredWorkspace = (workspace: Workspace | Partial<Workspace> | WorkspaceListItem) => {
+  const currentWorkspace = resolveStoredWorkspace() || {};
+  writeStoredJson(STORAGE_KEYS.workspace, {
+    ...currentWorkspace,
+    ...workspace,
+  });
+  dispatchSessionChange();
+};
+
+export const clearStoredAuth = () => {
+  Object.values(STORAGE_KEYS).forEach((key) => localStorage.removeItem(key));
+  dispatchSessionChange();
+};
+
+export const subscribeToSessionChanges = (callback: () => void) => {
+  if (typeof window === 'undefined') {
+    return () => undefined;
+  }
+
+  const handler = () => callback();
+  window.addEventListener(SESSION_EVENT, handler);
+  window.addEventListener('storage', handler);
+  return () => {
+    window.removeEventListener(SESSION_EVENT, handler);
+    window.removeEventListener('storage', handler);
+  };
 };
 
 export const redirectToLogin = () => {
   clearStoredAuth();
   if (typeof window === 'undefined') return;
-  const loginPath = `${BASENAME === '/' ? '' : BASENAME}/login`;
+  const loginPath = resolveAppPath('/login');
   if (window.location.pathname !== loginPath) {
     window.location.href = loginPath;
   }

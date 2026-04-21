@@ -17,6 +17,8 @@ export interface SkillRunRequest {
   question: string;
   document_id?: string;
   provider_id?: string;
+  model?: string;
+  system_prompt?: string;
   session_id?: string;
   auto_create_session?: boolean;
   session_title?: string;
@@ -88,6 +90,65 @@ const parseSseEvent = (chunk: string): { event: string; data: string } | null =>
   return { event, data: dataLines.join('\n') };
 };
 
+const buildSkillStreamError = (errorPayload: SkillStreamErrorPayload): ApiClientError =>
+  new ApiClientError({
+    code: errorPayload.code || 'INTERNAL_ERROR',
+    message: errorPayload.detail || errorPayload.message || 'Skill stream failed',
+    request_id: errorPayload.request_id ?? null,
+    ...(errorPayload.details !== undefined ? { details: errorPayload.details } : {}),
+  });
+
+const sleep = (ms: number) => new Promise((resolve) => {
+  window.setTimeout(resolve, ms);
+});
+
+const recoverSkillRunAfterStreamExit = async (
+  runId: string,
+  handlers: SkillRunStreamHandlers,
+): Promise<ChatRun | null> => {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      const { data } = await apiClient.get<RawChatRun>(`/runs/${runId}`);
+      const run = normalizeChatRun(data);
+      if (run.status === 'completed') {
+        handlers.onStatus?.({ status: 'completed' });
+        handlers.onCompleted?.(run);
+        return run;
+      }
+      if (run.status === 'failed') {
+        handlers.onStatus?.({ status: 'failed' });
+        const errorPayload: SkillStreamErrorPayload = {
+          code: 'skill_stream_failed',
+          message: run.last_error || 'Skill run failed',
+          detail: run.last_error || 'Skill run failed',
+        };
+        handlers.onError?.(errorPayload);
+        throw buildSkillStreamError(errorPayload);
+      }
+      if (run.status === 'cancelled') {
+        handlers.onStatus?.({ status: 'cancelled' });
+        const errorPayload: SkillStreamErrorPayload = {
+          code: 'skill_stream_cancelled',
+          message: run.cancel_reason || run.last_error || 'Skill run was cancelled',
+          detail: run.cancel_reason || run.last_error || 'Skill run was cancelled',
+        };
+        handlers.onError?.(errorPayload);
+        throw buildSkillStreamError(errorPayload);
+      }
+    } catch (error) {
+      if (error instanceof ApiClientError) {
+        throw error;
+      }
+    }
+
+    if (attempt < 4) {
+      await sleep(150);
+    }
+  }
+
+  return null;
+};
+
 export const chatApi = {
   ask: async (payload: AskRequest): Promise<ChatRun> => {
     const { data } = await apiClient.post<RawChatRun>('/chat/ask', payload);
@@ -121,6 +182,44 @@ export const chatApi = {
     const decoder = new TextDecoder();
     let buffer = '';
     let completedRun: ChatRun | null = null;
+    let startedRunId: string | null = null;
+
+    const processRawEvent = (rawEvent: string) => {
+      const parsed = parseSseEvent(rawEvent);
+      if (!parsed?.data) return;
+
+      const payloadData = JSON.parse(parsed.data) as unknown;
+
+      if (parsed.event === 'run_started') {
+        const runStartedPayload = payloadData as { run_id: string; session_id: string | null; created_at: string };
+        startedRunId = runStartedPayload.run_id;
+        handlers.onRunStarted?.(runStartedPayload);
+        return;
+      }
+      if (parsed.event === 'status') {
+        const statusPayload = payloadData as { status?: string };
+        handlers.onStatus?.({ status: normalizeRunStatus(statusPayload.status || 'failed') });
+        return;
+      }
+      if (parsed.event === 'context') {
+        handlers.onContext?.(payloadData as { execution_context: SkillRunExecutionContext });
+        return;
+      }
+      if (parsed.event === 'answer_delta') {
+        handlers.onAnswerDelta?.(payloadData as { delta: string; seq?: number });
+        return;
+      }
+      if (parsed.event === 'run_completed') {
+        completedRun = normalizeChatRun(payloadData as RawChatRun);
+        handlers.onCompleted?.(completedRun);
+        return;
+      }
+      if (parsed.event === 'error') {
+        const errorPayload = payloadData as SkillStreamErrorPayload;
+        handlers.onError?.(errorPayload);
+        throw buildSkillStreamError(errorPayload);
+      }
+    };
 
     try {
       while (true) {
@@ -132,45 +231,18 @@ export const chatApi = {
         buffer = events.pop() || '';
 
         for (const rawEvent of events) {
-          const parsed = parseSseEvent(rawEvent);
-          if (!parsed?.data) continue;
+          processRawEvent(rawEvent);
+        }
+      }
 
-          const payloadData = JSON.parse(parsed.data) as unknown;
+      if (buffer.trim()) {
+        processRawEvent(buffer);
+      }
 
-          if (parsed.event === 'run_started') {
-            handlers.onRunStarted?.(payloadData as { run_id: string; session_id: string | null; created_at: string });
-            continue;
-          }
-          if (parsed.event === 'status') {
-            const statusPayload = payloadData as { status?: string };
-            handlers.onStatus?.({ status: normalizeRunStatus(statusPayload.status || 'failed') });
-            continue;
-          }
-          if (parsed.event === 'context') {
-            handlers.onContext?.(payloadData as { execution_context: SkillRunExecutionContext });
-            continue;
-          }
-          if (parsed.event === 'answer_delta') {
-            handlers.onAnswerDelta?.(payloadData as { delta: string; seq?: number });
-            continue;
-          }
-          if (parsed.event === 'run_completed') {
-            completedRun = normalizeChatRun(payloadData as RawChatRun);
-            handlers.onCompleted?.(completedRun);
-            continue;
-          }
-          if (parsed.event === 'error') {
-            const errorPayload = payloadData as SkillStreamErrorPayload;
-            handlers.onError?.(errorPayload);
-            throw new ApiClientError(
-              {
-                code: errorPayload.code || 'INTERNAL_ERROR',
-                message: errorPayload.detail || errorPayload.message || 'Skill stream failed',
-                request_id: errorPayload.request_id ?? null,
-                ...(errorPayload.details !== undefined ? { details: errorPayload.details } : {}),
-              },
-            );
-          }
+      if (!completedRun && startedRunId) {
+        const recoveredRun = await recoverSkillRunAfterStreamExit(startedRunId, handlers);
+        if (recoveredRun) {
+          return recoveredRun;
         }
       }
 

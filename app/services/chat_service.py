@@ -14,7 +14,7 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.principal import Principal
 from app.models import ChatRun, ChatSession, ChatSkill, Document, DocumentVersion, User
-from app.services.document_service import _is_default_workspace, get_document_or_404
+from app.services.document_service import get_document_or_404
 from app.services.pageindex_service import (
     build_answer_context,
     build_answer_with_marker,
@@ -25,8 +25,8 @@ from app.services.pageindex_service import (
     format_history_context,
     load_structure_file,
 )
-from app.services.provider_service import resolve_provider_config
-from app.services.session_service import append_message, get_session_or_404, list_session_messages
+from app.services.provider_service import resolve_provider_config, validate_provider_model_selection
+from app.services.session_service import _is_default_workspace, append_message, get_session_or_404, list_session_messages
 from app.services.skill_trace_service import SkillTraceRecorder
 from app.services.storage_service import local_artifact_path
 from app.services.task_queue_service import (
@@ -35,7 +35,8 @@ from app.services.task_queue_service import (
     open_chat_event_subscription,
     publish_chat_event,
 )
-from pageindex.utils import count_tokens, extract_json, llm_completion
+from app.services.workspace_access_service import can_read_skill
+from pageindex.utils import count_tokens, extract_json, is_fatal_llm_model_error, llm_completion
 
 
 settings = get_settings()
@@ -53,6 +54,16 @@ NONTERMINAL_RUN_STATUSES = {"accepted", "queued", "retrieving", "answering"}
 ACTIVE_RUN_STATUSES = {"retrieving", "answering"}
 SESSION_ORDERED_STATUSES = {"accepted", "queued", "retrieving", "answering"}
 
+OPTION_LABELS = {
+    "history_turn_limit": "history turn limit",
+    "history_token_budget": "history token budget",
+    "top_k": "sections to retrieve",
+    "selection_mode": "section selection method",
+    "max_context_pages": "max context pages",
+    "max_context_tokens": "max context tokens",
+    "temperature": "answer temperature",
+}
+
 
 class ChatRunCancelled(Exception):
     def __init__(self, reason: str, *, terminal_status: str = "cancelled") -> None:
@@ -62,28 +73,30 @@ class ChatRunCancelled(Exception):
 
 
 def _coerce_positive_int(name: str, value) -> int:
+    label = OPTION_LABELS.get(name, name.replace("_", " "))
     try:
         coerced = int(value)
     except (TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"{name} must be an integer",
+            detail=f"{label} must be an integer",
         ) from exc
     if coerced <= 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"{name} must be greater than 0",
+            detail=f"{label} must be greater than 0",
         )
     return coerced
 
 
 def _coerce_float(name: str, value) -> float:
+    label = OPTION_LABELS.get(name, name.replace("_", " "))
     try:
         return float(value)
     except (TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"{name} must be a number",
+            detail=f"{label} must be a number",
         ) from exc
 
 
@@ -114,7 +127,7 @@ def _validate_execution_options(
         if selection_mode not in {"outline_llm", "lexical_fallback"}:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="selection_mode must be one of: outline_llm, lexical_fallback",
+                detail="section selection method must be one of: outline_llm, lexical_fallback",
             )
         retrieval["selection_mode"] = selection_mode
     if "temperature" in generation and generation["temperature"] not in (None, ""):
@@ -211,6 +224,8 @@ def _build_execution_context(
             "id": provider_config.get("provider_id"),
             "name": provider_config.get("name"),
             "type": provider_config.get("provider_type"),
+            "scope": provider_config.get("scope"),
+            "resolution_source": provider_config.get("resolution_source"),
         },
         "model": {
             "resolved_model": resolved_model,
@@ -271,6 +286,21 @@ def _json_loads(text: str | None, fallback):
         return fallback
 
 
+def _load_run_snapshot(
+    db: Session,
+    *,
+    tenant_id: str,
+    run_id: str,
+    refresh_transaction: bool = False,
+) -> ChatRun:
+    if refresh_transaction:
+        db.rollback()
+    run = db.get(ChatRun, run_id)
+    if run is None or run.tenant_id != tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    return run
+
+
 def _run_metrics_with_error(run: ChatRun, error: str) -> str:
     metrics = _json_loads(run.metrics_json, {})
     metrics["error"] = error
@@ -293,6 +323,23 @@ def _run_workspace_filter(db: Session, principal: Principal):
     if _is_default_workspace(db, principal.tenant_id, principal.workspace_id):
         return or_(ChatRun.workspace_id == principal.workspace_id, ChatRun.workspace_id.is_(None))
     return ChatRun.workspace_id == principal.workspace_id
+
+
+def _load_visible_skill_map(db: Session, principal: Principal, skill_ids: set[str]) -> dict[str, ChatSkill]:
+    if not skill_ids:
+        return {}
+    skills = db.scalars(
+        select(ChatSkill).where(
+            ChatSkill.id.in_(skill_ids),
+            ChatSkill.tenant_id == principal.tenant_id,
+            ChatSkill.workspace_id == principal.workspace_id,
+        )
+    ).all()
+    return {
+        skill.id: skill
+        for skill in skills
+        if can_read_skill(principal, skill)
+    }
 
 
 async def _publish_chat_event(run_id: str, event: str, data: dict) -> None:
@@ -322,9 +369,9 @@ def serialize_run(run: ChatRun) -> dict:
         "citations": _json_loads(run.citations_json, []),
         "metrics": _json_loads(run.metrics_json, {}),
         "last_error": run.last_error,
-        "started_at": run.started_at,
-        "finished_at": run.finished_at,
-        "created_at": run.created_at,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
     }
 
 
@@ -377,14 +424,20 @@ def _create_pending_run(
     session = _resolve_session_for_run(db, principal=principal, session_id=session_id, skill=skill)
     provider_config = resolve_provider_config(
         db,
-        user.tenant_id,
+        principal.tenant_id,
         skill=skill,
         explicit_provider_id=provider_id,
         workspace_id=principal.workspace_id,
     )
-    resolved_model = model or (skill.model if skill else None) or provider_config.get("default_model")
-    if not resolved_model:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No model resolved for this request")
+    resolved_model = validate_provider_model_selection(
+        provider_id=provider_config.get("provider_id"),
+        provider_type=provider_config.get("provider_type"),
+        provider_name=provider_config.get("name"),
+        default_model=provider_config.get("default_model"),
+        supported_models=provider_config.get("supported_models"),
+        model=model or (skill.model if skill else None),
+        subject="Chat run model",
+    )
 
     conversation_config, retrieval_config, generation_config = _validate_execution_options(
         conversation_config,
@@ -397,7 +450,7 @@ def _create_pending_run(
     ) or document.workspace_id or (skill.workspace_id if skill else None)
     run = ChatRun(
         id=str(uuid.uuid4()),
-        tenant_id=user.tenant_id,
+        tenant_id=principal.tenant_id,
         workspace_id=workspace_id,
         user_id=user.id,
         session_id=session.id if session else None,
@@ -489,14 +542,16 @@ async def wait_for_chat_run_terminal(
 ) -> ChatRun:
     started = time.monotonic()
     while True:
-        run = db.get(ChatRun, run_id)
-        if run is None or run.tenant_id != tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        run = _load_run_snapshot(
+            db,
+            tenant_id=tenant_id,
+            run_id=run_id,
+            refresh_transaction=True,
+        )
         if run.status in TERMINAL_RUN_STATUSES:
             return run
         if timeout_seconds is not None and time.monotonic() - started > timeout_seconds:
             raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Timed out waiting for chat run")
-        db.expire_all()
         await asyncio.sleep(settings.chat_run_poll_interval_ms / 1000)
 
 
@@ -535,7 +590,7 @@ async def create_chat_run(
     )
     return await wait_for_chat_run_terminal(
         db,
-        tenant_id=user.tenant_id,
+        tenant_id=principal.tenant_id,
         run_id=run.id,
         timeout_seconds=settings.chat_run_request_timeout_seconds,
     )
@@ -551,6 +606,10 @@ def get_run_or_404(db: Session, principal: Principal, run_id: str) -> ChatRun:
     )
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    if run.skill_id:
+        visible_skills = _load_visible_skill_map(db, principal, {run.skill_id})
+        if run.skill_id not in visible_skills:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     return run
 
 
@@ -572,7 +631,12 @@ def list_runs_for_principal(
         stmt = stmt.where(ChatRun.document_id == document_id)
     if session_id:
         stmt = stmt.where(ChatRun.session_id == session_id)
-    return db.scalars(stmt.order_by(ChatRun.created_at.desc())).all()
+    runs = db.scalars(stmt.order_by(ChatRun.created_at.desc())).all()
+    skill_ids = {run.skill_id for run in runs if run.skill_id}
+    if not skill_ids:
+        return runs
+    visible_skills = _load_visible_skill_map(db, principal, skill_ids)
+    return [run for run in runs if run.skill_id is None or run.skill_id in visible_skills]
 
 
 def _claim_session_slot(db: Session, run: ChatRun) -> bool:
@@ -775,7 +839,15 @@ async def run_chat_run(run_id: str) -> None:
             skill=skill,
             explicit_provider_id=run.provider_id,
         )
-        resolved_model = run.model
+        resolved_model = validate_provider_model_selection(
+            provider_id=provider_config.get("provider_id"),
+            provider_type=provider_config.get("provider_type"),
+            provider_name=provider_config.get("name"),
+            default_model=provider_config.get("default_model"),
+            supported_models=provider_config.get("supported_models"),
+            model=run.model,
+            subject="Chat run model",
+        )
 
         history_messages: list[dict] = []
         history_info = {
@@ -879,6 +951,7 @@ async def run_chat_run(run_id: str) -> None:
                 rewrite_response = llm_completion(
                     model=resolved_model,
                     prompt=build_query_rewrite_prompt(run.question, history_context),
+                    raise_on_error=True,
                     request_options=retrieval_options,
                     trace_hook=trace_recorder.append_llm_call if trace_recorder else None,
                     trace_label="query_rewrite",
@@ -890,7 +963,9 @@ async def run_chat_run(run_id: str) -> None:
                     rewritten_query = candidate.strip()
                     retrieval_query = rewritten_query
                     rewrite_applied = retrieval_query != run.question
-            except Exception:
+            except Exception as exc:
+                if is_fatal_llm_model_error(exc):
+                    raise
                 retrieval_query = run.question
 
         run = _touch_run_heartbeat(db, run)
@@ -948,7 +1023,7 @@ async def run_chat_run(run_id: str) -> None:
             run.question,
             selected_nodes,
             context,
-            system_prompt=skill.system_prompt if skill else request_config.get("system_prompt"),
+            system_prompt=request_config.get("system_prompt") or (skill.system_prompt if skill else None),
             history_context=history_context or None,
         )
         completion_kwargs = {
@@ -1107,6 +1182,7 @@ async def stream_skill_run_events(
     document: Document,
     version: DocumentVersion,
     question: str,
+    model: str | None,
     request_config: dict,
     conversation_config: dict | None,
     retrieval_config: dict | None,
@@ -1122,7 +1198,7 @@ async def stream_skill_run_events(
         document=document,
         version=version,
         question=question,
-        model=skill.model,
+        model=model,
         request_config=request_config,
         conversation_config=conversation_config,
         retrieval_config=retrieval_config,
@@ -1158,8 +1234,13 @@ async def stream_skill_run_events(
             try:
                 event = await subscription.next_event(timeout=max(settings.chat_run_poll_interval_ms / 1000, 0.2))
             except asyncio.TimeoutError:
-                current = db.get(ChatRun, run.id)
-                if current is not None and current.status in TERMINAL_RUN_STATUSES:
+                current = _load_run_snapshot(
+                    db,
+                    tenant_id=run.tenant_id,
+                    run_id=run.id,
+                    refresh_transaction=True,
+                )
+                if current.status in TERMINAL_RUN_STATUSES:
                     if current.status == "completed":
                         yield {"event": "status", "data": {"status": "completed"}}
                         yield {"event": "run_completed", "data": serialize_run(current)}
@@ -1181,13 +1262,18 @@ async def stream_skill_run_events(
                     return
                 continue
             except StopAsyncIteration:
-                current = db.get(ChatRun, run.id)
-                if current is not None and current.status == "completed":
+                current = _load_run_snapshot(
+                    db,
+                    tenant_id=run.tenant_id,
+                    run_id=run.id,
+                    refresh_transaction=True,
+                )
+                if current.status == "completed":
                     yield {"event": "status", "data": {"status": "completed"}}
                     yield {"event": "run_completed", "data": serialize_run(current)}
-                elif current is not None and current.status == "cancelled":
+                elif current.status == "cancelled":
                     yield {"event": "status", "data": {"status": "cancelled"}}
-                elif current is not None and current.status == "failed":
+                elif current.status == "failed":
                     yield {"event": "status", "data": {"status": "failed"}}
                     yield {
                         "event": "error",

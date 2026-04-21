@@ -9,14 +9,13 @@ Source startup with Python 3.12 and `uv` remains the recommended development pat
 
 ## Files
 
-- [docker/docker-compose.yml](/Users/shaoqing/workspace/PageIndex-main-integration/docker/docker-compose.yml)
-- [docker/.env.example](/Users/shaoqing/workspace/PageIndex-main-integration/docker/.env.example)
-- [docker/start.sh](/Users/shaoqing/workspace/PageIndex-main-integration/docker/start.sh)
-- [docker/stop.sh](/Users/shaoqing/workspace/PageIndex-main-integration/docker/stop.sh)
-- [Dockerfile](/Users/shaoqing/workspace/PageIndex-main-integration/Dockerfile)
-- [Dockerfile.worker](/Users/shaoqing/workspace/PageIndex-main-integration/Dockerfile.worker)
+- `docker/docker-compose.yml`
+- `docker/.env.example`
+- `docker/Dockerfile`
+- `docker/start.sh`
+- `docker/stop.sh`
 
-## Mode 1: Full Component Mode
+## Mode 1: Complete Component Mode
 
 Recommended deployment mode:
 
@@ -53,11 +52,11 @@ Required runtime settings:
 - `CHAT_RUN_QUEUE_RETRY_DELAY_MS`
 - `CORS_ALLOW_ORIGINS`
 
-Demo defaults in [docker/.env.example](/Users/shaoqing/workspace/PageIndex-main-integration/docker/.env.example) intentionally use:
+Demo defaults in `docker/.env.example` intentionally use:
 
 - `pageindex_service123` for MySQL passwords
 - `pageindex_service123` for Redis password
-- `pageindex_service123` for MinIO access/secret
+- `pageindex_service123` for MinIO access key and secret key
 - `pageindex_service123` for `ADMIN_PASSWORD`
 
 These values are only for:
@@ -70,9 +69,9 @@ Production requirements:
 
 - replace every demo password with a strong random value
 - generate a dedicated long random `SECRET_KEY`
-- do not reuse `pageindex_service123` for production `SECRET_KEY`
+- do not use `pageindex_service123` as a production `SECRET_KEY`
 
-### Full Mode Startup Order
+### Complete Mode Startup Order
 
 1. Start MySQL, Redis, and MinIO.
 2. Configure `docker/.env`.
@@ -103,7 +102,7 @@ Important notes:
 
 - `worker` is only valid when `TASK_QUEUE_BACKEND=redis`
 - if the API is exposed beyond localhost, `API_HOST=0.0.0.0` must be paired with a reverse proxy and TLS
-- reverse-proxy upload size limits must be aligned with `MAX_UPLOAD_BYTES`
+- reverse-proxy upload size must be aligned with `MAX_UPLOAD_BYTES`
 - `STORAGE_BACKEND=minio` stores artifacts in MinIO keys such as `tenants/<tenant_id>/...`
 
 ## Mode 2: Minimal Startup Mode
@@ -134,7 +133,7 @@ Behavior in minimal mode:
 
 - uses SQLite
 - writes files under `DATA_DIR`
-- uses local filesystem storage via [app/services/storage_service.py](/Users/shaoqing/workspace/PageIndex-main-integration/app/services/storage_service.py)
+- uses local filesystem storage via `app/services/storage_service.py`
 - parse/chat execution does not require Redis worker mode
 - no standalone worker process is needed
 - best for development, self-test, and frontend/API integration
@@ -143,8 +142,7 @@ Behavior in minimal mode:
 Source startup example:
 
 ```bash
-cp ../.env.example ../.env
-cd ..
+cp .env.example .env
 uv sync --python 3.12
 uv run alembic upgrade head
 uv run uvicorn app.main:app --host 127.0.0.1 --port 22223
@@ -170,18 +168,18 @@ docker compose --profile local exec api-local alembic upgrade head
 
 ## Updating
 
-### Updating Full Mode
+### Updating Complete Component Mode
 
 1. Pull new code or images.
 2. Stop API and Worker.
-3. Back up MySQL and object-storage data.
+3. Back up MySQL and object storage data.
 4. Execute `alembic upgrade head`.
 5. Start API.
 6. Start Worker.
 7. Check `/healthz`.
 8. Validate critical pages: KB, Skills, Chat, Compliance.
 
-### Updating Minimal Mode
+### Updating Minimal Startup Mode
 
 1. Stop API.
 2. Back up the `data/` directory, including SQLite and local files.
@@ -191,17 +189,17 @@ docker compose --profile local exec api-local alembic upgrade head
 
 ## Frontend
 
-The frontend is not bundled into the Docker stack. Run it separately from [frontend/](/Users/shaoqing/workspace/PageIndex-main-integration/frontend):
+The frontend is not bundled into the Docker stack. Run it separately from `frontend/`:
 
 ```bash
-cd ../frontend
+cd frontend
 npm install
 VITE_API_BASE_URL=http://127.0.0.1:22223/api/v1 npm run dev
 ```
 
 ## Security Notes
 
-- `APP_ENV=prod` rejects weak default `SECRET_KEY` / `ADMIN_PASSWORD`
+- `APP_ENV=prod` rejects weak default `SECRET_KEY` and `ADMIN_PASSWORD`
 - do not expose raw uvicorn directly to the public internet
 - use a reverse proxy for TLS and request-size enforcement
 - align reverse-proxy body-size limits with `MAX_UPLOAD_BYTES`

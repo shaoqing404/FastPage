@@ -57,12 +57,16 @@ def upgrade() -> None:
             op.add_column("chat_runs", sa.Column(name, sa.Text(), nullable=True))
             inspector = sa.inspect(op.get_bind())
         conn.execute(sa.text(f"UPDATE chat_runs SET {name}='{{}}' WHERE {name} IS NULL"))
-        op.alter_column("chat_runs", name, existing_type=sa.Text(), nullable=False)
 
     fk_name = op.f("fk_chat_runs_version_id_document_versions")
-    if not _has_fk(inspector, "chat_runs", fk_name):
-        op.create_foreign_key(fk_name, "chat_runs", "document_versions", ["version_id"], ["id"])
-        inspector = sa.inspect(op.get_bind())
+    with op.batch_alter_table("chat_runs", recreate="auto") as batch_op:
+        for name in json_text_columns:
+            batch_op.alter_column(name, existing_type=sa.Text(), nullable=False)
+        if _has_column(inspector, "chat_runs", "cancel_requested"):
+            batch_op.alter_column("cancel_requested", existing_type=sa.Boolean(), server_default=None)
+        if not _has_fk(inspector, "chat_runs", fk_name):
+            batch_op.create_foreign_key(fk_name, "document_versions", ["version_id"], ["id"])
+    inspector = sa.inspect(op.get_bind())
 
     for index_name, columns in (
         (op.f("ix_chat_runs_version_id"), ["version_id"]),
@@ -73,16 +77,13 @@ def upgrade() -> None:
             op.create_index(index_name, "chat_runs", columns, unique=False)
             inspector = sa.inspect(op.get_bind())
 
-    if _has_column(inspector, "chat_runs", "cancel_requested"):
-        op.alter_column("chat_runs", "cancel_requested", server_default=None)
-
-    if not _has_column(inspector, "chat_sessions", "active_run_id"):
-        op.add_column("chat_sessions", sa.Column("active_run_id", sa.String(length=64), nullable=True))
-        inspector = sa.inspect(op.get_bind())
-
     session_fk_name = op.f("fk_chat_sessions_active_run_id_chat_runs")
-    if not _has_fk(inspector, "chat_sessions", session_fk_name):
-        op.create_foreign_key(session_fk_name, "chat_sessions", "chat_runs", ["active_run_id"], ["id"])
+    if not _has_column(inspector, "chat_sessions", "active_run_id") or not _has_fk(inspector, "chat_sessions", session_fk_name):
+        with op.batch_alter_table("chat_sessions", recreate="auto") as batch_op:
+            if not _has_column(inspector, "chat_sessions", "active_run_id"):
+                batch_op.add_column(sa.Column("active_run_id", sa.String(length=64), nullable=True))
+            if not _has_fk(inspector, "chat_sessions", session_fk_name):
+                batch_op.create_foreign_key(session_fk_name, "chat_runs", ["active_run_id"], ["id"])
         inspector = sa.inspect(op.get_bind())
 
     session_index_name = op.f("ix_chat_sessions_active_run_id")
@@ -91,33 +92,30 @@ def upgrade() -> None:
         inspector = sa.inspect(op.get_bind())
 
     if not _has_index(inspector, "chat_messages", "uq_chat_messages_session_sequence_no"):
-        op.create_index(
-            "uq_chat_messages_session_sequence_no",
-            "chat_messages",
-            ["session_id", "sequence_no"],
-            unique=True,
-        )
+        op.create_index("uq_chat_messages_session_sequence_no", "chat_messages", ["session_id", "sequence_no"], unique=True)
 
 
 def downgrade() -> None:
     op.drop_index("uq_chat_messages_session_sequence_no", table_name="chat_messages")
 
     op.drop_index(op.f("ix_chat_sessions_active_run_id"), table_name="chat_sessions")
-    op.drop_constraint(op.f("fk_chat_sessions_active_run_id_chat_runs"), "chat_sessions", type_="foreignkey")
-    op.drop_column("chat_sessions", "active_run_id")
+    with op.batch_alter_table("chat_sessions", recreate="auto") as batch_op:
+        batch_op.drop_constraint(op.f("fk_chat_sessions_active_run_id_chat_runs"), type_="foreignkey")
+        batch_op.drop_column("active_run_id")
 
     op.drop_index(op.f("ix_chat_runs_worker_node_code"), table_name="chat_runs")
     op.drop_index(op.f("ix_chat_runs_cancel_requested"), table_name="chat_runs")
     op.drop_index(op.f("ix_chat_runs_version_id"), table_name="chat_runs")
-    op.drop_constraint(op.f("fk_chat_runs_version_id_document_versions"), "chat_runs", type_="foreignkey")
-    op.drop_column("chat_runs", "heartbeat_at")
-    op.drop_column("chat_runs", "claimed_at")
-    op.drop_column("chat_runs", "worker_node_code")
-    op.drop_column("chat_runs", "last_error")
-    op.drop_column("chat_runs", "generation_config_json")
-    op.drop_column("chat_runs", "retrieval_config_json")
-    op.drop_column("chat_runs", "conversation_config_json")
-    op.drop_column("chat_runs", "request_config_json")
-    op.drop_column("chat_runs", "cancel_reason")
-    op.drop_column("chat_runs", "cancel_requested")
-    op.drop_column("chat_runs", "version_id")
+    with op.batch_alter_table("chat_runs", recreate="auto") as batch_op:
+        batch_op.drop_constraint(op.f("fk_chat_runs_version_id_document_versions"), type_="foreignkey")
+        batch_op.drop_column("heartbeat_at")
+        batch_op.drop_column("claimed_at")
+        batch_op.drop_column("worker_node_code")
+        batch_op.drop_column("last_error")
+        batch_op.drop_column("generation_config_json")
+        batch_op.drop_column("retrieval_config_json")
+        batch_op.drop_column("conversation_config_json")
+        batch_op.drop_column("request_config_json")
+        batch_op.drop_column("cancel_reason")
+        batch_op.drop_column("cancel_requested")
+        batch_op.drop_column("version_id")
