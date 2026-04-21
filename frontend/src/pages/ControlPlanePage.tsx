@@ -5,9 +5,10 @@ import { Plus, Radar, Save, Server, Trash2, Wand2 } from 'lucide-react';
 import { CopyOnceModal, EmptyState, ExpertDrawer, Field, GlassPanel, InlineAlert, KeyMetric, SectionToolbar, StatusBadge } from '../components/ui/workbench';
 import { authApi } from '../features/auth/api';
 import { providersApi } from '../features/providers/api';
-import { resolveStoredWorkspaceMembership } from '../lib/api/client';
+import { workspacesApi } from '../features/workspaces/api';
+import { resolveStoredWorkspace, resolveStoredWorkspaceMembership, updateStoredWorkspace } from '../lib/api/client';
 import type { ApiKey, ModelProvider } from '../types';
-import { cn, getErrorMessage, inferSystemModelLabel } from '../lib/utils';
+import { cn, getErrorMessage, inferSystemModelLabel, resolveWorkspaceDefaultProvider } from '../lib/utils';
 
 type ProviderDraft = {
   id?: string;
@@ -20,6 +21,9 @@ type ProviderDraft = {
   extra_headers_text: string;
   enabled: boolean;
   is_default: boolean;
+  scope: 'tenant' | 'workspace';
+  share_mode: 'none' | 'all' | 'selected';
+  shared_workspace_ids_text: string;
 };
 
 const defaultProviderDraft = (): ProviderDraft => ({
@@ -32,6 +36,9 @@ const defaultProviderDraft = (): ProviderDraft => ({
   extra_headers_text: '{}',
   enabled: true,
   is_default: false,
+  scope: 'tenant',
+  share_mode: 'all',
+  shared_workspace_ids_text: '',
 });
 
 const parseSupportedModels = (defaultModel: string, raw: string) => {
@@ -54,6 +61,11 @@ const validateProviderDraft = (draft: ProviderDraft) => {
   if (!draft.id && !draft.api_key.trim()) return 'API key is required when creating a provider.';
   const supportedModels = parseSupportedModels(draft.default_model, draft.supported_models_text);
   if (supportedModels.length === 0) return 'At least one supported model is required.';
+  if (draft.scope === 'workspace' && draft.is_default) return 'Workspace providers cannot be marked as tenant default.';
+  if (draft.scope === 'workspace' && draft.share_mode !== 'none') return 'Workspace providers cannot be shared.';
+  if (draft.scope === 'tenant' && draft.share_mode === 'selected' && !draft.shared_workspace_ids_text.trim()) {
+    return 'Selected-share tenant providers require at least one workspace id.';
+  }
   if (draft.extra_headers_text.trim()) {
     let parsed: unknown;
     try {
@@ -107,6 +119,7 @@ const EMPTY_PROVIDERS: ModelProvider[] = [];
 export const ControlPlanePage: React.FC = () => {
   const queryClient = useQueryClient();
   const workspaceMembership = resolveStoredWorkspaceMembership();
+  const workspace = resolveStoredWorkspace();
   const canManageApiKeys = workspaceMembership?.permissions?.can_manage_api_keys === true;
   const canManageProviders = workspaceMembership?.permissions?.can_manage_providers === true;
   const [apiKeyName, setApiKeyName] = useState('');
@@ -133,20 +146,29 @@ export const ControlPlanePage: React.FC = () => {
   const [expertOpen, setExpertOpen] = useState(false);
 
   const apiKeysQuery = useQuery({ queryKey: ['api-keys'], queryFn: authApi.listApiKeys, enabled: canManageApiKeys });
-  const providersQuery = useQuery({ queryKey: ['providers'], queryFn: providersApi.list, enabled: canManageProviders });
+  const providersQuery = useQuery({ queryKey: ['providers', 'all'], queryFn: () => providersApi.list('all'), enabled: canManageProviders });
+  const providerCatalogQuery = useQuery({ queryKey: ['provider-catalog'], queryFn: providersApi.listCatalog });
   const apiKeys = apiKeysQuery.data ?? EMPTY_API_KEYS;
   const providers = providersQuery.data ?? EMPTY_PROVIDERS;
+  const providerCatalog = providerCatalogQuery.data ?? EMPTY_PROVIDERS;
 
   const tenantDefaultProvider = useMemo(() => providers.find((provider) => provider.is_default) || null, [providers]);
+  const workspaceDefaultProvider = useMemo(
+    () => resolveWorkspaceDefaultProvider(workspace?.default_provider_id ?? null, providerCatalog),
+    [providerCatalog, workspace?.default_provider_id],
+  );
+  const tenantProviders = useMemo(() => providers.filter((provider) => provider.scope === 'tenant'), [providers]);
+  const workspaceProviders = useMemo(() => providers.filter((provider) => provider.scope === 'workspace'), [providers]);
+  const systemProviders = useMemo(() => providers.filter((provider) => provider.scope === 'system'), [providers]);
   const visibleApiKeys = useMemo(() => apiKeys.filter((key) => !hiddenApiKeyIds.includes(key.id)), [apiKeys, hiddenApiKeyIds]);
   const cachedApiKeysById = useMemo(() => new Map(cachedApiKeySecrets.map((item) => [item.id, item])), [cachedApiKeySecrets]);
-  const pageError = [apiKeysQuery.error, providersQuery.error]
+  const pageError = [apiKeysQuery.error, providersQuery.error, providerCatalogQuery.error]
     .filter(Boolean)
     .map((error) => getErrorMessage(error, 'Control Plane data failed to load'))
     .join(' · ');
   const apiKeyMetricValue = canManageApiKeys ? visibleApiKeys.length : 'Restricted';
-  const providerMetricValue = canManageProviders ? providers.length : 'Restricted';
-  const defaultProviderMetricValue = canManageProviders ? tenantDefaultProvider?.name || 'None' : 'Restricted';
+  const providerMetricValue = canManageProviders ? providers.length : providerCatalog.length;
+  const defaultProviderMetricValue = workspaceDefaultProvider?.name || tenantDefaultProvider?.name || 'None';
 
   const createApiKeyMutation = useMutation({
     mutationFn: (payload: { name: string }) => authApi.createApiKey(payload),
@@ -199,6 +221,10 @@ export const ControlPlanePage: React.FC = () => {
     mutationFn: async (draft: ProviderDraft) => {
       const extra_headers = draft.extra_headers_text.trim() ? JSON.parse(draft.extra_headers_text) : {};
       const supported_models = parseSupportedModels(draft.default_model, draft.supported_models_text);
+      const shared_workspace_ids = draft.shared_workspace_ids_text
+        .split(/[\n,]/)
+        .map((value) => value.trim())
+        .filter(Boolean);
       const payload = {
         provider_type: draft.provider_type,
         name: draft.name,
@@ -208,6 +234,9 @@ export const ControlPlanePage: React.FC = () => {
         extra_headers,
         enabled: draft.enabled,
         is_default: draft.is_default,
+        scope: draft.scope,
+        share_mode: draft.scope === 'workspace' ? 'none' : draft.share_mode,
+        shared_workspace_ids,
         ...(draft.api_key ? { api_key: draft.api_key } : {}),
       };
       if (draft.id) return providersApi.update(draft.id, payload);
@@ -218,7 +247,7 @@ export const ControlPlanePage: React.FC = () => {
       setProviderSuccess(editingProvider.id ? 'Provider updated.' : 'Provider created.');
       setEditingProvider(defaultProviderDraft());
       setExpertOpen(false);
-      queryClient.setQueryData<ModelProvider[]>(['providers'], (current = []) => {
+      queryClient.setQueryData<ModelProvider[]>(['providers', 'all'], (current = []) => {
         const existingIndex = current.findIndex((item) => item.id === provider.id);
         if (existingIndex >= 0) {
           const next = [...current];
@@ -227,7 +256,8 @@ export const ControlPlanePage: React.FC = () => {
         }
         return [provider, ...current];
       });
-      queryClient.invalidateQueries({ queryKey: ['providers'] });
+      queryClient.invalidateQueries({ queryKey: ['providers', 'all'] });
+      queryClient.invalidateQueries({ queryKey: ['provider-catalog'] });
     },
     onError: (error: unknown) => {
       setProviderSuccess('');
@@ -240,7 +270,8 @@ export const ControlPlanePage: React.FC = () => {
     onSuccess: () => {
       setProviderError('');
       setProviderSuccess('Provider deleted.');
-      queryClient.invalidateQueries({ queryKey: ['providers'] });
+      queryClient.invalidateQueries({ queryKey: ['providers', 'all'] });
+      queryClient.invalidateQueries({ queryKey: ['provider-catalog'] });
       setEditingProvider(defaultProviderDraft());
     },
     onError: (error: unknown) => {
@@ -255,7 +286,7 @@ export const ControlPlanePage: React.FC = () => {
       setProviderError('');
       setProviderSuccess(`Model probe completed for ${provider.name}.`);
       loadProvider(provider);
-      queryClient.setQueryData<ModelProvider[]>(['providers'], (current = []) => {
+      queryClient.setQueryData<ModelProvider[]>(['providers', 'all'], (current = []) => {
         const existingIndex = current.findIndex((item) => item.id === provider.id);
         if (existingIndex >= 0) {
           const next = [...current];
@@ -264,11 +295,40 @@ export const ControlPlanePage: React.FC = () => {
         }
         return [provider, ...current];
       });
-      queryClient.invalidateQueries({ queryKey: ['providers'] });
+      queryClient.invalidateQueries({ queryKey: ['providers', 'all'] });
+      queryClient.invalidateQueries({ queryKey: ['provider-catalog'] });
     },
     onError: (error: unknown) => {
       setProviderSuccess('');
       setProviderError(getErrorMessage(error, 'Provider model probe failed'));
+    },
+  });
+
+  const workspaceDefaultMutation = useMutation({
+    mutationFn: (default_provider_id: string | null) => workspacesApi.updateDefaultProvider({ default_provider_id }),
+    onSuccess: (updatedWorkspace) => {
+      updateStoredWorkspace(updatedWorkspace);
+      setProviderError('');
+      setProviderSuccess(updatedWorkspace.default_provider_id ? 'Workspace default provider updated.' : 'Workspace default provider cleared.');
+      queryClient.invalidateQueries({ queryKey: ['provider-catalog'] });
+    },
+    onError: (error: unknown) => {
+      setProviderSuccess('');
+      setProviderError(getErrorMessage(error, 'Workspace default provider update failed'));
+    },
+  });
+
+  const importProviderMutation = useMutation({
+    mutationFn: (providerId: string) => providersApi.importToWorkspace(providerId),
+    onSuccess: () => {
+      setProviderError('');
+      setProviderSuccess('Tenant provider imported into this workspace.');
+      queryClient.invalidateQueries({ queryKey: ['providers', 'all'] });
+      queryClient.invalidateQueries({ queryKey: ['provider-catalog'] });
+    },
+    onError: (error: unknown) => {
+      setProviderSuccess('');
+      setProviderError(getErrorMessage(error, 'Provider import failed'));
     },
   });
 
@@ -284,6 +344,9 @@ export const ControlPlanePage: React.FC = () => {
       extra_headers_text: JSON.stringify(provider.extra_headers || {}, null, 2),
       enabled: provider.enabled,
       is_default: provider.is_default,
+      scope: provider.scope === 'workspace' ? 'workspace' : 'tenant',
+      share_mode: provider.scope === 'workspace' ? 'none' : provider.share_mode,
+      shared_workspace_ids_text: (provider.shared_workspace_ids || []).join('\n'),
     });
     setProviderError('');
     setProviderSuccess('');
@@ -357,8 +420,8 @@ export const ControlPlanePage: React.FC = () => {
 
       <div className="grid grid-cols-4 gap-4">
         <KeyMetric label="API keys" value={apiKeyMetricValue} hint={canManageApiKeys ? (hiddenApiKeyIds.length > 0 ? `${hiddenApiKeyIds.length} hidden from view` : 'Workspace-scoped programmatic access') : 'Requires can_manage_api_keys'} />
-        <KeyMetric label="Providers" value={providerMetricValue} hint={canManageProviders ? `${providers.filter((provider) => provider.enabled).length} enabled` : 'Requires can_manage_providers'} />
-        <KeyMetric label="Default provider" value={defaultProviderMetricValue} hint={canManageProviders ? (tenantDefaultProvider?.default_model || 'Backend system default may resolve') : 'Capability-gated'} />
+        <KeyMetric label="Providers" value={providerMetricValue} hint={`${providerCatalog.filter((provider) => provider.bindable_in_current_workspace).length} available in current workspace`} />
+        <KeyMetric label="Default provider" value={defaultProviderMetricValue} hint={workspaceDefaultProvider ? 'Workspace default provider' : (tenantDefaultProvider?.default_model || 'Backend system fallback may resolve')} />
         <KeyMetric label="System default" value={inferSystemModelLabel()} hint="Separate from the configured default provider. Current backend env-derived value is not exposed to this frontend API." />
       </div>
 
@@ -485,6 +548,24 @@ export const ControlPlanePage: React.FC = () => {
                 <Field label="Provider name" required>
                   <input value={editingProvider.name} onChange={(event) => setEditingProvider((draft) => ({ ...draft, name: event.target.value }))} className="field" disabled={!canManageProviders} required />
                 </Field>
+                <Field label="Ownership scope" hint="Tenant providers can be shared to workspaces. Workspace providers belong only to the current workspace.">
+                  <select
+                    value={editingProvider.scope}
+                    onChange={(event) =>
+                      setEditingProvider((draft) => ({
+                        ...draft,
+                        scope: event.target.value as 'tenant' | 'workspace',
+                        share_mode: event.target.value === 'workspace' ? 'none' : draft.share_mode === 'none' ? 'all' : draft.share_mode,
+                        is_default: event.target.value === 'workspace' ? false : draft.is_default,
+                      }))
+                    }
+                    className="field"
+                    disabled={!canManageProviders || Boolean(editingProvider.id)}
+                  >
+                    <option value="tenant">tenant</option>
+                    <option value="workspace">workspace</option>
+                  </select>
+                </Field>
                 <Field label="Provider type">
                   <select value={editingProvider.provider_type} onChange={(event) => setEditingProvider((draft) => ({ ...draft, provider_type: event.target.value }))} className="field" disabled={!canManageProviders}>
                     <option value="openai_compatible">openai_compatible</option>
@@ -518,6 +599,31 @@ export const ControlPlanePage: React.FC = () => {
                     placeholder={editingProvider.id ? 'Leave blank to keep existing key' : 'Paste provider key'}
                   />
                 </Field>
+                {editingProvider.scope === 'tenant' && (
+                  <>
+                    <Field label="Share mode">
+                      <select
+                        value={editingProvider.share_mode}
+                        onChange={(event) => setEditingProvider((draft) => ({ ...draft, share_mode: event.target.value as 'none' | 'all' | 'selected' }))}
+                        className="field"
+                        disabled={!canManageProviders}
+                      >
+                        <option value="all">all workspaces</option>
+                        <option value="selected">selected workspaces</option>
+                        <option value="none">not shared</option>
+                      </select>
+                    </Field>
+                    <Field label="Shared workspace ids" hint="Used only when share mode is selected. One id per line or comma-separated.">
+                      <textarea
+                        value={editingProvider.shared_workspace_ids_text}
+                        onChange={(event) => setEditingProvider((draft) => ({ ...draft, shared_workspace_ids_text: event.target.value }))}
+                        className="field min-h-[118px]"
+                        disabled={!canManageProviders || editingProvider.share_mode !== 'selected'}
+                        placeholder="workspace_default_tenant_001"
+                      />
+                    </Field>
+                  </>
+                )}
               </div>
 
               <div className="flex gap-6 rounded-[24px] border border-white/75 bg-white/58 p-4">
@@ -527,7 +633,7 @@ export const ControlPlanePage: React.FC = () => {
                 </label>
                 <label className="flex items-center gap-2 text-sm text-slate-700">
                   <input type="checkbox" checked={editingProvider.is_default} onChange={(event) => setEditingProvider((draft) => ({ ...draft, is_default: event.target.checked }))} disabled={!canManageProviders} />
-                  <span>Default provider</span>
+                  <span>Tenant default provider</span>
                 </label>
               </div>
 
@@ -563,18 +669,42 @@ export const ControlPlanePage: React.FC = () => {
                 <p className="metric-label">Resolution order</p>
                 <ol className="mt-3 space-y-2 text-sm text-slate-700">
                   <li>1. Skill-bound provider</li>
-                  <li>2. Request provider override</li>
-                  <li>3. Configured default provider</li>
-                  <li>4. Backend system default provider</li>
+                  <li>2. Runtime test override</li>
+                  <li>3. Workspace default provider</li>
+                  <li>4. Tenant default provider</li>
+                  <li>5. Backend system default provider</li>
                 </ol>
               </div>
               <div className="surface-soft p-4">
-                <p className="metric-label">Configured default provider</p>
+                <p className="metric-label">Workspace default binding</p>
+                <div className="mt-3 space-y-3">
+                  <select
+                    className="field"
+                    value={workspace?.default_provider_id || ''}
+                    onChange={(event) => workspaceDefaultMutation.mutate(event.target.value || null)}
+                    disabled={!canManageProviders || workspaceDefaultMutation.isPending}
+                  >
+                    <option value="">No workspace default provider</option>
+                    {providerCatalog
+                      .filter((provider) => provider.is_workspace_default_candidate)
+                      .map((provider) => (
+                        <option key={provider.id} value={provider.id}>
+                          {provider.name} ({provider.scope})
+                        </option>
+                      ))}
+                  </select>
+                  <p className="text-sm text-slate-500">
+                    Current workspace default: {workspaceDefaultProvider ? `${workspaceDefaultProvider.name} · ${workspaceDefaultProvider.default_model}` : 'Not configured'}
+                  </p>
+                </div>
+              </div>
+              <div className="surface-soft p-4">
+                <p className="metric-label">Tenant default provider</p>
                 <p className="mt-2 text-sm font-medium text-slate-900">{tenantDefaultProvider ? `${tenantDefaultProvider.name} · ${tenantDefaultProvider.default_model}` : 'Not configured'}</p>
                 <p className="mt-1 text-sm text-slate-500">
                   {tenantDefaultProvider
-                    ? 'If neither skill nor request binds a provider, this configured default is used first.'
-                    : 'If no default provider is configured, the backend system default provider resolves the request.'}
+                    ? 'If neither the skill nor runtime override binds a provider and no workspace default is set, this tenant default is used next.'
+                    : 'If no tenant default provider is configured, resolution falls through to backend system fallback.'}
                 </p>
               </div>
               <div className="surface-soft p-4">
@@ -591,35 +721,56 @@ export const ControlPlanePage: React.FC = () => {
 
       <GlassPanel title="Configured providers" subtitle="Select a provider to edit its connection profile and default model.">
         {canManageProviders ? (
-          <div className="grid grid-cols-2 gap-4">
-            {providers.length > 0 ? (
-              providers.map((provider) => (
-                <button type="button" key={provider.id} onClick={() => loadProvider(provider)} className="list-row w-full text-left">
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <Server size={16} className="text-slate-400" />
-                      <p className="font-medium text-slate-900">{provider.name}</p>
-                    </div>
-                    <p className="text-sm text-slate-500">
-                      {provider.provider_type} · {provider.default_model}
-                    </p>
-                    <p className="text-sm text-slate-400">
-                      {(provider.supported_models || [provider.default_model]).slice(0, 3).join(' · ')}
-                      {(provider.supported_models || []).length > 3 ? ` +${provider.supported_models.length - 3}` : ''}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <StatusBadge tone={provider.enabled ? 'success' : 'danger'}>{provider.enabled ? 'enabled' : 'disabled'}</StatusBadge>
-                    {provider.is_default && <p className="mt-2 text-sm text-blue-600">default provider</p>}
-                  </div>
-                </button>
-              ))
-            ) : (
-              <EmptyState
-                title="No provider profiles yet"
-                description="Create the first provider profile here to replace the old implicit tenant-wide configuration model."
-              />
-            )}
+          <div className="space-y-6">
+            {[
+              { title: 'Tenant Provider Library', providers: tenantProviders, showImport: true },
+              { title: 'Current Workspace Providers', providers: workspaceProviders, showImport: false },
+              { title: 'System fallback', providers: systemProviders, showImport: false },
+            ].map((section) => (
+              <div key={section.title} className="space-y-3">
+                <p className="text-sm font-medium uppercase tracking-[0.18em] text-slate-500">{section.title}</p>
+                <div className="grid grid-cols-2 gap-4">
+                  {section.providers.length > 0 ? (
+                    section.providers.map((provider) => (
+                      <div key={provider.id} className="list-row w-full">
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2">
+                            <Server size={16} className="text-slate-400" />
+                            <p className="font-medium text-slate-900">{provider.name}</p>
+                          </div>
+                          <p className="text-sm text-slate-500">
+                            {provider.provider_type} · {provider.default_model}
+                          </p>
+                          <p className="text-sm text-slate-400">
+                            {provider.scope} · share {provider.share_mode}
+                            {provider.source_provider_name ? ` · imported from ${provider.source_provider_name}` : ''}
+                          </p>
+                        </div>
+                        <div className="space-y-2 text-right">
+                          <StatusBadge tone={provider.enabled ? 'success' : 'danger'}>{provider.enabled ? 'enabled' : 'disabled'}</StatusBadge>
+                          {provider.is_default && <p className="text-sm text-blue-600">tenant default</p>}
+                          <button type="button" className="btn-secondary" onClick={() => loadProvider(provider)}>
+                            <span>Edit</span>
+                          </button>
+                          {section.showImport && provider.available_in_current_workspace && (
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              onClick={() => importProviderMutation.mutate(provider.id)}
+                              disabled={importProviderMutation.isPending}
+                            >
+                              <span>Import</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <EmptyState title={`No ${section.title.toLowerCase()} yet`} description="Nothing is configured in this section yet." />
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
         ) : (
           <EmptyState

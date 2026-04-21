@@ -42,6 +42,10 @@ export interface WorkspaceUpdateInput {
   slug?: string;
 }
 
+export interface WorkspaceDefaultProviderUpdateInput {
+  default_provider_id?: string | null;
+}
+
 export const workspacesApi = {
   list: async (): Promise<WorkspaceListItem[]> => {
     const { data } = await apiClient.get<WorkspaceListItem[]>('/workspaces');
@@ -53,6 +57,10 @@ export const workspacesApi = {
   },
   updateWorkspace: async (payload: WorkspaceUpdateInput, workspaceId?: string): Promise<Workspace> => {
     const { data } = await apiClient.patch<Workspace>(workspacePath(workspaceId), payload);
+    return data;
+  },
+  updateDefaultProvider: async (payload: WorkspaceDefaultProviderUpdateInput, workspaceId?: string): Promise<Workspace> => {
+    const { data } = await apiClient.patch<Workspace>(`${workspacePath(workspaceId)}/default-provider`, payload);
     return data;
   },
   listMembers: async (workspaceId?: string): Promise<WorkspaceMember[]> => {

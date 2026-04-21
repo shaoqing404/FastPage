@@ -49,6 +49,7 @@ class WorkspaceArchiveOut(BaseModel):
     slug: str
     status: str
     is_default: bool
+    default_provider_id: str | None
     archived_at: datetime | None
     archived_by: str | None
     created_at: datetime
@@ -58,6 +59,10 @@ class WorkspaceArchiveOut(BaseModel):
 class WorkspaceUpdateRequest(BaseModel):
     name: str | None = None
     slug: str | None = None
+
+
+class WorkspaceDefaultProviderUpdateRequest(BaseModel):
+    default_provider_id: str | None = None
 
 
 class WorkspaceCreateRequest(BaseModel):
@@ -72,6 +77,7 @@ class WorkspaceListItemOut(BaseModel):
     slug: str
     status: str
     is_default: bool
+    default_provider_id: str | None
     archived_at: datetime | None
     archived_by: str | None
     created_at: datetime

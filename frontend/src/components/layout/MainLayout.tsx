@@ -9,7 +9,6 @@ import {
   KeyRound,
   Layers3,
   LogOut,
-  MessageSquare,
   PlusCircle,
   Settings2,
   ShieldCheck,
@@ -120,7 +119,7 @@ export const MainLayout: React.FC = () => {
       if (!navHovered && !navFocused) {
         setNavVisible(false);
       }
-    }, 5000);
+    }, 15000);
   }, [clearHideTimer, isOverview, navFocused, navHovered]);
 
   useEffect(() => {
@@ -216,7 +215,7 @@ export const MainLayout: React.FC = () => {
               scheduleHide();
             }}
           >
-            <div className="mx-auto flex max-w-[1440px] items-center gap-4 rounded-full px-4 py-3 glass-nav">
+            <div className="mx-auto flex max-w-[1920px] items-center gap-4 rounded-full px-4 py-3 glass-nav">
               <div className="flex shrink-0 items-center gap-4">
                 <div className="flex h-11 w-11 items-center justify-center rounded-full bg-white/85 text-blue-600 shadow-sm">
                   <BarChart3 size={20} />
@@ -240,10 +239,6 @@ export const MainLayout: React.FC = () => {
               </nav>
 
               <div className="ml-auto flex min-w-0 shrink items-center gap-3">
-                <NavLink to="/chat" className={({ isActive }) => cn('nav-pill', isActive && 'nav-pill-active')}>
-                  <MessageSquare size={16} />
-                  <span>Skill Chat</span>
-                </NavLink>
                 <div className="hidden min-w-0 max-w-[240px] shrink rounded-full border border-white/75 bg-white/75 px-4 py-2 lg:block">
                   <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">Workspace</p>
                   {availableWorkspaces.length > 0 ? (

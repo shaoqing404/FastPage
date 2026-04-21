@@ -251,11 +251,11 @@ def _normalize_provider_workspace_scope(db: Session, tenant_id: str, default_wor
                 provider.workspace_id = None
                 provider.updated_at = datetime.utcnow()
                 changed = True
+            if getattr(provider, "share_mode", None) != "none":
+                provider.share_mode = "none"
+                provider.updated_at = datetime.utcnow()
+                changed = True
             continue
-        if provider.workspace_id is None:
-            provider.workspace_id = default_workspace_id
-            provider.updated_at = datetime.utcnow()
-            changed = True
     if changed:
         db.flush()
 
@@ -323,6 +323,8 @@ def init_db() -> None:
                 "enabled": True,
                 "managed_by_system": True,
                 "workspace_id": None,
+                "share_mode": "none",
+                "source_provider_id": None,
             }
             if system_provider is None:
                 system_provider = ModelProvider(
@@ -341,8 +343,11 @@ def init_db() -> None:
 
             _normalize_provider_workspace_scope(db, tenant.id, workspace.id)
             db.flush()
-            if workspace.default_provider_id is None and system_provider.is_default:
-                workspace.default_provider_id = system_provider.id
+            if workspace.default_provider_id == system_provider.id:
+                workspace.default_provider_id = None
+                workspace.updated_at = datetime.utcnow()
+            if workspace.default_provider_id is None and existing_default_provider is not None and existing_default_provider.id != system_provider.id:
+                workspace.default_provider_id = existing_default_provider.id
                 workspace.updated_at = datetime.utcnow()
             db.commit()
         else:

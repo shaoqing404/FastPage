@@ -11,6 +11,7 @@ from .chat_skill import ChatSkill, ChatSkillDocument
 from .chat_run import ChatRun
 from .api_key import ApiKey
 from .model_provider import ModelProvider
+from .provider_workspace_share import ProviderWorkspaceShare
 from .chat_session import ChatSession, ChatMessage
 from .revoked_token import RevokedToken
 from .audit_event import AuditEvent
@@ -33,6 +34,7 @@ __all__ = [
     "ChatRun",
     "ApiKey",
     "ModelProvider",
+    "ProviderWorkspaceShare",
     "ChatSession",
     "ChatMessage",
     "RevokedToken",

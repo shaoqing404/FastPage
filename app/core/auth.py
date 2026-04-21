@@ -198,6 +198,7 @@ def build_auth_response_payload(db: Session, context: AuthContext) -> dict[str, 
             "slug": context.workspace.slug,
             "status": context.workspace.status,
             "is_default": context.workspace.is_default,
+            "default_provider_id": context.workspace.default_provider_id,
         },
         "tenant_membership": {
             "id": context.tenant_membership.id,

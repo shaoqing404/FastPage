@@ -58,6 +58,7 @@ export interface Workspace {
   slug: string;
   status: string;
   is_default: boolean;
+  default_provider_id?: string | null;
   archived_at?: string | null;
   archived_by?: string | null;
   created_at?: string;
@@ -206,6 +207,7 @@ export interface ApiKeyCreateResponse {
 export interface ModelProvider {
   id: string;
   tenant_id: string;
+  workspace_id?: string | null;
   provider_type: string;
   name: string;
   base_url: string;
@@ -215,6 +217,14 @@ export interface ModelProvider {
   enabled: boolean;
   is_default: boolean;
   managed_by_system: boolean;
+  scope: 'tenant' | 'workspace' | 'system';
+  share_mode: 'none' | 'all' | 'selected';
+  shared_workspace_ids: string[];
+  available_in_current_workspace: boolean;
+  bindable_in_current_workspace: boolean;
+  source_provider_id?: string | null;
+  source_provider_name?: string | null;
+  is_workspace_default_candidate: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -285,6 +295,9 @@ export interface KnowledgeBaseDocumentMembership {
   enabled: boolean;
   label: string | null;
   sort_order: number;
+  document_display_name?: string | null;
+  document_source_filename?: string | null;
+  document_status?: ParseStatus | null;
 }
 
 export interface KnowledgeBaseDocumentMembershipInput {
@@ -686,6 +699,8 @@ export interface ChatRunExecutionContext extends Record<string, unknown> {
     id?: string | null;
     name?: string | null;
     type?: string | null;
+    scope?: string | null;
+    resolution_source?: string | null;
   };
   model?: {
     resolved_model?: string | null;

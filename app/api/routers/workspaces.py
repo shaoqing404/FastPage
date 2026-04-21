@@ -13,6 +13,7 @@ from app.schemas.workspace_invites import (
 from app.schemas.workspaces import (
     WorkspaceArchiveOut,
     WorkspaceCreateRequest,
+    WorkspaceDefaultProviderUpdateRequest,
     WorkspaceFounderTransferRequest,
     WorkspaceFounderTransferResponse,
     WorkspaceListItemOut,
@@ -30,6 +31,7 @@ from app.services.workspace_admin_service import (
     remove_workspace_member,
     transfer_workspace_founder,
     update_workspace_metadata,
+    update_workspace_default_provider,
     update_workspace_member,
 )
 from app.services.workspace_invite_service import (
@@ -81,6 +83,16 @@ def update_workspace_metadata_endpoint(
     principal: Principal = Depends(get_current_principal),
 ):
     return update_workspace_metadata(db, principal, workspace_id, payload)
+
+
+@workspace_router.patch("/default-provider", response_model=WorkspaceArchiveOut)
+def update_workspace_default_provider_endpoint(
+    workspace_id: str,
+    payload: WorkspaceDefaultProviderUpdateRequest,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+):
+    return update_workspace_default_provider(db, principal, workspace_id, payload.default_provider_id)
 
 
 @workspace_router.get("/members", response_model=list[WorkspaceMemberOut])

@@ -1,24 +1,57 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Bot, Plus, RefreshCcw, Send, Square, TextQuote, User } from 'lucide-react';
+import { ArrowLeft, Bot, Loader2, Plus, RefreshCcw, Save, Send, Square, TextQuote, Undo, User } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 
 import { AnswerContent } from '../components/ui/AnswerContent';
 import { Field, GlassPanel, InlineAlert, KeyMetric, SectionToolbar, StatusBadge } from '../components/ui/workbench';
 import { chatApi } from '../features/chat/api';
-import { isApiClientError } from '../lib/api/client';
 import { documentsApi } from '../features/documents/api';
 import { knowledgeBasesApi } from '../features/knowledge-bases/api';
 import { providersApi } from '../features/providers/api';
 import { skillsApi } from '../features/skills/api';
-import type { ChatMessage, ChatRun, ChatSession, RunStatus } from '../types';
-import { formatDateTime, formatPageRange, getErrorMessage, resolveProviderById } from '../lib/utils';
+import { isApiClientError, resolveStoredWorkspace } from '../lib/api/client';
+import {
+  describeProviderScope,
+  formatDateTime,
+  formatPageRange,
+  formatRelativeTime,
+  getErrorMessage,
+  getProviderModelOptions,
+  providerSupportsModel,
+  resolveProviderById,
+  resolveProviderModelOption,
+  resolveWorkspaceDefaultProvider,
+} from '../lib/utils';
+import type { ChatMessage, ChatRun, ChatSession, ChatSkill, Document, KnowledgeBase, ModelProvider, RunStatus } from '../types';
 
 type HistoryItem = {
   role: 'user' | 'assistant';
   content: string;
   run?: ChatRun;
   createdAt?: string | null;
+};
+
+type AlertState = {
+  title: string;
+  message: string;
+  code?: string;
+  requestId?: string | null;
+  allowRetry?: boolean;
+};
+
+type SaveFeedback = {
+  tone: 'success' | 'danger';
+  title: string;
+  message: string;
+};
+
+type SkillChatConsoleProps = {
+  skillId: string;
+  skill: ChatSkill;
+  documents: Document[];
+  knowledgeBases: KnowledgeBase[];
+  providers: ModelProvider[];
 };
 
 const DEFAULT_CONVERSATION_CONFIG = {
@@ -29,8 +62,47 @@ const DEFAULT_CONVERSATION_CONFIG = {
   history_token_budget: 1800,
 };
 
-export const SkillChatPage: React.FC = () => {
-  const { skillId = '' } = useParams();
+const SELECTION_MODE_OPTIONS = [
+  { value: 'outline_llm', label: 'Model-guided outline selection' },
+  { value: 'lexical_fallback', label: 'Keyword fallback only' },
+];
+
+const CUSTOM_MODEL_VALUE = '__custom_model__';
+
+const formatResolutionSource = (source: string | null | undefined) => {
+  switch (source) {
+    case 'runtime_override':
+      return 'Runtime draft override';
+    case 'skill_saved_provider':
+      return 'Saved skill provider';
+    case 'workspace_default_provider':
+      return 'Workspace default provider';
+    case 'tenant_default_provider':
+      return 'Tenant default provider';
+    case 'system_default_provider':
+      return 'Backend system fallback';
+    default:
+      return 'Not resolved yet';
+  }
+};
+
+const syncModelForProvider = (currentModel: string, nextProvider: ModelProvider | null) => {
+  const nextDefaultModel = nextProvider?.default_model || '';
+  if (!currentModel.trim()) return nextDefaultModel;
+  if (!providerSupportsModel(nextProvider, currentModel)) return nextDefaultModel || currentModel;
+  return currentModel;
+};
+
+const updateSkillListCache = (skills: ChatSkill[] | undefined, nextSkill: ChatSkill) => {
+  if (!skills) return [nextSkill];
+  const index = skills.findIndex((item) => item.id === nextSkill.id);
+  if (index === -1) return [nextSkill, ...skills];
+  const nextSkills = [...skills];
+  nextSkills[index] = nextSkill;
+  return nextSkills;
+};
+
+const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, documents, knowledgeBases, providers }) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -46,7 +118,12 @@ export const SkillChatPage: React.FC = () => {
   const [streamingRunId, setStreamingRunId] = useState<string | null>(null);
   const [streamingExecutionContext, setStreamingExecutionContext] = useState<ChatRun['execution_context'] | null>(null);
   const [completedStreamRun, setCompletedStreamRun] = useState<ChatRun | null>(null);
-  const [selectedProviderId, setSelectedProviderId] = useState('');
+  const [draftName, setDraftName] = useState(skill.name);
+  const [draftModel, setDraftModel] = useState(skill.model || '');
+  const [draftSystemPrompt, setDraftSystemPrompt] = useState(skill.system_prompt || '');
+  const [draftKnowledgeBaseId, setDraftKnowledgeBaseId] = useState<string | null>(skill.knowledge_base_id || null);
+  const [draftProviderId, setDraftProviderId] = useState(skill.provider_id || '');
+  const [lastRunWasDraft, setLastRunWasDraft] = useState(false);
   const [newSessionTitle, setNewSessionTitle] = useState('');
   const [queryRewriteWithHistory, setQueryRewriteWithHistory] = useState<boolean | null>(null);
   const [includeHistory, setIncludeHistory] = useState<boolean | null>(null);
@@ -58,34 +135,95 @@ export const SkillChatPage: React.FC = () => {
   const [maxContextPages, setMaxContextPages] = useState('');
   const [maxContextTokens, setMaxContextTokens] = useState('');
   const [temperature, setTemperature] = useState('');
-  const [chatError, setChatError] = useState('');
-  const [chatErrorMeta, setChatErrorMeta] = useState<{ code?: string; requestId?: string | null } | null>(null);
+  const [chatAlert, setChatAlert] = useState<AlertState | null>(null);
+  const [saveFeedback, setSaveFeedback] = useState<SaveFeedback | null>(null);
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(skill.updated_at);
+  const storedWorkspace = resolveStoredWorkspace();
 
-  const { data: skills = [] } = useQuery({ queryKey: ['skills'], queryFn: skillsApi.list });
-  const { data: documents = [] } = useQuery({ queryKey: ['documents'], queryFn: () => documentsApi.list() });
-  const { data: knowledgeBases = [] } = useQuery({ queryKey: ['knowledge-bases'], queryFn: knowledgeBasesApi.list });
-  const { data: providers = [] } = useQuery({ queryKey: ['providers'], queryFn: providersApi.list });
-  const { data: sessions = [] } = useQuery({
-    queryKey: ['skill-chat-sessions', skillId],
-    queryFn: () => chatApi.listSkillSessions(skillId),
-    enabled: Boolean(skillId),
-  });
+  const workspaceDefaultProvider = useMemo(
+    () => resolveWorkspaceDefaultProvider(storedWorkspace?.default_provider_id ?? null, providers),
+    [providers, storedWorkspace?.default_provider_id],
+  );
+  const tenantDefaultProvider = useMemo(
+    () => providers.find((provider) => provider.enabled && provider.is_default) || providers.find((provider) => provider.is_default) || null,
+    [providers],
+  );
+  const skillProvider = useMemo(
+    () => resolveProviderById(skill.provider_id || null, providers),
+    [providers, skill.provider_id],
+  );
+  const draftBoundProvider = useMemo(
+    () => resolveProviderById(draftProviderId || null, providers),
+    [draftProviderId, providers],
+  );
+  const draftResolvedProvider = draftBoundProvider || workspaceDefaultProvider || tenantDefaultProvider || null;
+  const savedResolvedProvider = skillProvider || workspaceDefaultProvider || tenantDefaultProvider || null;
+  const savedRunProvider = skillProvider || workspaceDefaultProvider || tenantDefaultProvider || null;
+  const isLegacyUnboundSkill = !skill.provider_id;
 
-  const skill = skills.find((item) => item.id === skillId) || null;
-  const boundKnowledgeBase = knowledgeBases.find((kb) => kb.id === skill?.knowledge_base_id) || null;
-  const skillDocumentIds = skill?.document_ids || [];
-  const skillDocuments = documents.filter((document) => skillDocumentIds.includes(document.id));
-  const skillProvider = skill?.provider_id ? resolveProviderById(skill.provider_id, providers) : null;
-  const requestProvider = !skill?.provider_id ? resolveProviderById(selectedProviderId || null, providers) : null;
-  const tenantDefaultProvider = providers.find((provider) => provider.is_default) || null;
-  const resolvedProvider = skillProvider || requestProvider || tenantDefaultProvider || null;
-  const resolvedModel = skill?.model || resolvedProvider?.default_model || '';
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [pendingQuestion, streamingAnswer, completedStreamRun?.id]);
+
+  useEffect(
+    () => () => {
+      streamAbortRef.current?.abort();
+    },
+    [],
+  );
+
+  const boundKnowledgeBase = useMemo(
+    () => knowledgeBases.find((kb) => kb.id === skill.knowledge_base_id) || null,
+    [knowledgeBases, skill.knowledge_base_id],
+  );
+  const skillDocuments = useMemo(
+    () => documents.filter((document) => skill.document_ids.includes(document.id)),
+    [documents, skill.document_ids],
+  );
+
+  const draftModelOptions = useMemo(
+    () => getProviderModelOptions(draftResolvedProvider),
+    [draftResolvedProvider],
+  );
+  const draftSelectedModelOption = useMemo(
+    () => resolveProviderModelOption(draftResolvedProvider, draftModel),
+    [draftModel, draftResolvedProvider],
+  );
+  const draftModelSelectValue = draftSelectedModelOption || (draftModel.trim() ? CUSTOM_MODEL_VALUE : '');
+
+  const isConfigDirty = (
+    draftName !== skill.name ||
+    draftSystemPrompt !== (skill.system_prompt || '') ||
+    draftModel !== (skill.model || '') ||
+    draftKnowledgeBaseId !== (skill.knowledge_base_id || null) ||
+    draftProviderId !== (skill.provider_id || '')
+  );
+
+  const savedConfigModel = skill.model || savedResolvedProvider?.default_model || '';
+  const savedConfigModelMismatch = Boolean(
+    savedResolvedProvider &&
+    skill.model?.trim() &&
+    !providerSupportsModel(savedResolvedProvider, skill.model),
+  );
+  const savedRunModelMismatch = Boolean(
+    savedRunProvider &&
+    skill.model?.trim() &&
+    !providerSupportsModel(savedRunProvider, skill.model),
+  );
+  const draftModelMismatch = Boolean(
+    draftResolvedProvider &&
+    draftModel.trim() &&
+    !providerSupportsModel(draftResolvedProvider, draftModel),
+  );
+
   const skillConversationDefaults = {
     ...DEFAULT_CONVERSATION_CONFIG,
-    ...((skill?.conversation_config || {}) as Record<string, unknown>),
+    ...((skill.conversation_config || {}) as Record<string, unknown>),
   };
-  const skillRetrievalDefaults = (skill?.retrieval_config || {}) as Record<string, unknown>;
-  const skillGenerationDefaults = (skill?.generation_config || {}) as Record<string, unknown>;
+  const skillRetrievalDefaults = (skill.retrieval_config || {}) as Record<string, unknown>;
+  const skillGenerationDefaults = (skill.generation_config || {}) as Record<string, unknown>;
   const effectiveQueryRewriteWithHistory = queryRewriteWithHistory ?? (skillConversationDefaults.query_rewrite_with_history !== false);
   const effectiveIncludeHistory = includeHistory ?? (skillConversationDefaults.include_history !== false);
   const effectiveIncludeAssistantMessages = includeAssistantMessages ?? (skillConversationDefaults.include_assistant_messages !== false);
@@ -95,8 +233,17 @@ export const SkillChatPage: React.FC = () => {
   const effectiveSelectionMode = selectionMode || (typeof skillRetrievalDefaults.selection_mode === 'string' ? skillRetrievalDefaults.selection_mode : 'outline_llm');
   const effectiveMaxContextPages = maxContextPages || (skillRetrievalDefaults.max_context_pages ? String(skillRetrievalDefaults.max_context_pages) : '');
   const effectiveMaxContextTokens = maxContextTokens || (skillRetrievalDefaults.max_context_tokens ? String(skillRetrievalDefaults.max_context_tokens) : '');
-  const effectiveTemperature = temperature || (skillGenerationDefaults.temperature !== undefined && skillGenerationDefaults.temperature !== null ? String(skillGenerationDefaults.temperature) : '0');
+  const effectiveTemperature = temperature || (
+    skillGenerationDefaults.temperature !== undefined && skillGenerationDefaults.temperature !== null
+      ? String(skillGenerationDefaults.temperature)
+      : '0'
+  );
 
+  const { data: sessions = [] } = useQuery({
+    queryKey: ['skill-chat-sessions', skillId],
+    queryFn: () => chatApi.listSkillSessions(skillId),
+    enabled: Boolean(skillId),
+  });
   const { data: allSkillRuns = [] } = useQuery({
     queryKey: ['skill-runs-all-sessions', skillId],
     queryFn: () => chatApi.listRuns({ skill_id: skillId }),
@@ -113,13 +260,26 @@ export const SkillChatPage: React.FC = () => {
       const existing = summaryMap.get(run.session_id);
       if (!existing) continue;
       existing.runCount += 1;
-      if (!existing.latestRun) existing.latestRun = run;
+      if (!existing.latestRun || new Date(run.created_at).getTime() > new Date(existing.latestRun.created_at).getTime()) {
+        existing.latestRun = run;
+      }
     }
     return Array.from(summaryMap.values());
   }, [allSkillRuns, sessions]);
 
   const effectiveSessionId = searchParams.get('session') || sessionSummaries[0]?.session.id || '';
   const selectedSession = sessionSummaries.find((entry) => entry.session.id === effectiveSessionId)?.session || null;
+
+  useEffect(() => {
+    if (!sessionSummaries.length) return;
+    if (effectiveSessionId && sessionSummaries.some((entry) => entry.session.id === effectiveSessionId)) return;
+    setSearchParams((params) => {
+      const next = new URLSearchParams(params);
+      next.set('session', sessionSummaries[0].session.id);
+      return next;
+    }, { replace: true });
+  }, [effectiveSessionId, sessionSummaries, setSearchParams]);
+
   const { data: sessionMessages = [] } = useQuery({
     queryKey: ['skill-session-messages', skillId, effectiveSessionId],
     queryFn: () => chatApi.getSkillSessionMessages(skillId, effectiveSessionId),
@@ -153,33 +313,11 @@ export const SkillChatPage: React.FC = () => {
   const activeExecutionContext = streamingExecutionContext || activeRun?.execution_context || {};
   const activeStatus = streamingStatus || activeRun?.status || null;
 
-  useEffect(() => {
-    if (!sessionSummaries.length) return;
-    if (effectiveSessionId && sessionSummaries.some((entry) => entry.session.id === effectiveSessionId)) return;
-    setSearchParams((params) => {
-      const next = new URLSearchParams(params);
-      next.set('session', sessionSummaries[0].session.id);
-      return next;
-    }, { replace: true });
-  }, [effectiveSessionId, sessionSummaries, setSearchParams]);
-
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [history]);
-
-  useEffect(
-    () => () => {
-      streamAbortRef.current?.abort();
-    },
-    []
-  );
-
   const createSessionMutation = useMutation({
     mutationFn: (title: string) => chatApi.createSkillSession(skillId, { title }),
     onSuccess: (session) => {
       setNewSessionTitle('');
+      setChatAlert(null);
       setSearchParams((params) => {
         const next = new URLSearchParams(params);
         next.set('session', session.id);
@@ -187,12 +325,62 @@ export const SkillChatPage: React.FC = () => {
       });
       queryClient.invalidateQueries({ queryKey: ['skill-chat-sessions', skillId] });
     },
-    onError: (error: unknown) => setChatError(getErrorMessage(error, 'Failed to create session')),
+    onError: (error: unknown) => {
+      setChatAlert({
+        title: 'Failed to create session',
+        message: getErrorMessage(error, 'Failed to create session'),
+        allowRetry: false,
+      });
+    },
+  });
+
+  const saveSkillMutation = useMutation({
+    mutationFn: async () => {
+      if (!draftProviderId) {
+        throw new Error('Legacy unbound skills must bind a workspace-available provider before they can be saved again.');
+      }
+      return skillsApi.update(skill.id, {
+        name: draftName,
+        system_prompt: draftSystemPrompt,
+        model: draftModel,
+        knowledge_base_id: draftKnowledgeBaseId,
+        description: skill.description ?? null,
+        provider_id: draftProviderId,
+        document_ids: skill.document_ids,
+        request_config: skill.request_config || {},
+        conversation_config: skill.conversation_config || {},
+        retrieval_config: skill.retrieval_config || {},
+        generation_config: skill.generation_config || {},
+      });
+    },
+    onSuccess: (updatedSkill) => {
+      queryClient.setQueryData(['skill', skillId], updatedSkill);
+      queryClient.setQueryData<ChatSkill[] | undefined>(['skills'], (current) => updateSkillListCache(current, updatedSkill));
+      queryClient.invalidateQueries({ queryKey: ['skills'] });
+      setDraftName(updatedSkill.name);
+      setDraftSystemPrompt(updatedSkill.system_prompt || '');
+      setDraftModel(updatedSkill.model || '');
+      setDraftKnowledgeBaseId(updatedSkill.knowledge_base_id || null);
+      setDraftProviderId(updatedSkill.provider_id || '');
+      setLastSavedAt(updatedSkill.updated_at);
+      setSaveFeedback({
+        tone: 'success',
+        title: 'Skill saved',
+        message: 'Saved defaults updated. New provider/model settings now apply to future saved runs.',
+      });
+    },
+    onError: (error: unknown) => {
+      setSaveFeedback({
+        tone: 'danger',
+        title: 'Save failed',
+        message: getErrorMessage(error, 'Failed to save skill'),
+      });
+    },
   });
 
   const runSkillMutation = useMutation({
-    mutationFn: async (q: string) => {
-      if (!skill) throw new Error('Skill not found');
+    mutationFn: async ({ q, isDraft }: { q: string; isDraft: boolean }) => {
+      const resolvedModel = isDraft ? (draftModel || draftResolvedProvider?.default_model || '') : savedConfigModel;
       if (!resolvedModel) throw new Error('No model resolved for this skill');
       const retrieval_config = {
         top_k: Number(effectiveTopK || 5),
@@ -211,42 +399,47 @@ export const SkillChatPage: React.FC = () => {
       const controller = new AbortController();
       streamAbortRef.current = controller;
 
-      return chatApi.streamSkillRun(skill.id, {
-        question: q,
-        provider_id: !skill.provider_id ? selectedProviderId || undefined : undefined,
-        session_id: effectiveSessionId || undefined,
-        ...(effectiveSessionId
-          ? {}
-          : {
-              auto_create_session: true,
-              session_title: newSessionTitle.trim() || skill.name,
-            }),
-        conversation_config,
-        retrieval_config,
-        generation_config,
-      }, {
-        signal: controller.signal,
-        onRunStarted: ({ run_id, created_at }) => {
-          setStreamingRunId(run_id);
-          setStreamingRunCreatedAt(created_at);
+      return chatApi.streamSkillRun(
+        skill.id,
+        {
+          question: q,
+          model: isDraft ? (draftModel || draftResolvedProvider?.default_model || undefined) : undefined,
+          system_prompt: isDraft ? draftSystemPrompt : undefined,
+          provider_id: isDraft ? (draftProviderId || undefined) : undefined,
+          session_id: effectiveSessionId || undefined,
+          ...(effectiveSessionId
+            ? {}
+            : {
+                auto_create_session: true,
+                session_title: newSessionTitle.trim() || skill.name,
+              }),
+          conversation_config,
+          retrieval_config,
+          generation_config,
         },
-        onStatus: ({ status }) => {
-          setStreamingStatus(status);
+        {
+          signal: controller.signal,
+          onRunStarted: ({ run_id, created_at }) => {
+            setStreamingRunId(run_id);
+            setStreamingRunCreatedAt(created_at);
+          },
+          onStatus: ({ status }) => {
+            setStreamingStatus(status);
+          },
+          onContext: ({ execution_context }) => {
+            setStreamingExecutionContext(execution_context);
+          },
+          onAnswerDelta: ({ delta }) => {
+            setStreamingAnswer((current) => `${current}${delta}`);
+          },
         },
-        onContext: ({ execution_context }) => {
-          setStreamingExecutionContext(execution_context);
-        },
-        onAnswerDelta: ({ delta }) => {
-          setStreamingAnswer((current) => `${current}${delta}`);
-        },
-      });
+      );
     },
-    onMutate: (q) => {
+    onMutate: ({ q }) => {
       setLastQuestion(q);
       setPendingQuestion(q);
       setIsStreaming(true);
-      setChatError('');
-      setChatErrorMeta(null);
+      setChatAlert(null);
       setCompletedStreamRun(null);
       setStreamingAnswer('');
       setStreamingRunId(null);
@@ -260,6 +453,7 @@ export const SkillChatPage: React.FC = () => {
       setPendingQuestion(null);
       setIsStreaming(false);
       setQuestion('');
+      setChatAlert(null);
       if (run.session_id && run.session_id !== effectiveSessionId) {
         setSearchParams((params) => {
           const next = new URLSearchParams(params);
@@ -278,7 +472,7 @@ export const SkillChatPage: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['skill-session-messages', skillId, effectiveSessionId] });
       queryClient.invalidateQueries({ queryKey: ['skill-chat-sessions', skillId] });
     },
-    onError: (error: unknown, q: string) => {
+    onError: (error: unknown, { q }) => {
       streamAbortRef.current = null;
       setPendingQuestion(null);
       setIsStreaming(false);
@@ -289,11 +483,14 @@ export const SkillChatPage: React.FC = () => {
       setStreamingStatus(null);
       setStreamingExecutionContext(null);
       if (error instanceof DOMException && error.name === 'AbortError') {
-        setChatError('');
-        setChatErrorMeta(null);
+        setChatAlert(null);
       } else {
-        setChatError(getErrorMessage(error, 'Skill run failed'));
-        setChatErrorMeta(isApiClientError(error) ? { code: error.code, requestId: error.requestId } : null);
+        setChatAlert({
+          title: 'Skill run failed',
+          message: getErrorMessage(error, 'Skill run failed'),
+          ...(isApiClientError(error) ? { code: error.code, requestId: error.requestId } : {}),
+          allowRetry: true,
+        });
       }
       queryClient.invalidateQueries({ queryKey: ['skill-runs-all-sessions', skillId] });
       queryClient.invalidateQueries({ queryKey: ['skill-session-runs', skillId, effectiveSessionId] });
@@ -302,36 +499,46 @@ export const SkillChatPage: React.FC = () => {
     },
   });
 
-  const handleSubmit = (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!question.trim() || isStreaming) return;
-    runSkillMutation.mutate(question.trim());
+  const handleDraftProviderChange = (nextProviderId: string) => {
+    const nextProvider = resolveProviderById(nextProviderId || null, providers);
+    setDraftProviderId(nextProviderId);
+    setDraftModel((current) => syncModelForProvider(current, nextProvider));
+    if (saveFeedback?.tone === 'success') setSaveFeedback(null);
   };
 
-  if (!skill) {
-    return (
-      <div className="space-y-8">
-        <SectionToolbar title="Skill chat" description="This skill route could not be resolved." />
-        <GlassPanel title="Missing skill" subtitle="The requested skill was not found.">
-          <div className="empty-state min-h-[320px]">
-            <p className="text-base font-medium text-slate-900">Skill not found</p>
-            <Link to="/chat" className="btn-primary">
-              <ArrowLeft size={16} />
-              <span>Back to skills</span>
-            </Link>
-          </div>
-        </GlassPanel>
-      </div>
-    );
-  }
+  const handleDraftModelSelectChange = (value: string) => {
+    if (value === CUSTOM_MODEL_VALUE) {
+      if (!draftModel.trim()) {
+        setDraftModel(draftResolvedProvider?.default_model || '');
+      }
+      return;
+    }
+    setDraftModel(value);
+    if (saveFeedback?.tone === 'success') setSaveFeedback(null);
+  };
+
+  const markDraftEdited = <T,>(setter: React.Dispatch<React.SetStateAction<T>>) => (value: React.SetStateAction<T>) => {
+    setter(value);
+    if (saveFeedback?.tone === 'success') setSaveFeedback(null);
+  };
+
+  const handleRun = (isDraft: boolean) => {
+    const trimmedQuestion = question.trim();
+    if (!trimmedQuestion || isStreaming) return;
+    if (isDraft && !draftResolvedProvider) return;
+    if (isDraft && draftModelMismatch) return;
+    if (!isDraft && savedRunModelMismatch) return;
+    setLastRunWasDraft(isDraft);
+    runSkillMutation.mutate({ q: trimmedQuestion, isDraft });
+  };
 
   return (
     <div className="space-y-8">
       <SectionToolbar
         title={skill.name}
-        description={`Skill console${boundKnowledgeBase ? ` · ${boundKnowledgeBase.name}` : ''}. Sessions · Conversation · Runtime telemetry.`}
+        description={`Skill configuration and test console${boundKnowledgeBase ? ` · ${boundKnowledgeBase.name}` : ''}. Saved defaults on the right, run history in the center.`}
         actions={
-          <Link to="/chat" className="btn-secondary">
+          <Link to="/skills" className="btn-secondary">
             <ArrowLeft size={16} />
             <span>Back to skills</span>
           </Link>
@@ -343,8 +550,18 @@ export const SkillChatPage: React.FC = () => {
           <div className="scroll-area max-h-[760px] space-y-4 overflow-auto pr-1">
             <div className="space-y-3 rounded-[24px] border border-white/75 bg-white/58 p-4">
               <div className="flex gap-2">
-                <input value={newSessionTitle} onChange={(event) => setNewSessionTitle(event.target.value)} className="field flex-1" placeholder="Create skill session" />
-                <button type="button" className="btn-secondary" onClick={() => createSessionMutation.mutate(newSessionTitle.trim())} disabled={createSessionMutation.isPending}>
+                <input
+                  value={newSessionTitle}
+                  onChange={(event) => setNewSessionTitle(event.target.value)}
+                  className="field flex-1"
+                  placeholder="Create skill session"
+                />
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => createSessionMutation.mutate(newSessionTitle.trim())}
+                  disabled={createSessionMutation.isPending}
+                >
                   <Plus size={16} />
                 </button>
               </div>
@@ -382,26 +599,39 @@ export const SkillChatPage: React.FC = () => {
 
         <GlassPanel title={skill.name} subtitle={selectedSession?.title || 'No session selected'}>
           <div className="space-y-4">
-            {chatError && (
+            {chatAlert && (
               <InlineAlert
                 tone="danger"
-                title="Skill run failed"
+                title={chatAlert.title}
                 action={
-                  <button type="button" className="btn-secondary" disabled={!lastQuestion || isStreaming} onClick={() => lastQuestion && runSkillMutation.mutate(lastQuestion)}>
-                    <RefreshCcw size={16} />
-                    <span>Retry</span>
-                  </button>
+                  chatAlert.allowRetry ? (
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      disabled={!lastQuestion || isStreaming}
+                      onClick={() => lastQuestion && runSkillMutation.mutate({ q: lastQuestion, isDraft: lastRunWasDraft })}
+                    >
+                      <RefreshCcw size={16} />
+                      <span>Retry</span>
+                    </button>
+                  ) : undefined
                 }
               >
                 <div className="space-y-1">
-                  <p>{chatError}</p>
-                  {chatErrorMeta && (
+                  <p>{chatAlert.message}</p>
+                  {(chatAlert.code || chatAlert.requestId) && (
                     <p className="text-xs text-slate-400">
-                      {chatErrorMeta.code && <span>Code: {chatErrorMeta.code}</span>}
-                      {chatErrorMeta.requestId && <span> · Request ID: {chatErrorMeta.requestId}</span>}
+                      {chatAlert.code && <span>Code: {chatAlert.code}</span>}
+                      {chatAlert.requestId && <span> · Request ID: {chatAlert.requestId}</span>}
                     </p>
                   )}
-                  <p className="text-sm text-slate-500">Provider: {activeExecutionContext.provider?.name || resolvedProvider?.name || 'Backend system default'} · Model: {activeExecutionContext.model?.resolved_model || resolvedModel || 'N/A'}</p>
+                  <p className="text-sm text-slate-500">
+                    Provider: {activeExecutionContext.provider?.name || savedRunProvider?.name || 'Backend system default'} ·
+                    {' '}Model: {activeExecutionContext.model?.resolved_model || savedConfigModel || 'N/A'}
+                  </p>
+                  <p className="text-sm text-slate-500">
+                    Resolved via: {formatResolutionSource(activeExecutionContext.provider?.resolution_source)}
+                  </p>
                 </div>
               </InlineAlert>
             )}
@@ -411,11 +641,14 @@ export const SkillChatPage: React.FC = () => {
                 <div className="empty-state min-h-[420px]">
                   <TextQuote size={22} className="text-blue-600" />
                   <p className="text-base font-medium text-slate-900">Start a conversation</p>
-                  <p className="text-sm text-slate-500">Create a session on the left, then ask a question against this skill's knowledge context.</p>
+                  <p className="text-sm text-slate-500">Create a session on the left, then ask a question against this skill&apos;s saved knowledge context.</p>
                 </div>
               ) : (
                 history.map((message, index) => (
-                  <div key={`${message.role}-${index}`} className={`rounded-[28px] border px-5 py-4 ${message.role === 'assistant' ? 'border-white/85 bg-white/82' : 'border-white/70 bg-white/56'}`}>
+                  <div
+                    key={`${message.role}-${index}`}
+                    className={`rounded-[28px] border px-5 py-4 ${message.role === 'assistant' ? 'border-white/85 bg-white/82' : 'border-white/70 bg-white/56'}`}
+                  >
                     <div className="mb-3 flex items-center gap-3">
                       <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/82 text-blue-600">
                         {message.role === 'assistant' ? <Bot size={18} /> : <User size={18} />}
@@ -467,7 +700,13 @@ export const SkillChatPage: React.FC = () => {
               )}
             </div>
 
-            <form onSubmit={handleSubmit} className="rounded-[28px] border border-white/80 bg-white/72 p-4">
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                handleRun(false);
+              }}
+              className="rounded-[28px] border border-white/80 bg-white/72 p-4"
+            >
               <div className="flex gap-3">
                 <textarea
                   value={question}
@@ -483,7 +722,7 @@ export const SkillChatPage: React.FC = () => {
                     onClick={() => {
                       streamAbortRef.current?.abort();
                       if (streamingRunId) {
-                         chatApi.cancelRun(streamingRunId).catch(() => {});
+                        chatApi.cancelRun(streamingRunId).catch(() => {});
                       }
                     }}
                   >
@@ -491,10 +730,27 @@ export const SkillChatPage: React.FC = () => {
                     <span>Cancel</span>
                   </button>
                 ) : (
-                  <button type="submit" className="btn-primary self-end" disabled={!question.trim() || isStreaming}>
-                    <Send size={16} />
-                    <span>Send</span>
-                  </button>
+                  <div className="flex flex-col gap-2 self-end">
+                    {isConfigDirty && (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => handleRun(true)}
+                        disabled={!question.trim() || isStreaming || draftModelMismatch}
+                      >
+                        <Bot size={16} />
+                        <span>Test with draft</span>
+                      </button>
+                    )}
+                    <button
+                      type="submit"
+                      className="btn-primary w-full justify-center"
+                      disabled={!question.trim() || isStreaming || savedRunModelMismatch}
+                    >
+                      <Send size={16} />
+                      <span>{isConfigDirty ? 'Send (Saved config)' : 'Send'}</span>
+                    </button>
+                  </div>
                 )}
               </div>
             </form>
@@ -502,48 +758,180 @@ export const SkillChatPage: React.FC = () => {
         </GlassPanel>
 
         <div className="space-y-6">
-          <GlassPanel title="Settings" subtitle="Skill-scoped execution settings and knowledge context.">
+          <GlassPanel title="Settings" subtitle="Saved skill defaults first. Run-only overrides stay separate below.">
             <div className="space-y-4">
-              {boundKnowledgeBase ? (
-                <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4">
-                  <div className="mb-1 text-sm font-medium text-slate-900">Knowledge Base</div>
-                  <div className="text-sm font-medium text-blue-700">{boundKnowledgeBase.name}</div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    {boundKnowledgeBase.documents.length} document(s) bound
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900">Saved skill defaults</h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Provider, model, knowledge base, and system prompt are persisted on the skill. Draft KB changes still apply only after save.
+                  </p>
+                  {lastSavedAt && (
+                    <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">
+                      Last saved {formatRelativeTime(lastSavedAt)} · {formatDateTime(lastSavedAt)}
+                    </p>
+                  )}
+                </div>
+                {isConfigDirty && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDraftName(skill.name);
+                        setDraftSystemPrompt(skill.system_prompt || '');
+                        setDraftModel(skill.model || '');
+                        setDraftKnowledgeBaseId(skill.knowledge_base_id || null);
+                        setDraftProviderId(skill.provider_id || '');
+                        setSaveFeedback(null);
+                      }}
+                      className="btn-secondary text-slate-500"
+                    >
+                      <Undo size={14} />
+                      <span>Revert</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => saveSkillMutation.mutate()}
+                      disabled={saveSkillMutation.isPending || draftModelMismatch || !draftModel.trim() || !draftProviderId}
+                      className="btn-primary"
+                    >
+                      {saveSkillMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                      <span>{saveSkillMutation.isPending ? 'Saving…' : 'Save skill'}</span>
+                    </button>
                   </div>
-                </div>
-              ) : skillDocuments.length > 0 ? (
-                <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4">
-                  <div className="mb-1 text-sm font-medium text-slate-900">Legacy Target Documents</div>
-                  <div className="text-sm text-slate-700">{skillDocuments.length} document(s) bound</div>
-                  <div className="mt-1 text-xs text-slate-500">Upgrade skill to use a Knowledge Base</div>
-                </div>
-              ) : null}
+                )}
+              </div>
 
-              <Field label="Provider override" hint={skill.provider_id ? 'This skill is provider-bound. Request override is ignored by the backend.' : 'Optional override when the skill itself does not bind a provider.'}>
-                <select value={skill.provider_id || selectedProviderId} onChange={(event) => setSelectedProviderId(event.target.value)} className="field" disabled={Boolean(skill.provider_id)}>
-                  <option value="">Use resolved provider</option>
-                  {providers.map((provider) => (
-                    <option key={provider.id} value={provider.id}>
-                      {provider.name}
+              {saveFeedback && (
+                <InlineAlert tone={saveFeedback.tone} title={saveFeedback.title}>
+                  {saveFeedback.message}
+                </InlineAlert>
+              )}
+
+              <div className="rounded-[24px] border border-white/75 bg-white/58 p-4">
+                <p className="text-sm font-medium text-slate-900">Resolved provider chain</p>
+                <div className="mt-3 space-y-2 text-sm text-slate-500">
+                  <p>Saved skill provider: {skillProvider ? `${skillProvider.name} (${describeProviderScope(skillProvider)})` : 'Not bound on this skill'}</p>
+                  <p>Workspace default provider: {workspaceDefaultProvider ? `${workspaceDefaultProvider.name} (${describeProviderScope(workspaceDefaultProvider)})` : 'Not configured'}</p>
+                  <p>Tenant default provider: {tenantDefaultProvider ? `${tenantDefaultProvider.name} (${describeProviderScope(tenantDefaultProvider)})` : 'Not configured or not available here'}</p>
+                  <p>System default provider: backend-only hidden fallback</p>
+                </div>
+              </div>
+
+              {isLegacyUnboundSkill && !draftProviderId && (
+                <InlineAlert tone="warning" title="Legacy unbound skill">
+                  This skill does not have a saved provider yet. You can still inspect and test it, but saving now requires binding one workspace-available provider explicitly.
+                </InlineAlert>
+              )}
+
+              <Field label="Skill Name">
+                <input
+                  value={draftName}
+                  onChange={(event) => markDraftEdited(setDraftName)(event.target.value)}
+                  className="field"
+                />
+              </Field>
+
+              <Field label="System prompt" required>
+                <textarea
+                  value={draftSystemPrompt}
+                  onChange={(event) => markDraftEdited(setDraftSystemPrompt)(event.target.value)}
+                  className="field min-h-[120px]"
+                  required
+                />
+              </Field>
+
+              <Field label="Knowledge Base" hint="Only one knowledge base can be bound today. Draft KB changes do not affect runs until you save.">
+                <select
+                  value={draftKnowledgeBaseId || ''}
+                  onChange={(event) => markDraftEdited(setDraftKnowledgeBaseId)(event.target.value || null)}
+                  className="field"
+                >
+                  <option value="">No Knowledge Base bound</option>
+                  {knowledgeBases.map((kb) => (
+                    <option key={kb.id} value={kb.id}>
+                      {kb.name}
                     </option>
                   ))}
                 </select>
+                {skill.knowledge_base_id !== draftKnowledgeBaseId && (
+                  <p className="mt-1 text-xs text-amber-600">Knowledge Base changes stay draft-only until you save the skill.</p>
+                )}
               </Field>
+
+              <Field label="Provider" hint="This is saved on the skill. Only current-workspace bindable providers appear here. System fallback is not selectable.">
+                <select value={draftProviderId} onChange={(event) => handleDraftProviderChange(event.target.value)} className="field">
+                  <option value="" disabled>
+                    {isLegacyUnboundSkill ? 'Select a provider to bind this skill' : 'Select a provider'}
+                  </option>
+                  {providers.map((provider) => (
+                    <option key={provider.id} value={provider.id}>
+                      {provider.name}{provider.scope === 'workspace' ? ' (workspace)' : provider.is_default ? ' (tenant default)' : ''}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-slate-500">
+                  Saved config resolution if left unbound today: {draftResolvedProvider?.name || 'Backend system default'}
+                </p>
+              </Field>
+
+              <Field
+                label="Model"
+                hint={draftResolvedProvider ? `Default model: ${draftResolvedProvider.default_model}` : 'Select a provider first to get provider-aware model suggestions.'}
+              >
+                <div className="space-y-3">
+                  {draftModelOptions.length > 0 ? (
+                    <select
+                      value={draftModelSelectValue}
+                      onChange={(event) => handleDraftModelSelectChange(event.target.value)}
+                      className="field"
+                    >
+                      <option value="" disabled>Select a model</option>
+                      {draftModelOptions.map((model) => (
+                        <option key={model} value={model}>
+                          {model}{model === draftResolvedProvider?.default_model ? ' (default)' : ''}
+                        </option>
+                      ))}
+                      <option value={CUSTOM_MODEL_VALUE}>Custom model…</option>
+                    </select>
+                  ) : null}
+                  {(draftModelOptions.length === 0 || draftModelSelectValue === CUSTOM_MODEL_VALUE) && (
+                    <input
+                      value={draftModel}
+                      onChange={(event) => markDraftEdited(setDraftModel)(event.target.value)}
+                      className="field"
+                      placeholder={draftResolvedProvider?.default_model || 'Enter model name'}
+                    />
+                  )}
+                </div>
+              </Field>
+
+              {draftModelMismatch && draftResolvedProvider && (
+                <InlineAlert tone="warning" title="Provider-model mismatch">
+                  {`Model "${draftModel}" is not in ${draftResolvedProvider.name}'s supported list.`}
+                </InlineAlert>
+              )}
+
+              {savedConfigModelMismatch && savedResolvedProvider && !isConfigDirty && (
+                <InlineAlert tone="warning" title="Saved config needs attention">
+                  {`Saved model "${skill.model}" is no longer in ${savedResolvedProvider.name}'s supported list.`}
+                </InlineAlert>
+              )}
 
               <div className="rounded-[24px] border border-white/75 bg-white/58 p-4">
                 <div className="mb-4">
-                  <p className="text-sm font-medium text-slate-900">Conversation override</p>
-                  <p className="mt-1 text-sm text-slate-500">These values start from the skill template and only affect this run.</p>
+                  <p className="text-sm font-medium text-slate-900">Run-time controls</p>
+                  <p className="mt-1 text-sm text-slate-500">These do not change the saved skill. Provider changes are tested through the draft provider above, not through Send (Saved config).</p>
                 </div>
+
                 <div className="grid grid-cols-2 gap-4">
                   <label className="flex items-center gap-2 text-sm text-slate-700">
                     <input type="checkbox" checked={effectiveQueryRewriteWithHistory} onChange={(event) => setQueryRewriteWithHistory(event.target.checked)} />
-                    <span>Rewrite retrieval query with history</span>
+                    <span>Rewrite the search query using recent chat history</span>
                   </label>
                   <label className="flex items-center gap-2 text-sm text-slate-700">
                     <input type="checkbox" checked={effectiveIncludeHistory} onChange={(event) => setIncludeHistory(event.target.checked)} />
-                    <span>Include history in generation</span>
+                    <span>Include recent chat history in the answer prompt</span>
                   </label>
                   <label className="flex items-center gap-2 text-sm text-slate-700">
                     <input
@@ -552,36 +940,42 @@ export const SkillChatPage: React.FC = () => {
                       onChange={(event) => setIncludeAssistantMessages(event.target.checked)}
                       disabled={!effectiveIncludeHistory}
                     />
-                    <span>Include assistant messages</span>
+                    <span>Include previous assistant replies in that history</span>
                   </label>
-                  <Field label="History turn limit">
+                  <Field label="Max user turns from history" hint="Counts recent user turns. Matching assistant replies are included only when enabled above.">
                     <input type="number" min="1" value={effectiveHistoryTurnLimit} onChange={(event) => setHistoryTurnLimit(event.target.value)} className="field" />
                   </Field>
-                  <Field label="History token budget">
+                  <Field label="History token budget" hint="Approximate cap for chat history included in this run.">
                     <input type="number" min="1" value={effectiveHistoryTokenBudget} onChange={(event) => setHistoryTokenBudget(event.target.value)} className="field" />
                   </Field>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Top K">
+                <Field label="Sections to retrieve" hint="Maximum outline sections selected before answer generation starts.">
                   <input type="number" min="1" value={effectiveTopK} onChange={(event) => setTopK(event.target.value)} className="field" />
                 </Field>
-                <Field label="Selection mode">
+                <Field
+                  label="Section selection method"
+                  hint="Model-guided asks the model to choose outline sections first. Keyword fallback skips that step and matches section titles lexically."
+                >
                   <select value={effectiveSelectionMode} onChange={(event) => setSelectionMode(event.target.value)} className="field">
-                    <option value="outline_llm">outline_llm</option>
-                    <option value="lexical_fallback">lexical_fallback</option>
+                    {SELECTION_MODE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
                   </select>
                 </Field>
-                <Field label="Max context pages">
+                <Field label="Max PDF pages in answer context" hint="Optional hard cap on the number of PDF pages pulled into the final answer context.">
                   <input type="number" min="1" value={effectiveMaxContextPages} onChange={(event) => setMaxContextPages(event.target.value)} className="field" placeholder="Optional" />
                 </Field>
-                <Field label="Max context tokens">
+                <Field label="Max excerpt tokens in answer context" hint="Optional approximate cap on excerpt tokens after section selection.">
                   <input type="number" min="1" value={effectiveMaxContextTokens} onChange={(event) => setMaxContextTokens(event.target.value)} className="field" placeholder="Optional" />
                 </Field>
               </div>
 
-              <Field label="Temperature">
+              <Field label="Answer temperature" hint="0 is most deterministic. Backend accepts values from 0 to 2.">
                 <input type="number" min="0" step="0.1" value={effectiveTemperature} onChange={(event) => setTemperature(event.target.value)} className="field" />
               </Field>
             </div>
@@ -591,8 +985,9 @@ export const SkillChatPage: React.FC = () => {
             <div className="space-y-5">
               <div className="grid grid-cols-2 gap-3">
                 <KeyMetric label="Session" value={selectedSession?.title || 'No session'} />
-                <KeyMetric label="Model" value={activeExecutionContext.model?.resolved_model || resolvedModel || 'N/A'} />
-                <KeyMetric label="Provider" value={activeExecutionContext.provider?.name || resolvedProvider?.name || 'Backend system default'} />
+                <KeyMetric label="Model" value={activeExecutionContext.model?.resolved_model || savedConfigModel || 'N/A'} />
+                <KeyMetric label="Provider" value={activeExecutionContext.provider?.name || savedRunProvider?.name || 'Backend system default'} />
+                <KeyMetric label="Provider source" value={formatResolutionSource(activeExecutionContext.provider?.resolution_source)} />
                 <KeyMetric label="Citations" value={displayRun?.citations.length ?? 0} />
               </div>
 
@@ -639,73 +1034,34 @@ export const SkillChatPage: React.FC = () => {
                     </div>
                   )}
 
-                  <div className="surface-soft p-4">
-                    <p className="metric-label">Execution context</p>
-                    <dl className="mt-3 space-y-2 text-sm text-slate-600">
-                      <div className="flex items-start justify-between gap-4">
-                        <dt>History messages</dt>
-                        <dd>{activeExecutionContext.conversation?.history_messages_used ?? 0}</dd>
-                      </div>
-                      <div className="flex items-start justify-between gap-4">
-                        <dt>History turns</dt>
-                        <dd>{activeExecutionContext.conversation?.history_turns_used ?? 0}</dd>
-                      </div>
-                      <div className="flex items-start justify-between gap-4">
-                        <dt>History token estimate</dt>
-                        <dd>{activeExecutionContext.conversation?.history_token_estimate ?? 0}</dd>
-                      </div>
-                      <div className="flex items-start justify-between gap-4">
-                        <dt>Retrieval query</dt>
-                        <dd className="max-w-[60%] text-right break-all">{activeExecutionContext.retrieval?.query || 'N/A'}</dd>
-                      </div>
-                      <div className="flex items-start justify-between gap-4">
-                        <dt>Rewrite applied</dt>
-                        <dd>{activeExecutionContext.retrieval?.rewrite_applied ? 'Yes' : 'No'}</dd>
-                      </div>
-                      {activeExecutionContext.retrieval?.rewritten_query && (
-                        <div className="flex items-start justify-between gap-4">
-                          <dt>Rewritten query</dt>
-                          <dd className="max-w-[60%] text-right break-all">{activeExecutionContext.retrieval.rewritten_query}</dd>
-                        </div>
-                      )}
-                    </dl>
-                  </div>
-
-                  {isStreaming && (
+                  {(activeExecutionContext.retrieval?.query || activeExecutionContext.retrieval?.rewritten_query) && (
                     <div className="surface-soft p-4">
-                      <p className="metric-label">Streaming</p>
-                      <p className="mt-2 text-sm text-slate-600">Receiving live answer deltas. Final citations, metrics, and knowledge context details arrive when the run completes.</p>
-                    </div>
-                  )}
-
-                  {displayRun && (
-                    <div className="space-y-3">
-                      <p className="metric-label">Citations</p>
-                      {displayRun.citations.length > 0 ? (
-                        <div className="space-y-2">
-                          {displayRun.citations.map((citation, index) => (
-                            <div key={`${citation.snippet_id || citation.node_id || index}`} className="surface-soft p-4">
-                              <div className="flex items-center justify-between gap-3">
-                                <div className="min-w-0">
-                                  <p className="truncate font-medium text-slate-900">{citation.title || 'Untitled citation'}</p>
-                                  <p className="text-sm text-slate-500">{citation.snippet_id || citation.node_id || 'citation'}</p>
-                                </div>
-                                <StatusBadge tone="accent">{formatPageRange(citation.page_start, citation.page_end)}</StatusBadge>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="text-sm text-slate-500">No citations returned yet.</p>
+                      <p className="metric-label">Retrieval query</p>
+                      <p className="mt-2 text-sm text-slate-700">{activeExecutionContext.retrieval?.query || 'N/A'}</p>
+                      {activeExecutionContext.retrieval?.rewrite_applied && activeExecutionContext.retrieval?.rewritten_query && (
+                        <p className="mt-2 text-xs text-slate-500">Rewritten query: {activeExecutionContext.retrieval.rewritten_query}</p>
                       )}
                     </div>
                   )}
+
+                  {displayRun?.citations.length ? (
+                    <div className="space-y-3">
+                      <p className="text-sm font-semibold text-slate-900">Citations</p>
+                      {displayRun.citations.map((citation, index) => (
+                        <div key={`${citation.document_id || 'citation'}-${index}`} className="surface-soft p-4">
+                          <p className="font-medium text-slate-900">{citation.title || citation.document_id || 'Untitled citation'}</p>
+                          <p className="mt-2 text-sm text-slate-500">
+                            {citation.page_start || citation.page_end ? formatPageRange(citation.page_start, citation.page_end) : 'Page range unavailable'}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </>
               ) : (
                 <div className="empty-state min-h-[220px]">
-                  <TextQuote size={20} className="text-blue-600" />
-                  <p className="text-base font-medium text-slate-900">No run data yet</p>
-                  <p className="text-sm text-slate-500">Ask a question to populate runtime metrics, knowledge context details, and citations.</p>
+                  <p className="text-base font-medium text-slate-900">No runtime telemetry yet</p>
+                  <p className="text-sm text-slate-500">Run the skill to see resolved provider/model details and citations here.</p>
                 </div>
               )}
             </div>
@@ -713,5 +1069,61 @@ export const SkillChatPage: React.FC = () => {
         </div>
       </div>
     </div>
+  );
+};
+
+export const SkillChatPage: React.FC = () => {
+  const { skillId = '' } = useParams();
+  const skillQuery = useQuery({
+    queryKey: ['skill', skillId],
+    queryFn: () => skillsApi.get(skillId),
+    enabled: Boolean(skillId),
+    retry: false,
+  });
+  const { data: documents = [] } = useQuery({ queryKey: ['documents'], queryFn: () => documentsApi.list() });
+  const { data: knowledgeBases = [] } = useQuery({ queryKey: ['knowledge-bases'], queryFn: knowledgeBasesApi.list });
+  const { data: providers = [] } = useQuery({ queryKey: ['provider-catalog'], queryFn: providersApi.listCatalog });
+
+  if (skillQuery.isLoading) {
+    return (
+      <div className="space-y-8">
+        <SectionToolbar title="Skill console" description="Loading saved configuration and session history." />
+        <GlassPanel title="Loading skill" subtitle="Fetching the current skill configuration.">
+          <div className="empty-state min-h-[320px]">
+            <Loader2 size={28} className="animate-spin text-blue-600" />
+            <p className="text-base font-medium text-slate-900">Loading skill…</p>
+          </div>
+        </GlassPanel>
+      </div>
+    );
+  }
+
+  if (skillQuery.error || !skillQuery.data) {
+    return (
+      <div className="space-y-8">
+        <SectionToolbar title="Skill console" description="This skill route could not be resolved." />
+        <GlassPanel title="Missing skill" subtitle="The requested skill was not found or could not be loaded.">
+          <div className="empty-state min-h-[320px]">
+            <p className="text-base font-medium text-slate-900">Skill not found</p>
+            {skillQuery.error && <p className="text-sm text-slate-500">{getErrorMessage(skillQuery.error, 'Failed to load skill')}</p>}
+            <Link to="/skills" className="btn-primary">
+              <ArrowLeft size={16} />
+              <span>Back to skills</span>
+            </Link>
+          </div>
+        </GlassPanel>
+      </div>
+    );
+  }
+
+  return (
+    <SkillChatConsole
+      key={skillQuery.data.id}
+      skillId={skillId}
+      skill={skillQuery.data}
+      documents={documents}
+      knowledgeBases={knowledgeBases}
+      providers={providers}
+    />
   );
 };

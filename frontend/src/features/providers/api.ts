@@ -11,11 +11,18 @@ export interface ProviderPayload {
   extra_headers?: Record<string, string>;
   enabled?: boolean;
   is_default?: boolean;
+  scope?: 'tenant' | 'workspace';
+  share_mode?: 'none' | 'all' | 'selected';
+  shared_workspace_ids?: string[];
 }
 
 export const providersApi = {
-  list: async (): Promise<ModelProvider[]> => {
-    const { data } = await apiClient.get<ModelProvider[]>('/model-providers');
+  list: async (scope: 'tenant' | 'workspace' | 'all' = 'all'): Promise<ModelProvider[]> => {
+    const { data } = await apiClient.get<ModelProvider[]>('/model-providers', { params: { scope } });
+    return data;
+  },
+  listCatalog: async (): Promise<ModelProvider[]> => {
+    const { data } = await apiClient.get<ModelProvider[]>('/model-providers/catalog');
     return data;
   },
   create: async (payload: ProviderPayload): Promise<ModelProvider> => {
@@ -29,6 +36,10 @@ export const providersApi = {
   probeModels: async (id: string): Promise<ModelProvider> => {
     const { data } = await apiClient.post<ModelProvider>(`/model-providers/${id}/probe-models`);
     return data;
+  },
+  importToWorkspace: async (id: string): Promise<ModelProvider> => {
+    const { data } = await apiClient.post<{ source_provider_id: string; provider: ModelProvider }>(`/model-providers/${id}/import-to-workspace`);
+    return data.provider;
   },
   delete: async (id: string): Promise<void> => {
     await apiClient.delete(`/model-providers/${id}`);

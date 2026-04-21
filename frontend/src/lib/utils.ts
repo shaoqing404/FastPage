@@ -40,6 +40,58 @@ export const resolveProviderName = (providerId: string | null | undefined, provi
 export const resolveProviderById = (providerId: string | null | undefined, providers: ModelProvider[]) =>
   providers.find((provider) => provider.id === providerId) || null;
 
+export const resolveWorkspaceDefaultProvider = (
+  workspaceDefaultProviderId: string | null | undefined,
+  providers: ModelProvider[],
+) => resolveProviderById(workspaceDefaultProviderId, providers);
+
+export const describeProviderScope = (provider: ModelProvider | null | undefined) => {
+  if (!provider) return 'No provider bound';
+  if (provider.scope === 'workspace') return 'Workspace provider';
+  if (provider.scope === 'tenant') return 'Tenant provider';
+  return 'System fallback';
+};
+
+export const getProviderModelOptions = (provider: ModelProvider | null | undefined) => {
+  if (!provider) return [];
+  return Array.from(
+    new Set(
+      [provider.default_model, ...(provider.supported_models || [])]
+        .map((candidate) => candidate?.trim())
+        .filter((candidate): candidate is string => Boolean(candidate)),
+    ),
+  );
+};
+
+export const normalizeProviderModel = (providerType: string | null | undefined, model: string | null | undefined) => {
+  const normalized = model?.trim();
+  if (!normalized) return '';
+  if (providerType === 'openai_compatible' && !normalized.startsWith('openai/')) {
+    return `openai/${normalized}`;
+  }
+  return normalized;
+};
+
+export const providerSupportsModel = (provider: ModelProvider | null | undefined, model: string | null | undefined) => {
+  if (!provider) return true;
+  const normalizedModel = normalizeProviderModel(provider.provider_type, model);
+  if (!normalizedModel) return false;
+  const candidates = getProviderModelOptions(provider);
+  return candidates
+    .map((candidate) => normalizeProviderModel(provider.provider_type, candidate))
+    .includes(normalizedModel);
+};
+
+export const resolveProviderModelOption = (provider: ModelProvider | null | undefined, model: string | null | undefined) => {
+  if (!provider || !model?.trim()) return null;
+  const normalizedModel = normalizeProviderModel(provider.provider_type, model);
+  return (
+    getProviderModelOptions(provider).find(
+      (candidate) => normalizeProviderModel(provider.provider_type, candidate) === normalizedModel,
+    ) || null
+  );
+};
+
 export const inferSystemModelLabel = () => 'Not exposed by backend API';
 
 export const getErrorMessage = (error: unknown, fallback: string) => {

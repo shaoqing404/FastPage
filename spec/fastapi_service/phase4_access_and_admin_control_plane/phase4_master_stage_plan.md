@@ -10,6 +10,7 @@ The reason is simple:
 - `Phase 4.5` must close the operational gaps
 - `Phase 4.6` must make tenant/workspace/user access portraits explicit
 - `Phase 4.7` must harden and standardize closeout before `Phase 5`
+- `Phase 4.8` must validate real operator usage and absorb narrow frontend/supporting fixes before `Phase 5`
 
 This avoids mixing:
 
@@ -28,14 +29,21 @@ This avoids mixing:
 - platform minimum control plane
 - directory and access portrait needed for real operation
 - pre-Phase5 hardening and closeout verification
+- test-led product-operability alignment on the existing frontend surface
 
 `Phase 5` is responsible for:
 
-- audit center
+- maintenance-oriented platform surfaces
+- audit center / audit inspection
 - governance workflows
+- shared-resource ownership and sharing rules
 - export / import productization
 - migration portability
 - long-term operational analytics
+
+Canonical `Phase 5` parent-stage spec:
+
+- [phase5_maintenance_and_audit_governance/README.md](/Users/shaoqing/workspace/PageIndex/spec/fastapi_service/phase5_maintenance_and_audit_governance/README.md)
 
 ## 3. Design Domain Split
 
@@ -215,6 +223,93 @@ Current stage note (`2026-04-17`):
   - make the runtime verification flow reproducible
   - define cleanup rules for verification artifacts such as temporary users, reset passwords, and API keys
   - capture the full closeout chain in runbook/skill form
+
+### 4.5 `Phase 4.8`
+
+Theme:
+
+- test-led experience stabilization
+
+Main goals:
+
+- validate the closed `Phase 4.x` control-plane/product surface through real operator testing rather than contract/runtime proof alone
+- audit the current frontend against `Phase 4.5` / `Phase 4.6` / `Phase 4.7` backend reality
+- absorb narrow frontend and supporting backend fixes that directly block real usage
+- record what still belongs to `Phase 5` governance rather than reopening it accidentally
+
+Current stage note (`2026-04-17`):
+
+- this phase starts only after:
+  - `Phase 4.7 closeout` is `GO`
+- this phase is intentionally not a new backend-foundation phase
+- it exists because:
+  - `Phase 4.7` proves backend/runtime reproducibility
+  - but real operator usage can still expose UX, page-flow, error-contract, and minor supporting gaps that are not visible from backend closeout alone
+
+Implementation update (`2026-04-21`):
+
+- real operator testing exposed that provider/workspace semantics were not merely rough around the edges, but internally contradictory across:
+  - `Provider` management
+  - `Workspace` settings
+  - `Skills`
+  - `SkillChat`
+- because of that, `Phase 4.8` now formally absorbs a bounded pull-forward of `Phase 5` provider/workspace design
+- this uplift is still classified as `Phase 4.8` because it is justified by tested product breakage, not by governance ambition
+
+The concrete uplift now in scope:
+
+- explicit provider scope contract:
+  - `tenant`
+  - `workspace`
+  - `system`
+- tenant-provider sharing truth for workspace availability
+- workspace provider import/fork semantics
+- real workspace-default-provider API + frontend surface
+- provider-aware skill save/test semantics
+- runtime fallback-source telemetry for skill runs
+
+Current `2026-04-21` implementation state:
+
+- backend contract for provider scope / sharing / workspace-default is landed
+- frontend provider hub / workspace AI settings / skills chat consumption are landed
+- the previously verified `4.8` findings around provider availability, draft-test semantics, saved-config semantics, and fallback explanation have been corrected in code
+- streaming runtime root-cause remains intentionally deferred
+
+Allowed work:
+
+- end-to-end manual and scripted test passes on the real local stack
+- frontend audit of:
+  - workspace switch/create/admin flows
+  - invite onboarding and password lifecycle entry points
+  - platform tenant/user/workspace inspection pages
+  - KB / provider / skill / skill-chat operator continuity
+- narrow frontend fixes to correctly consume the landed backend contracts
+- smallest necessary backend/supporting fixes only when a real test blocker is proven
+- spec and checklist updates that document tested operator flows and accepted boundaries
+
+Specific `2026-04-21` allowed work clarification:
+
+- `Phase 4.8` may update provider/workspace ownership and resolution contracts when:
+  - the old product model allows impossible states
+  - the frontend cannot honestly consume backend truth without those contract updates
+  - the result still stops short of governance workflow/productization
+
+Non-goals:
+
+- no audit center
+- no governance workflow
+- no export/import productization
+- no org tree or policy-engine expansion
+- no second rewrite of KB/Documents IA if the current surface is already usable
+- no speculative redesign detached from observed test failures
+
+Acceptance direction:
+
+- the team can run through the main operator flows on the current frontend without relying on undocumented DB edits or API-only fallbacks
+- frontend pages that claim `Phase 4.x` capability are aligned with the backend truth already landed
+- remaining issues are classified clearly as:
+  - narrow follow-up fixes still inside `4.8`
+  - or intentional deferrals into `Phase 5`
 
 ## 5. Phase 4.x Closeout Test Chain
 

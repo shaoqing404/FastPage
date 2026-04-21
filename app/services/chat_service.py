@@ -25,7 +25,7 @@ from app.services.pageindex_service import (
     format_history_context,
     load_structure_file,
 )
-from app.services.provider_service import normalize_execution_model, resolve_provider_config
+from app.services.provider_service import resolve_provider_config, validate_provider_model_selection
 from app.services.session_service import _is_default_workspace, append_message, get_session_or_404, list_session_messages
 from app.services.skill_trace_service import SkillTraceRecorder
 from app.services.storage_service import local_artifact_path
@@ -36,7 +36,7 @@ from app.services.task_queue_service import (
     publish_chat_event,
 )
 from app.services.workspace_access_service import can_read_skill
-from pageindex.utils import count_tokens, extract_json, llm_completion
+from pageindex.utils import count_tokens, extract_json, is_fatal_llm_model_error, llm_completion
 
 
 settings = get_settings()
@@ -54,6 +54,16 @@ NONTERMINAL_RUN_STATUSES = {"accepted", "queued", "retrieving", "answering"}
 ACTIVE_RUN_STATUSES = {"retrieving", "answering"}
 SESSION_ORDERED_STATUSES = {"accepted", "queued", "retrieving", "answering"}
 
+OPTION_LABELS = {
+    "history_turn_limit": "history turn limit",
+    "history_token_budget": "history token budget",
+    "top_k": "sections to retrieve",
+    "selection_mode": "section selection method",
+    "max_context_pages": "max context pages",
+    "max_context_tokens": "max context tokens",
+    "temperature": "answer temperature",
+}
+
 
 class ChatRunCancelled(Exception):
     def __init__(self, reason: str, *, terminal_status: str = "cancelled") -> None:
@@ -63,28 +73,30 @@ class ChatRunCancelled(Exception):
 
 
 def _coerce_positive_int(name: str, value) -> int:
+    label = OPTION_LABELS.get(name, name.replace("_", " "))
     try:
         coerced = int(value)
     except (TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"{name} must be an integer",
+            detail=f"{label} must be an integer",
         ) from exc
     if coerced <= 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"{name} must be greater than 0",
+            detail=f"{label} must be greater than 0",
         )
     return coerced
 
 
 def _coerce_float(name: str, value) -> float:
+    label = OPTION_LABELS.get(name, name.replace("_", " "))
     try:
         return float(value)
     except (TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"{name} must be a number",
+            detail=f"{label} must be a number",
         ) from exc
 
 
@@ -115,7 +127,7 @@ def _validate_execution_options(
         if selection_mode not in {"outline_llm", "lexical_fallback"}:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="selection_mode must be one of: outline_llm, lexical_fallback",
+                detail="section selection method must be one of: outline_llm, lexical_fallback",
             )
         retrieval["selection_mode"] = selection_mode
     if "temperature" in generation and generation["temperature"] not in (None, ""):
@@ -212,6 +224,8 @@ def _build_execution_context(
             "id": provider_config.get("provider_id"),
             "name": provider_config.get("name"),
             "type": provider_config.get("provider_type"),
+            "scope": provider_config.get("scope"),
+            "resolution_source": provider_config.get("resolution_source"),
         },
         "model": {
             "resolved_model": resolved_model,
@@ -415,12 +429,15 @@ def _create_pending_run(
         explicit_provider_id=provider_id,
         workspace_id=principal.workspace_id,
     )
-    resolved_model = normalize_execution_model(
-        provider_config.get("provider_type"),
-        model or (skill.model if skill else None) or provider_config.get("default_model"),
+    resolved_model = validate_provider_model_selection(
+        provider_id=provider_config.get("provider_id"),
+        provider_type=provider_config.get("provider_type"),
+        provider_name=provider_config.get("name"),
+        default_model=provider_config.get("default_model"),
+        supported_models=provider_config.get("supported_models"),
+        model=model or (skill.model if skill else None),
+        subject="Chat run model",
     )
-    if not resolved_model:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No model resolved for this request")
 
     conversation_config, retrieval_config, generation_config = _validate_execution_options(
         conversation_config,
@@ -822,7 +839,15 @@ async def run_chat_run(run_id: str) -> None:
             skill=skill,
             explicit_provider_id=run.provider_id,
         )
-        resolved_model = normalize_execution_model(provider_config.get("provider_type"), run.model)
+        resolved_model = validate_provider_model_selection(
+            provider_id=provider_config.get("provider_id"),
+            provider_type=provider_config.get("provider_type"),
+            provider_name=provider_config.get("name"),
+            default_model=provider_config.get("default_model"),
+            supported_models=provider_config.get("supported_models"),
+            model=run.model,
+            subject="Chat run model",
+        )
 
         history_messages: list[dict] = []
         history_info = {
@@ -926,6 +951,7 @@ async def run_chat_run(run_id: str) -> None:
                 rewrite_response = llm_completion(
                     model=resolved_model,
                     prompt=build_query_rewrite_prompt(run.question, history_context),
+                    raise_on_error=True,
                     request_options=retrieval_options,
                     trace_hook=trace_recorder.append_llm_call if trace_recorder else None,
                     trace_label="query_rewrite",
@@ -937,7 +963,9 @@ async def run_chat_run(run_id: str) -> None:
                     rewritten_query = candidate.strip()
                     retrieval_query = rewritten_query
                     rewrite_applied = retrieval_query != run.question
-            except Exception:
+            except Exception as exc:
+                if is_fatal_llm_model_error(exc):
+                    raise
                 retrieval_query = run.question
 
         run = _touch_run_heartbeat(db, run)
@@ -995,7 +1023,7 @@ async def run_chat_run(run_id: str) -> None:
             run.question,
             selected_nodes,
             context,
-            system_prompt=skill.system_prompt if skill else request_config.get("system_prompt"),
+            system_prompt=request_config.get("system_prompt") or (skill.system_prompt if skill else None),
             history_context=history_context or None,
         )
         completion_kwargs = {
@@ -1154,6 +1182,7 @@ async def stream_skill_run_events(
     document: Document,
     version: DocumentVersion,
     question: str,
+    model: str | None,
     request_config: dict,
     conversation_config: dict | None,
     retrieval_config: dict | None,
@@ -1169,7 +1198,7 @@ async def stream_skill_run_events(
         document=document,
         version=version,
         question=question,
-        model=skill.model,
+        model=model,
         request_config=request_config,
         conversation_config=conversation_config,
         retrieval_config=retrieval_config,

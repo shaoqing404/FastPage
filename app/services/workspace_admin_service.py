@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.principal import Principal
 from app.models import User, Workspace, WorkspaceMembership
+from app.services.provider_service import get_provider_or_404, provider_scope, serialize_provider
 from app.services.workspace_access_service import (
     dump_workspace_permissions_override_json,
     parse_workspace_permissions_override,
@@ -57,6 +58,7 @@ def serialize_workspace_admin_workspace(workspace: Workspace) -> dict[str, objec
         "slug": workspace.slug,
         "status": workspace.status,
         "is_default": workspace.is_default,
+        "default_provider_id": workspace.default_provider_id,
         "archived_at": workspace.archived_at,
         "archived_by": workspace.archived_by,
         "created_at": workspace.created_at,
@@ -219,6 +221,39 @@ def update_workspace_metadata(
         workspace.slug = slug
 
     workspace.updated_at = now
+    db.commit()
+    db.refresh(workspace)
+    return serialize_workspace_admin_workspace(workspace)
+
+
+def update_workspace_default_provider(
+    db: Session,
+    principal: Principal,
+    workspace_id: str,
+    default_provider_id: str | None,
+) -> dict[str, object]:
+    workspace = _get_workspace_for_admin_operation(db, principal, workspace_id)
+    if not _is_platform_admin_actor(principal):
+        require_workspace_capability(
+            principal,
+            "can_manage_providers",
+            detail="Missing workspace capability: can_manage_providers",
+        )
+
+    if default_provider_id is None:
+        workspace.default_provider_id = None
+        workspace.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(workspace)
+        return serialize_workspace_admin_workspace(workspace)
+
+    provider = get_provider_or_404(db, principal.tenant_id, default_provider_id)
+    serialized = serialize_provider(db, provider, current_workspace_id=workspace.id)
+    if provider_scope(provider) == "system" or not serialized["is_workspace_default_candidate"]:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="default_provider_id must reference a current workspace available provider")
+
+    workspace.default_provider_id = provider.id
+    workspace.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(workspace)
     return serialize_workspace_admin_workspace(workspace)

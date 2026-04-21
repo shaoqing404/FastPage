@@ -1,5 +1,36 @@
 # Workspace / Operator / User Management Gap Audit
 
+## 2026-04-21 Addendum: provider/workspace control-plane gaps partially closed in Phase 4.8
+
+This audit remains historically useful, but it no longer fully describes the current repository state.
+
+The following gaps called out in earlier Phase 3/4 control-plane analysis are now materially reduced by the `Phase 4.8` provider/workspace uplift:
+
+- provider scope is no longer backend-only implicit state
+- provider catalog consumption is no longer forced to guess workspace availability
+- `workspace.default_provider_id` is no longer only a schema field; it now has backend validation and frontend settings surfaces
+- `Skills / SkillChat` no longer rely on a runtime-only provider concept disguised as saved config
+
+What is now true in code after the `2026-04-21` uplift:
+
+- provider output exposes scope/availability/bindability truth for the current workspace
+- tenant providers may be shared to all or selected workspaces
+- current workspace admins may import/fork a tenant provider into a workspace provider
+- `Workspace Admin` now includes `Workspace AI Settings`
+- `Provider` management is now effectively a `Provider Hub`, not just a flat tenant-scoped list
+- `SkillChat` runtime telemetry can explain the actual provider resolution layer that was hit
+
+What this addendum does **not** claim:
+
+- governance/audit workflow is complete
+- user/private provider ownership exists
+- all historical workspace/operator gaps in this audit are closed
+
+This file should therefore be read as:
+
+- original gap audit for historical baseline
+- plus this addendum for the current provider/workspace closure state
+
 ## Current State Audit
 
 This audit is based on the current Phase 3 backend implementation and the active frontend contract, not only on the intended Phase 3 wording.

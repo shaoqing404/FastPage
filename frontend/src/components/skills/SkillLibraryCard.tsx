@@ -45,6 +45,7 @@ export const SkillLibraryCard: React.FC<{
           <Layers3 size={15} />
           <span>{knowledgeBase?.status || 'kb-unbound'}</span>
         </div>
+        <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Configure & test</p>
         <p className="text-sm font-medium text-slate-700">{skill.model}</p>
       </div>
     </button>

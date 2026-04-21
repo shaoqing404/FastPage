@@ -4,6 +4,7 @@ import { ArrowRightLeft, Copy, MailPlus, RefreshCcw, Settings2, Shield, UserPlus
 
 import { Field, GlassPanel, InlineAlert, KeyMetric, SectionToolbar, StatusBadge } from '../components/ui/workbench';
 import { authApi } from '../features/auth/api';
+import { providersApi } from '../features/providers/api';
 import { workspacesApi } from '../features/workspaces/api';
 import {
   clearStoredAuth,
@@ -16,7 +17,7 @@ import {
   storeAuthTokenResponse,
   updateStoredWorkspace,
 } from '../lib/api/client';
-import { formatDateTime, getErrorMessage } from '../lib/utils';
+import { formatDateTime, getErrorMessage, resolveWorkspaceDefaultProvider } from '../lib/utils';
 import type {
   Workspace,
   WorkspaceCapabilityKey,
@@ -371,7 +372,8 @@ export const WorkspaceAdminPage: React.FC = () => {
   const canManageInvites = actorPermissions.can_manage_invites === true;
   const canTransferFounder = actorPermissions.can_transfer_founder === true;
   const canArchiveWorkspace = actorPermissions.can_archive_workspace === true;
-  const canAccessAdminSurface = canEditWorkspaceMetadata || canManageMembers || canManageInvites || canTransferFounder || canArchiveWorkspace;
+  const canManageProviders = actorPermissions.can_manage_providers === true;
+  const canAccessAdminSurface = canEditWorkspaceMetadata || canManageMembers || canManageInvites || canTransferFounder || canArchiveWorkspace || canManageProviders;
   const grantedCapabilities = (Object.entries(actorPermissions) as Array<[WorkspaceCapabilityKey, boolean | undefined]>)
     .filter(([, granted]) => granted)
     .map(([key]) => key);
@@ -392,6 +394,7 @@ export const WorkspaceAdminPage: React.FC = () => {
   const [copySuccess, setCopySuccess] = useState('');
 
   const [metadataError, setMetadataError] = useState('');
+  const [providerSettingsError, setProviderSettingsError] = useState('');
 
   const [switchError, setSwitchError] = useState('');
   const [founderTargetUserId, setFounderTargetUserId] = useState('');
@@ -412,6 +415,16 @@ export const WorkspaceAdminPage: React.FC = () => {
     queryFn: () => workspacesApi.listInvites(workspaceId),
     enabled: Boolean(workspaceId) && canManageInvites,
   });
+  const providerCatalogQuery = useQuery({
+    queryKey: ['provider-catalog'],
+    queryFn: providersApi.listCatalog,
+    enabled: Boolean(workspaceId),
+  });
+  const providerHubQuery = useQuery({
+    queryKey: ['providers', 'all'],
+    queryFn: () => providersApi.list('all'),
+    enabled: Boolean(workspaceId) && canManageProviders,
+  });
 
   const metadataMutation = useMutation({
     mutationFn: (payload: { name: string; slug: string }) =>
@@ -427,6 +440,32 @@ export const WorkspaceAdminPage: React.FC = () => {
     },
     onError: (error: unknown) => {
       setMetadataError(getErrorMessage(error, 'Workspace settings update failed'));
+    },
+  });
+
+  const defaultProviderMutation = useMutation({
+    mutationFn: (default_provider_id: string | null) => workspacesApi.updateDefaultProvider({ default_provider_id }, workspaceId),
+    onSuccess: (updatedWorkspace) => {
+      updateStoredWorkspace(updatedWorkspace);
+      setProviderSettingsError('');
+      setSuccessMessage(updatedWorkspace.default_provider_id ? 'Workspace AI settings updated.' : 'Workspace default provider cleared.');
+      queryClient.invalidateQueries({ queryKey: ['workspaces'] });
+    },
+    onError: (error: unknown) => {
+      setProviderSettingsError(getErrorMessage(error, 'Workspace default provider update failed'));
+    },
+  });
+
+  const importProviderMutation = useMutation({
+    mutationFn: (providerId: string) => providersApi.importToWorkspace(providerId),
+    onSuccess: () => {
+      setProviderSettingsError('');
+      setSuccessMessage('Tenant provider imported into this workspace.');
+      queryClient.invalidateQueries({ queryKey: ['providers', 'all'] });
+      queryClient.invalidateQueries({ queryKey: ['provider-catalog'] });
+    },
+    onError: (error: unknown) => {
+      setProviderSettingsError(getErrorMessage(error, 'Provider import failed'));
     },
   });
 
@@ -558,9 +597,16 @@ export const WorkspaceAdminPage: React.FC = () => {
   const workspaceOptions = workspacesQuery.data || [];
   const members = membersQuery.data || [];
   const invites = invitesQuery.data || [];
+  const availableProviders = providerCatalogQuery.data || [];
+  const allProviders = providerHubQuery.data || [];
+  const workspaceDefaultProvider = resolveWorkspaceDefaultProvider(workspace?.default_provider_id ?? null, availableProviders);
+  const tenantDefaultProvider = availableProviders.find((provider) => provider.is_default) || null;
+  const importableProviders = allProviders.filter(
+    (provider) => provider.scope === 'tenant' && provider.available_in_current_workspace && !provider.managed_by_system,
+  );
   const founderTransferOptions = members.filter((member) => member.status === 'active' && member.role !== 'founder');
 
-  const pageError = [workspacesQuery.error, membersQuery.error, invitesQuery.error]
+  const pageError = [workspacesQuery.error, membersQuery.error, invitesQuery.error, providerCatalogQuery.error, providerHubQuery.error]
     .filter(Boolean)
     .map((error) => getErrorMessage(error, 'Failed to load workspace administration data'))
     .join(' · ');
@@ -661,6 +707,94 @@ export const WorkspaceAdminPage: React.FC = () => {
                 metadataMutation.mutate(payload);
               }}
             />
+            <div className="surface-soft space-y-4 p-4">
+              <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
+                <Settings2 size={16} className="text-blue-600" />
+                <span>Workspace AI settings</span>
+              </div>
+              <p className="text-sm text-slate-500">
+                Workspace default provider must come from providers that are available in this workspace. Tenant default and backend system default stay as fallback only.
+              </p>
+              <div className="grid gap-4 md:grid-cols-2">
+                <Field label="Workspace default provider" hint="Resolution order is saved skill provider, runtime test override, workspace default, tenant default, then backend system fallback.">
+                  <select
+                    className="field"
+                    value={workspace?.default_provider_id || ''}
+                    onChange={(event) => {
+                      setProviderSettingsError('');
+                      defaultProviderMutation.mutate(event.target.value || null);
+                    }}
+                    disabled={!canManageProviders || defaultProviderMutation.isPending}
+                  >
+                    <option value="">No workspace default provider</option>
+                    {availableProviders
+                      .filter((provider) => provider.is_workspace_default_candidate)
+                      .map((provider) => (
+                        <option key={provider.id} value={provider.id}>
+                          {provider.name} ({provider.scope})
+                        </option>
+                      ))}
+                  </select>
+                </Field>
+                <div className="surface-subtle space-y-2 rounded-2xl border border-white/70 p-4">
+                  <p className="text-sm font-medium text-slate-900">Resolved fallback chain</p>
+                  <p className="text-sm text-slate-500">Workspace default: {workspaceDefaultProvider?.name || 'Not set'}</p>
+                  <p className="text-sm text-slate-500">Tenant default: {tenantDefaultProvider?.name || 'Not set or not available here'}</p>
+                  <p className="text-sm text-slate-500">System fallback: hidden backend fallback only</p>
+                </div>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="surface-subtle space-y-3 rounded-2xl border border-white/70 p-4">
+                  <p className="text-sm font-medium text-slate-900">Available providers in this workspace</p>
+                  <div className="space-y-2">
+                    {availableProviders.length > 0 ? (
+                      availableProviders.map((provider) => (
+                        <div key={provider.id} className="flex items-center justify-between gap-3 text-sm text-slate-600">
+                          <span>{provider.name}</span>
+                          <StatusBadge tone={provider.scope === 'workspace' ? 'accent' : 'success'}>{provider.scope}</StatusBadge>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-sm text-slate-500">No available provider is configured for this workspace yet.</p>
+                    )}
+                  </div>
+                </div>
+                <div className="surface-subtle space-y-3 rounded-2xl border border-white/70 p-4">
+                  <p className="text-sm font-medium text-slate-900">Import tenant provider into this workspace</p>
+                  {canManageProviders ? (
+                    <div className="space-y-2">
+                      {importableProviders.length > 0 ? (
+                        importableProviders.map((provider) => (
+                          <div key={provider.id} className="flex items-center justify-between gap-3 text-sm text-slate-600">
+                            <span>{provider.name}</span>
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              onClick={() => {
+                                setProviderSettingsError('');
+                                importProviderMutation.mutate(provider.id);
+                              }}
+                              disabled={importProviderMutation.isPending}
+                            >
+                              <span>Import</span>
+                            </button>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-sm text-slate-500">No tenant provider is currently available to import here.</p>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-slate-500">Provider import is limited to members with `can_manage_providers`.</p>
+                  )}
+                </div>
+              </div>
+              {providerSettingsError && (
+                <InlineAlert tone="warning" title="Workspace AI settings failed">
+                  {providerSettingsError}
+                </InlineAlert>
+              )}
+            </div>
             <div className="surface-soft space-y-2 p-4">
               <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
                 <Shield size={16} className="text-blue-600" />

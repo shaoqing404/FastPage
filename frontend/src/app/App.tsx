@@ -1,11 +1,10 @@
 import React from 'react';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { MainLayout } from '../components/layout/MainLayout';
 import { ActivityPage } from '../pages/ActivityPage';
 import { ChangePasswordPage } from '../pages/ChangePasswordPage';
-import { ChatPage } from '../pages/ChatPage';
 import { ComplianceChecksPage } from '../pages/ComplianceChecksPage';
 import { ControlPlanePage } from '../pages/ControlPlanePage';
 import { DocumentsPage } from '../pages/DocumentsPage';
@@ -63,6 +62,11 @@ const PlatformAdminRoute = ({ children }: { children: React.ReactNode }) => {
   return <>{children}</>;
 };
 
+const LegacySkillChatRedirect = () => {
+  const { skillId = '' } = useParams();
+  return <Navigate to={skillId ? `/skills/${skillId}` : '/skills'} replace />;
+};
+
 export const App: React.FC = () => (
   <QueryClientProvider client={queryClient}>
     <BrowserRouter basename={BASENAME === '/' ? undefined : BASENAME}>
@@ -95,8 +99,9 @@ export const App: React.FC = () => (
           <Route path="compliance-checks" element={<ComplianceChecksPage />} />
           <Route path="documents" element={<DocumentsPage />} />
           <Route path="skills" element={<SkillsPage />} />
-          <Route path="chat" element={<ChatPage />} />
-          <Route path="chat/skills/:skillId" element={<SkillChatPage />} />
+          <Route path="skills/:skillId" element={<SkillChatPage />} />
+          <Route path="chat" element={<Navigate to="/skills" replace />} />
+          <Route path="chat/skills/:skillId" element={<LegacySkillChatRedirect />} />
           <Route path="runs" element={<ActivityPage />} />
           <Route path="activity" element={<Navigate to="/runs" replace />} />
           <Route path="providers" element={<ControlPlanePage />} />
