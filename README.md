@@ -202,8 +202,8 @@ Minimal settings:
 - `API_HOST=127.0.0.1`
 - `API_PORT=22223`
 - `ADMIN_USERNAME=admin`
-- `ADMIN_PASSWORD=pageindex_service123`
-- `SECRET_KEY=pageindex_service123_local_dev_only_change_me`
+- `ADMIN_PASSWORD=change-me-local-admin-password`
+- `SECRET_KEY=change-me-local-dev-secret-key`
 - `DATABASE_MODE=sqlite`
 - `DATA_DIR=./data`
 - optional `SQLITE_PATH=./somewhere/pageindex.db`
@@ -240,6 +240,8 @@ cp .env.example .env
 docker compose --profile local up -d --build
 docker compose --profile local exec api-local alembic upgrade head
 ```
+
+Phase 4.7 canonical operator docs live in [docs/phase4_7/README.md](docs/phase4_7/README.md), with companion scripts under `scripts/phase47/` and the Phase 4.7 verification suite in `tests/phase4/test_phase47_api_verification.py`.
 
 ## Updating
 
