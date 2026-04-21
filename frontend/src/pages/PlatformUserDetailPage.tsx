@@ -5,6 +5,7 @@ import { ArrowLeft, Save, Loader2, KeyRound, Copy, CheckCircle2 } from 'lucide-r
 
 import { GlassPanel, SectionToolbar, StatusBadge, Field, InlineAlert } from '../components/ui/workbench';
 import { platformApi } from '../features/platform/api';
+import { copyTextToClipboard } from '../lib/clipboard';
 import { formatDateTime, getErrorMessage } from '../lib/utils';
 import type { PlatformResourceRule, PlatformUserUpdateInput } from '../types';
 
@@ -113,7 +114,7 @@ export const PlatformUserDetailPage: React.FC = () => {
 
   const handleCopyTempPassword = async () => {
     try {
-      await navigator.clipboard.writeText(tempPassword);
+      await copyTextToClipboard(tempPassword);
       setResetCopied(true);
       setTimeout(() => setResetCopied(false), 3000);
     } catch {

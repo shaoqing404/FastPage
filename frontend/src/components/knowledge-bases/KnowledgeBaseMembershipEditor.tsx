@@ -140,8 +140,13 @@ const MembershipRow: React.FC<{
   const { data: versions = [], isLoading: versionsLoading } = useQuery({
     queryKey: ['document-versions', membership.document_id],
     queryFn: () => documentsApi.listVersions(membership.document_id),
-    enabled: Boolean(document),
+    enabled: Boolean(membership.document_id),
   });
+
+  const resolvedDisplayName = document?.display_name || membership.document_display_name || membership.document_id;
+  const resolvedSourceFilename =
+    document?.source_filename || membership.document_source_filename || 'Document metadata unavailable in current Workspace listing.';
+  const resolvedStatus = document?.status || membership.document_status;
 
   return (
     <div className="surface-soft space-y-4 p-4">
@@ -149,14 +154,14 @@ const MembershipRow: React.FC<{
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <BookCopy size={16} className="text-slate-400" />
-            <p className="font-medium text-slate-900">{document?.display_name || membership.document_id}</p>
+            <p className="font-medium text-slate-900">{resolvedDisplayName}</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <StatusBadge tone={getMembershipTone(membership.enabled)}>{membership.enabled ? 'Enabled' : 'Disabled'}</StatusBadge>
-            {document && <StatusBadge tone={getDocumentTone(document.status)}>{document.status}</StatusBadge>}
+            {resolvedStatus && <StatusBadge tone={getDocumentTone(resolvedStatus)}>{resolvedStatus}</StatusBadge>}
             {membership.label && <StatusBadge>{membership.label}</StatusBadge>}
           </div>
-          <p className="text-sm text-slate-500">{document?.source_filename || 'Document metadata unavailable in current Workspace listing.'}</p>
+          <p className="text-sm text-slate-500">{resolvedSourceFilename}</p>
         </div>
 
         <button type="button" className="btn-ghost text-red-600" onClick={onRemove} disabled={disabled}>

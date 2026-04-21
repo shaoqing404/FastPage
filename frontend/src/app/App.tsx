@@ -18,6 +18,7 @@ import { PlatformUserDetailPage } from '../pages/PlatformUserDetailPage';
 import { PlatformUsersPage } from '../pages/PlatformUsersPage';
 import { PlatformWorkspaceDetailPage } from '../pages/PlatformWorkspaceDetailPage';
 import { PlatformWorkspacesPage } from '../pages/PlatformWorkspacesPage';
+import { ProviderDocsPage } from '../pages/ProviderDocsPage';
 import { SkillChatPage } from '../pages/SkillChatPage';
 import { SkillsPage } from '../pages/SkillsPage';
 import { WorkspaceAdminPage } from '../pages/WorkspaceAdminPage';
@@ -105,6 +106,7 @@ export const App: React.FC = () => (
           <Route path="runs" element={<ActivityPage />} />
           <Route path="activity" element={<Navigate to="/runs" replace />} />
           <Route path="providers" element={<ControlPlanePage />} />
+          <Route path="providers/docs" element={<ProviderDocsPage />} />
           <Route path="control-plane" element={<Navigate to="/providers" replace />} />
           <Route path="metrics" element={<Navigate to="/runs" replace />} />
           <Route path="platform" element={<PlatformAdminRoute><Navigate to="/platform/users" replace /></PlatformAdminRoute>} />

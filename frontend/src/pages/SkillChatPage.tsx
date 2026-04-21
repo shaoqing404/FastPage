@@ -1,10 +1,30 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Bot, Loader2, Plus, RefreshCcw, Save, Send, Square, TextQuote, Undo, User } from 'lucide-react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import {
+  ArrowLeft,
+  Bot,
+  History,
+  Loader2,
+  MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  Plus,
+  RefreshCcw,
+  Save,
+  Send,
+  SlidersHorizontal,
+  Square,
+  TextQuote,
+  Undo,
+  User,
+} from 'lucide-react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
+import { SkillActionsModal } from '../components/skills/SkillActionsModal';
 import { AnswerContent } from '../components/ui/AnswerContent';
-import { Field, GlassPanel, InlineAlert, KeyMetric, SectionToolbar, StatusBadge } from '../components/ui/workbench';
+import { ExpertDrawer, Field, GlassPanel, InlineAlert, KeyMetric, SectionToolbar, SegmentedControl, StatusBadge } from '../components/ui/workbench';
 import { chatApi } from '../features/chat/api';
 import { documentsApi } from '../features/documents/api';
 import { knowledgeBasesApi } from '../features/knowledge-bases/api';
@@ -12,12 +32,14 @@ import { providersApi } from '../features/providers/api';
 import { skillsApi } from '../features/skills/api';
 import { isApiClientError, resolveStoredWorkspace } from '../lib/api/client';
 import {
-  describeProviderScope,
+  describeProviderAvailability,
+  describeProviderOwnership,
   formatDateTime,
   formatPageRange,
   formatRelativeTime,
   getErrorMessage,
   getProviderModelOptions,
+  humanizeSkillRunError,
   providerSupportsModel,
   resolveProviderById,
   resolveProviderModelOption,
@@ -52,6 +74,12 @@ type SkillChatConsoleProps = {
   documents: Document[];
   knowledgeBases: KnowledgeBase[];
   providers: ModelProvider[];
+};
+
+type SkillConsoleLayoutState = {
+  historyOpen: boolean;
+  inspectorOpen: boolean;
+  inspectorTab: 'settings' | 'runtime';
 };
 
 const DEFAULT_CONVERSATION_CONFIG = {
@@ -102,18 +130,56 @@ const updateSkillListCache = (skills: ChatSkill[] | undefined, nextSkill: ChatSk
   return nextSkills;
 };
 
+const SKILL_CONSOLE_LAYOUT_PREFIX = 'pageindex.skillConsole.layout.';
+
+const readSkillConsoleLayoutState = (skillId: string): SkillConsoleLayoutState => {
+  if (typeof window === 'undefined') {
+    return { historyOpen: true, inspectorOpen: true, inspectorTab: 'settings' };
+  }
+  try {
+    const raw = localStorage.getItem(`${SKILL_CONSOLE_LAYOUT_PREFIX}${skillId}`);
+    if (!raw) return { historyOpen: true, inspectorOpen: true, inspectorTab: 'settings' };
+    const parsed = JSON.parse(raw) as Partial<SkillConsoleLayoutState>;
+    return {
+      historyOpen: parsed.historyOpen !== false,
+      inspectorOpen: parsed.inspectorOpen !== false,
+      inspectorTab: parsed.inspectorTab === 'runtime' ? 'runtime' : 'settings',
+    };
+  } catch {
+    return { historyOpen: true, inspectorOpen: true, inspectorTab: 'settings' };
+  }
+};
+
+const writeSkillConsoleLayoutState = (skillId: string, value: SkillConsoleLayoutState) => {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(`${SKILL_CONSOLE_LAYOUT_PREFIX}${skillId}`, JSON.stringify(value));
+};
+
+const resolveHistoryItemTimestamp = (message: HistoryItem) => {
+  if (message.createdAt) return message.createdAt;
+  if (message.role === 'assistant') return message.run?.finished_at || null;
+  return null;
+};
+
 const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, documents, knowledgeBases, providers }) => {
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamAbortRef = useRef<AbortController | null>(null);
 
+  const [layoutState, setLayoutState] = useState<SkillConsoleLayoutState>(() => readSkillConsoleLayoutState(skillId));
+  const [isCompactLayout, setIsCompactLayout] = useState(() => (
+    typeof window !== 'undefined' ? window.matchMedia('(max-width: 900px)').matches : false
+  ));
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
+  const [inspectorDrawerOpen, setInspectorDrawerOpen] = useState(false);
   const [question, setQuestion] = useState('');
   const [lastQuestion, setLastQuestion] = useState('');
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingAnswer, setStreamingAnswer] = useState('');
-  const [streamingRunCreatedAt, setStreamingRunCreatedAt] = useState<string | null>(null);
   const [streamingStatus, setStreamingStatus] = useState<RunStatus | null>(null);
   const [streamingRunId, setStreamingRunId] = useState<string | null>(null);
   const [streamingExecutionContext, setStreamingExecutionContext] = useState<ChatRun['execution_context'] | null>(null);
@@ -140,6 +206,19 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(skill.updated_at);
   const storedWorkspace = resolveStoredWorkspace();
 
+  const updateLayoutState = (nextValue: Partial<SkillConsoleLayoutState>) => {
+    setLayoutState((current) => ({ ...current, ...nextValue }));
+  };
+
+  const applySavedSkillState = (nextSkill: ChatSkill) => {
+    setDraftName(nextSkill.name);
+    setDraftSystemPrompt(nextSkill.system_prompt || '');
+    setDraftModel(nextSkill.model || '');
+    setDraftKnowledgeBaseId(nextSkill.knowledge_base_id || null);
+    setDraftProviderId(nextSkill.provider_id || '');
+    setLastSavedAt(nextSkill.updated_at);
+  };
+
   const workspaceDefaultProvider = useMemo(
     () => resolveWorkspaceDefaultProvider(storedWorkspace?.default_provider_id ?? null, providers),
     [providers, storedWorkspace?.default_provider_id],
@@ -160,6 +239,16 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   const savedResolvedProvider = skillProvider || workspaceDefaultProvider || tenantDefaultProvider || null;
   const savedRunProvider = skillProvider || workspaceDefaultProvider || tenantDefaultProvider || null;
   const isLegacyUnboundSkill = !skill.provider_id;
+  const selectableProviders = useMemo(
+    () => [...providers].sort((left, right) => {
+      if (left.scope !== right.scope) {
+        if (left.scope === 'workspace') return -1;
+        if (right.scope === 'workspace') return 1;
+      }
+      return left.name.localeCompare(right.name);
+    }),
+    [providers],
+  );
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -173,6 +262,25 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     },
     [],
   );
+
+  useEffect(() => {
+    setLayoutState(readSkillConsoleLayoutState(skillId));
+  }, [skillId]);
+
+  useEffect(() => {
+    writeSkillConsoleLayoutState(skillId, layoutState);
+  }, [layoutState, skillId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const media = window.matchMedia('(max-width: 900px)');
+    const handleChange = (event: MediaQueryListEvent) => {
+      setIsCompactLayout(event.matches);
+    };
+    setIsCompactLayout(media.matches);
+    media.addEventListener('change', handleChange);
+    return () => media.removeEventListener('change', handleChange);
+  }, []);
 
   const boundKnowledgeBase = useMemo(
     () => knowledgeBases.find((kb) => kb.id === skill.knowledge_base_id) || null,
@@ -301,9 +409,9 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     }));
     const withPendingQuestion = pendingQuestion ? [...base, { role: 'user' as const, content: pendingQuestion }] : base;
     return streamingAnswer || isStreaming
-      ? [...withPendingQuestion, { role: 'assistant', content: streamingAnswer, createdAt: streamingRunCreatedAt }]
+      ? [...withPendingQuestion, { role: 'assistant', content: streamingAnswer }]
       : withPendingQuestion;
-  }, [filteredRuns, isStreaming, pendingQuestion, sessionMessages, streamingAnswer, streamingRunCreatedAt]);
+  }, [filteredRuns, isStreaming, pendingQuestion, sessionMessages, streamingAnswer]);
 
   const activeRun =
     (completedStreamRun && completedStreamRun.session_id === effectiveSessionId ? completedStreamRun : null) ||
@@ -357,12 +465,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       queryClient.setQueryData(['skill', skillId], updatedSkill);
       queryClient.setQueryData<ChatSkill[] | undefined>(['skills'], (current) => updateSkillListCache(current, updatedSkill));
       queryClient.invalidateQueries({ queryKey: ['skills'] });
-      setDraftName(updatedSkill.name);
-      setDraftSystemPrompt(updatedSkill.system_prompt || '');
-      setDraftModel(updatedSkill.model || '');
-      setDraftKnowledgeBaseId(updatedSkill.knowledge_base_id || null);
-      setDraftProviderId(updatedSkill.provider_id || '');
-      setLastSavedAt(updatedSkill.updated_at);
+      applySavedSkillState(updatedSkill);
       setSaveFeedback({
         tone: 'success',
         title: 'Skill saved',
@@ -419,9 +522,8 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
         },
         {
           signal: controller.signal,
-          onRunStarted: ({ run_id, created_at }) => {
+          onRunStarted: ({ run_id }) => {
             setStreamingRunId(run_id);
-            setStreamingRunCreatedAt(created_at);
           },
           onStatus: ({ status }) => {
             setStreamingStatus(status);
@@ -443,7 +545,6 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       setCompletedStreamRun(null);
       setStreamingAnswer('');
       setStreamingRunId(null);
-      setStreamingRunCreatedAt(null);
       setStreamingStatus('accepted');
       setStreamingExecutionContext(null);
     },
@@ -464,7 +565,6 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       setNewSessionTitle('');
       setStreamingAnswer('');
       setStreamingRunId(null);
-      setStreamingRunCreatedAt(null);
       setStreamingStatus(null);
       setStreamingExecutionContext(run.execution_context || null);
       queryClient.invalidateQueries({ queryKey: ['skill-runs-all-sessions', skillId] });
@@ -479,7 +579,6 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       setQuestion(q);
       setStreamingAnswer('');
       setStreamingRunId(null);
-      setStreamingRunCreatedAt(null);
       setStreamingStatus(null);
       setStreamingExecutionContext(null);
       if (error instanceof DOMException && error.name === 'AbortError') {
@@ -487,7 +586,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       } else {
         setChatAlert({
           title: 'Skill run failed',
-          message: getErrorMessage(error, 'Skill run failed'),
+          message: humanizeSkillRunError(getErrorMessage(error, 'Skill run failed')),
           ...(isApiClientError(error) ? { code: error.code, requestId: error.requestId } : {}),
           allowRetry: true,
         });
@@ -532,542 +631,728 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     runSkillMutation.mutate({ q: trimmedQuestion, isDraft });
   };
 
+  const historyPanelContent = (
+    <div className="scroll-area max-h-[760px] space-y-4 overflow-auto pr-1">
+      <div className="space-y-3 rounded-[24px] border border-white/75 bg-white/58 p-4">
+        <div className="flex gap-2">
+          <input
+            value={newSessionTitle}
+            onChange={(event) => setNewSessionTitle(event.target.value)}
+            className="field flex-1"
+            placeholder="Create skill session"
+          />
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => createSessionMutation.mutate(newSessionTitle.trim())}
+            disabled={createSessionMutation.isPending}
+          >
+            <Plus size={16} />
+          </button>
+        </div>
+      </div>
+
+      {sessionSummaries.map(({ session, latestRun, runCount }) => {
+        const active = session.id === effectiveSessionId;
+        return (
+          <button
+            key={session.id}
+            type="button"
+            onClick={() => {
+              setSearchParams({ session: session.id });
+              setHistoryDrawerOpen(false);
+            }}
+            className={`list-row w-full text-left ${active ? 'list-row-active' : ''}`}
+          >
+            <div className="space-y-2">
+              <p className="font-medium text-slate-900">{session.title}</p>
+              <p className="line-clamp-2 text-sm text-slate-500">{latestRun?.question || 'No questions yet'}</p>
+            </div>
+            <div className="text-right text-sm text-slate-500">
+              <p>{runCount} runs</p>
+              <p>{formatDateTime(session.updated_at)}</p>
+            </div>
+          </button>
+        );
+      })}
+
+      {sessionSummaries.length === 0 && (
+        <div className="empty-state min-h-[220px]">
+          <p className="text-base font-medium text-slate-900">No session history for this skill</p>
+          <p className="text-sm text-slate-500">Create a new session to keep future runs grouped in the history rail.</p>
+        </div>
+      )}
+    </div>
+  );
+
+  const settingsTabContent = (
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-900">Saved skill defaults</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            Provider, model, knowledge base, and system prompt are persisted on the skill. Draft KB changes still apply only after save.
+          </p>
+          {lastSavedAt && (
+            <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">
+              Last saved {formatRelativeTime(lastSavedAt)} · {formatDateTime(lastSavedAt)}
+            </p>
+          )}
+        </div>
+        {isConfigDirty && (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                applySavedSkillState(skill);
+                setSaveFeedback(null);
+              }}
+              className="btn-secondary text-slate-500"
+            >
+              <Undo size={14} />
+              <span>Revert</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => saveSkillMutation.mutate()}
+              disabled={saveSkillMutation.isPending || draftModelMismatch || !draftModel.trim() || !draftProviderId}
+              className="btn-primary"
+            >
+              {saveSkillMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+              <span>{saveSkillMutation.isPending ? 'Saving…' : 'Save skill'}</span>
+            </button>
+          </div>
+        )}
+      </div>
+
+      {saveFeedback && (
+        <InlineAlert tone={saveFeedback.tone} title={saveFeedback.title}>
+          {saveFeedback.message}
+        </InlineAlert>
+      )}
+
+      <div className="rounded-[24px] border border-white/75 bg-white/58 p-4">
+        <p className="text-sm font-medium text-slate-900">Resolved provider chain</p>
+        <div className="mt-3 space-y-2 text-sm text-slate-500">
+          <p>Saved skill provider: {skillProvider ? `${skillProvider.name} (${describeProviderOwnership(skillProvider)})` : 'Not bound on this skill'}</p>
+          <p>Workspace default provider: {workspaceDefaultProvider ? `${workspaceDefaultProvider.name} (${describeProviderOwnership(workspaceDefaultProvider)})` : 'Not configured'}</p>
+          <p>Shared default provider: {tenantDefaultProvider ? `${tenantDefaultProvider.name} (${describeProviderOwnership(tenantDefaultProvider)})` : 'Not configured or not available here'}</p>
+          <p>System default provider: backend-only hidden fallback</p>
+        </div>
+      </div>
+
+      {isLegacyUnboundSkill && !draftProviderId && (
+        <InlineAlert tone="warning" title="Legacy unbound skill">
+          This skill does not have a saved provider yet. You can still inspect and test it, but saving now requires binding one workspace-available provider explicitly.
+        </InlineAlert>
+      )}
+
+      {providers.length === 0 && (
+        <InlineAlert
+          tone="warning"
+          title="No provider is available in this workspace"
+          action={(
+            <div className="flex gap-2">
+              <Link to="/workspace" className="btn-secondary">
+                <span>Workspace settings</span>
+              </Link>
+              <Link to="/providers" className="btn-secondary">
+                <span>Provider hub</span>
+              </Link>
+            </div>
+          )}
+        >
+          Share a tenant-owned provider to this workspace, import a shared provider into the workspace, or set a workspace default provider before saving this skill.
+        </InlineAlert>
+      )}
+
+      <Field label="Skill Name">
+        <input
+          value={draftName}
+          onChange={(event) => markDraftEdited(setDraftName)(event.target.value)}
+          className="field"
+        />
+      </Field>
+
+      <Field label="System prompt" required>
+        <textarea
+          value={draftSystemPrompt}
+          onChange={(event) => markDraftEdited(setDraftSystemPrompt)(event.target.value)}
+          className="field min-h-[120px]"
+          required
+        />
+      </Field>
+
+      <Field label="Knowledge Base" hint="Only one knowledge base can be bound today. Draft KB changes do not affect runs until you save.">
+        <select
+          value={draftKnowledgeBaseId || ''}
+          onChange={(event) => markDraftEdited(setDraftKnowledgeBaseId)(event.target.value || null)}
+          className="field"
+        >
+          <option value="">No Knowledge Base bound</option>
+          {knowledgeBases.map((kb) => (
+            <option key={kb.id} value={kb.id}>
+              {kb.name}
+            </option>
+          ))}
+        </select>
+        {skill.knowledge_base_id !== draftKnowledgeBaseId && (
+          <p className="mt-1 text-xs text-amber-600">Knowledge Base changes stay draft-only until you save the skill.</p>
+        )}
+      </Field>
+
+      <Field label="Provider" hint="This is saved on the skill. Only providers available in the current workspace appear here. System fallback is not selectable.">
+        <select value={draftProviderId} onChange={(event) => handleDraftProviderChange(event.target.value)} className="field">
+          <option value="" disabled>
+            {isLegacyUnboundSkill ? 'Select a provider to bind this skill' : 'Select a provider'}
+          </option>
+          {selectableProviders.map((provider) => (
+            <option key={provider.id} value={provider.id}>
+              {provider.name} · {provider.scope === 'workspace' ? 'workspace-owned' : provider.is_default ? 'shared default' : 'shared'}
+            </option>
+          ))}
+        </select>
+        <p className="mt-1 text-xs text-slate-500">
+          Saved config resolution if left unbound today: {draftResolvedProvider?.name || 'Backend system default'}
+        </p>
+        {draftResolvedProvider && (
+          <p className="mt-1 text-xs text-slate-500">
+            Selected provider: {describeProviderOwnership(draftResolvedProvider)} · {describeProviderAvailability(draftResolvedProvider)}
+          </p>
+        )}
+        {!selectableProviders.length && (
+          <p className="mt-1 text-xs text-amber-600">
+            This list is empty because no provider has been made available to the current workspace yet.
+          </p>
+        )}
+      </Field>
+
+      <Field
+        label="Model"
+        hint={draftResolvedProvider ? `Default model: ${draftResolvedProvider.default_model}` : 'Select a provider first to get provider-aware model suggestions.'}
+      >
+        <div className="space-y-3">
+          {draftModelOptions.length > 0 ? (
+            <select
+              value={draftModelSelectValue}
+              onChange={(event) => handleDraftModelSelectChange(event.target.value)}
+              className="field"
+            >
+              <option value="" disabled>Select a model</option>
+              {draftModelOptions.map((model) => (
+                <option key={model} value={model}>
+                  {model}{model === draftResolvedProvider?.default_model ? ' (default)' : ''}
+                </option>
+              ))}
+              <option value={CUSTOM_MODEL_VALUE}>Custom model…</option>
+            </select>
+          ) : null}
+          {(draftModelOptions.length === 0 || draftModelSelectValue === CUSTOM_MODEL_VALUE) && (
+            <input
+              value={draftModel}
+              onChange={(event) => markDraftEdited(setDraftModel)(event.target.value)}
+              className="field"
+              placeholder={draftResolvedProvider?.default_model || 'Enter model name'}
+            />
+          )}
+        </div>
+      </Field>
+
+      {draftModelMismatch && draftResolvedProvider && (
+        <InlineAlert tone="warning" title="Provider-model mismatch">
+          {`Model "${draftModel}" is not in ${draftResolvedProvider.name}'s supported list.`}
+        </InlineAlert>
+      )}
+
+      {savedConfigModelMismatch && savedResolvedProvider && !isConfigDirty && (
+        <InlineAlert tone="warning" title="Saved config needs attention">
+          {`Saved model "${skill.model}" is no longer in ${savedResolvedProvider.name}'s supported list.`}
+        </InlineAlert>
+      )}
+
+      <div className="rounded-[24px] border border-white/75 bg-white/58 p-4">
+        <div className="mb-4">
+          <p className="text-sm font-medium text-slate-900">Run-time controls</p>
+          <p className="mt-1 text-sm text-slate-500">These do not change the saved skill. Provider changes are tested through the draft provider above, not through Send (Saved config).</p>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-2">
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" checked={effectiveQueryRewriteWithHistory} onChange={(event) => setQueryRewriteWithHistory(event.target.checked)} />
+            <span>Rewrite the search query using recent chat history</span>
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" checked={effectiveIncludeHistory} onChange={(event) => setIncludeHistory(event.target.checked)} />
+            <span>Include recent chat history in the answer prompt</span>
+          </label>
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={effectiveIncludeAssistantMessages}
+              onChange={(event) => setIncludeAssistantMessages(event.target.checked)}
+              disabled={!effectiveIncludeHistory}
+            />
+            <span>Include previous assistant replies in that history</span>
+          </label>
+          <Field label="Max user turns from history" hint="Counts recent user turns. Matching assistant replies are included only when enabled above.">
+            <input type="number" min="1" value={effectiveHistoryTurnLimit} onChange={(event) => setHistoryTurnLimit(event.target.value)} className="field" />
+          </Field>
+          <Field label="History token budget" hint="Approximate cap for chat history included in this run.">
+            <input type="number" min="1" value={effectiveHistoryTokenBudget} onChange={(event) => setHistoryTokenBudget(event.target.value)} className="field" />
+          </Field>
+          <Field label="Sections to retrieve" hint="Maximum outline sections selected before answer generation starts.">
+            <input type="number" min="1" value={effectiveTopK} onChange={(event) => setTopK(event.target.value)} className="field" />
+          </Field>
+          <Field
+            label="Section selection method"
+            hint="Model-guided asks the model to choose outline sections first. Keyword fallback skips that step and matches section titles lexically."
+          >
+            <select value={effectiveSelectionMode} onChange={(event) => setSelectionMode(event.target.value)} className="field">
+              {SELECTION_MODE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Max PDF pages in answer context" hint="Optional hard cap on the number of PDF pages pulled into the final answer context.">
+            <input type="number" min="1" value={effectiveMaxContextPages} onChange={(event) => setMaxContextPages(event.target.value)} className="field" placeholder="Optional" />
+          </Field>
+          <Field label="Max excerpt tokens in answer context" hint="Optional approximate cap on excerpt tokens after section selection.">
+            <input type="number" min="1" value={effectiveMaxContextTokens} onChange={(event) => setMaxContextTokens(event.target.value)} className="field" placeholder="Optional" />
+          </Field>
+        </div>
+      </div>
+
+      <Field label="Answer temperature" hint="0 is most deterministic. Backend accepts values from 0 to 2.">
+        <input type="number" min="0" step="0.1" value={effectiveTemperature} onChange={(event) => setTemperature(event.target.value)} className="field" />
+      </Field>
+    </div>
+  );
+
+  const runtimeTabContent = (
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 gap-3">
+        <KeyMetric label="Session" value={selectedSession?.title || 'No session'} />
+        <KeyMetric label="Model" value={activeExecutionContext.model?.resolved_model || savedConfigModel || 'N/A'} />
+        <KeyMetric label="Provider" value={activeExecutionContext.provider?.name || savedRunProvider?.name || 'Backend system default'} />
+        <KeyMetric label="Provider source" value={formatResolutionSource(activeExecutionContext.provider?.resolution_source)} />
+        <KeyMetric label="Citations" value={displayRun?.citations.length ?? 0} />
+      </div>
+
+      {boundKnowledgeBase ? (
+        <div className="surface-soft p-4">
+          <p className="metric-label">Knowledge Base</p>
+          <p className="mt-2 font-medium text-slate-900">{boundKnowledgeBase.name}</p>
+        </div>
+      ) : skillDocuments.length > 0 ? (
+        <div className="surface-soft p-4">
+          <p className="metric-label">Legacy Target Document</p>
+          <p className="mt-2 font-medium text-slate-900">{skillDocuments.length} document(s) bound</p>
+        </div>
+      ) : null}
+
+      {(displayRun || activeStatus || activeExecutionContext.retrieval?.query || activeExecutionContext.model?.resolved_model) ? (
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            <KeyMetric label="Latency" value={displayRun?.metrics.total_ms ? `${displayRun.metrics.total_ms} ms` : 'N/A'} />
+            <KeyMetric label="Tokens" value={displayRun?.metrics.total_tokens ?? 'N/A'} />
+            <KeyMetric label="Retrieved sections" value={displayRun ? (displayRun.metrics.selected_section_count ?? displayRun.selected_sections.length) : 'Pending'} />
+            <KeyMetric label="History used" value={activeExecutionContext.conversation?.history_used ? 'Yes' : 'No'} />
+          </div>
+
+          {activeStatus && (
+            <div className="surface-soft p-4">
+              <p className="metric-label">Run status</p>
+              <div className="mt-2 flex items-center gap-2">
+                <StatusBadge tone={activeStatus === 'completed' ? 'success' : activeStatus === 'failed' ? 'danger' : activeStatus === 'cancelled' ? 'warning' : 'accent'}>
+                  {activeStatus}
+                </StatusBadge>
+                {displayRun?.raw_status && displayRun.raw_status !== activeStatus && (
+                  <span className="text-xs text-slate-400">({displayRun.raw_status})</span>
+                )}
+              </div>
+              {displayRun?.cancel_requested && (
+                <p className="mt-2 text-xs text-amber-600">
+                  Cancel requested{displayRun.cancel_reason ? `: ${displayRun.cancel_reason}` : ''}
+                </p>
+              )}
+              {displayRun?.last_error && activeStatus === 'failed' && (
+                <p className="mt-2 whitespace-pre-wrap text-xs text-red-500">{humanizeSkillRunError(displayRun.last_error)}</p>
+              )}
+            </div>
+          )}
+
+          {activeExecutionContext.retrieval?.warnings && activeExecutionContext.retrieval.warnings.length > 0 && (
+            <InlineAlert tone="warning" title="Retrieval adjusted during run">
+              <div className="space-y-1">
+                {activeExecutionContext.retrieval.warnings.map((warning, index) => (
+                  <p key={`${warning}-${index}`}>{warning}</p>
+                ))}
+              </div>
+            </InlineAlert>
+          )}
+
+          {(activeExecutionContext.retrieval?.query || activeExecutionContext.retrieval?.rewritten_query) && (
+            <div className="surface-soft p-4">
+              <p className="metric-label">Retrieval query</p>
+              <p className="mt-2 text-sm text-slate-700">{activeExecutionContext.retrieval?.query || 'N/A'}</p>
+              {activeExecutionContext.retrieval?.rewrite_applied && activeExecutionContext.retrieval?.rewritten_query && (
+                <p className="mt-2 text-xs text-slate-500">Rewritten query: {activeExecutionContext.retrieval.rewritten_query}</p>
+              )}
+            </div>
+          )}
+
+          {displayRun?.citations.length ? (
+            <div className="space-y-3">
+              <p className="text-sm font-semibold text-slate-900">Citations</p>
+              {displayRun.citations.map((citation, index) => (
+                <div key={`${citation.document_id || 'citation'}-${index}`} className="surface-soft p-4">
+                  <p className="font-medium text-slate-900">{citation.title || citation.document_id || 'Untitled citation'}</p>
+                  <p className="mt-2 text-sm text-slate-500">
+                    {citation.page_start || citation.page_end ? formatPageRange(citation.page_start, citation.page_end) : 'Page range unavailable'}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <div className="empty-state min-h-[220px]">
+          <p className="text-base font-medium text-slate-900">No runtime telemetry yet</p>
+          <p className="text-sm text-slate-500">Run the skill to see resolved provider/model details and citations here.</p>
+        </div>
+      )}
+    </div>
+  );
+
   return (
-    <div className="space-y-8">
-      <SectionToolbar
-        title={skill.name}
-        description={`Skill configuration and test console${boundKnowledgeBase ? ` · ${boundKnowledgeBase.name}` : ''}. Saved defaults on the right, run history in the center.`}
-        actions={
+    <div className="space-y-6">
+      <div className="skill-console-header">
+        <div className="flex min-w-0 items-center gap-3">
           <Link to="/skills" className="btn-secondary">
             <ArrowLeft size={16} />
             <span>Back to skills</span>
           </Link>
-        }
-      />
-
-      <div className="grid grid-cols-[300px_1fr_360px] gap-6">
-        <GlassPanel title="History" subtitle="Sessions and recent questions for this skill only.">
-          <div className="scroll-area max-h-[760px] space-y-4 overflow-auto pr-1">
-            <div className="space-y-3 rounded-[24px] border border-white/75 bg-white/58 p-4">
-              <div className="flex gap-2">
-                <input
-                  value={newSessionTitle}
-                  onChange={(event) => setNewSessionTitle(event.target.value)}
-                  className="field flex-1"
-                  placeholder="Create skill session"
-                />
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => createSessionMutation.mutate(newSessionTitle.trim())}
-                  disabled={createSessionMutation.isPending}
-                >
-                  <Plus size={16} />
-                </button>
-              </div>
-            </div>
-
-            {sessionSummaries.map(({ session, latestRun, runCount }) => {
-              const active = session.id === effectiveSessionId;
-              return (
-                <button
-                  key={session.id}
-                  type="button"
-                  onClick={() => setSearchParams({ session: session.id })}
-                  className={`list-row w-full text-left ${active ? 'list-row-active' : ''}`}
-                >
-                  <div className="space-y-2">
-                    <p className="font-medium text-slate-900">{session.title}</p>
-                    <p className="line-clamp-2 text-sm text-slate-500">{latestRun?.question || 'No questions yet'}</p>
-                  </div>
-                  <div className="text-right text-sm text-slate-500">
-                    <p>{runCount} runs</p>
-                    <p>{formatDateTime(session.updated_at)}</p>
-                  </div>
-                </button>
-              );
-            })}
-
-            {sessionSummaries.length === 0 && (
-              <div className="empty-state min-h-[220px]">
-                <p className="text-base font-medium text-slate-900">No session history for this skill</p>
-                <p className="text-sm text-slate-500">Create a new session to keep future runs grouped in the left panel.</p>
-              </div>
-            )}
+          <div className="min-w-0">
+            <h2 className="truncate text-[28px] font-semibold tracking-[-0.03em] text-slate-900">{skill.name}</h2>
+            <p className="truncate text-sm text-slate-500">
+              {selectedSession?.title || 'No session selected'}
+              {boundKnowledgeBase ? ` · ${boundKnowledgeBase.name}` : ''}
+            </p>
           </div>
-        </GlassPanel>
-
-        <GlassPanel title={skill.name} subtitle={selectedSession?.title || 'No session selected'}>
-          <div className="space-y-4">
-            {chatAlert && (
-              <InlineAlert
-                tone="danger"
-                title={chatAlert.title}
-                action={
-                  chatAlert.allowRetry ? (
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      disabled={!lastQuestion || isStreaming}
-                      onClick={() => lastQuestion && runSkillMutation.mutate({ q: lastQuestion, isDraft: lastRunWasDraft })}
-                    >
-                      <RefreshCcw size={16} />
-                      <span>Retry</span>
-                    </button>
-                  ) : undefined
-                }
-              >
-                <div className="space-y-1">
-                  <p>{chatAlert.message}</p>
-                  {(chatAlert.code || chatAlert.requestId) && (
-                    <p className="text-xs text-slate-400">
-                      {chatAlert.code && <span>Code: {chatAlert.code}</span>}
-                      {chatAlert.requestId && <span> · Request ID: {chatAlert.requestId}</span>}
-                    </p>
-                  )}
-                  <p className="text-sm text-slate-500">
-                    Provider: {activeExecutionContext.provider?.name || savedRunProvider?.name || 'Backend system default'} ·
-                    {' '}Model: {activeExecutionContext.model?.resolved_model || savedConfigModel || 'N/A'}
-                  </p>
-                  <p className="text-sm text-slate-500">
-                    Resolved via: {formatResolutionSource(activeExecutionContext.provider?.resolution_source)}
-                  </p>
-                </div>
-              </InlineAlert>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => (
+              isCompactLayout
+                ? setHistoryDrawerOpen(true)
+                : updateLayoutState({ historyOpen: !layoutState.historyOpen })
             )}
+          >
+            {isCompactLayout || !layoutState.historyOpen ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+            <span>History</span>
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => (
+              isCompactLayout
+                ? setInspectorDrawerOpen(true)
+                : updateLayoutState({ inspectorOpen: !layoutState.inspectorOpen })
+            )}
+          >
+            {isCompactLayout || !layoutState.inspectorOpen ? <PanelRightOpen size={16} /> : <PanelRightClose size={16} />}
+            <span>Inspector</span>
+          </button>
+          <button type="button" className="icon-button" onClick={() => setActionsOpen(true)} aria-label="Open skill actions">
+            <MoreHorizontal size={16} />
+          </button>
+        </div>
+      </div>
 
-            <div ref={scrollRef} className="scroll-area max-h-[620px] space-y-4 overflow-auto pr-1">
-              {history.length === 0 ? (
-                <div className="empty-state min-h-[420px]">
-                  <TextQuote size={22} className="text-blue-600" />
-                  <p className="text-base font-medium text-slate-900">Start a conversation</p>
-                  <p className="text-sm text-slate-500">Create a session on the left, then ask a question against this skill&apos;s saved knowledge context.</p>
+      <div className="skill-console-shell">
+        {!isCompactLayout && (
+          layoutState.historyOpen ? (
+            <GlassPanel className="skill-console-rail" title="History" subtitle="Sessions and recent questions for this skill only.">
+              {historyPanelContent}
+            </GlassPanel>
+          ) : (
+            <div className="skill-console-rail skill-console-rail-collapsed">
+              <button
+                type="button"
+                className="skill-console-rail-trigger"
+                onClick={() => updateLayoutState({ historyOpen: true })}
+                aria-label="Expand history"
+              >
+                <div className="flex h-12 w-12 items-center justify-center rounded-[22px] bg-white/82 text-blue-600">
+                  <History size={18} />
                 </div>
-              ) : (
-                history.map((message, index) => (
-                  <div
-                    key={`${message.role}-${index}`}
-                    className={`rounded-[28px] border px-5 py-4 ${message.role === 'assistant' ? 'border-white/85 bg-white/82' : 'border-white/70 bg-white/56'}`}
-                  >
-                    <div className="mb-3 flex items-center gap-3">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/82 text-blue-600">
-                        {message.role === 'assistant' ? <Bot size={18} /> : <User size={18} />}
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-slate-900">{message.role === 'assistant' ? 'Assistant' : 'Operator'}</p>
-                        {(message.run?.created_at || message.createdAt) && <p className="text-sm text-slate-500">{formatDateTime(message.run?.created_at || message.createdAt)}</p>}
-                      </div>
-                    </div>
-                    {message.role === 'assistant' ? (
-                      <AnswerContent content={message.content} />
-                    ) : (
-                      <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">{message.content}</div>
-                    )}
-                    {message.role === 'assistant' && message.run?.answer_with_marker && (
-                      <details className="mt-4 rounded-[20px] border border-white/70 bg-white/60 p-4">
-                        <summary className="cursor-pointer text-sm font-medium text-slate-700">Raw answer with citation marker payload</summary>
-                        <pre className="mt-3 overflow-auto whitespace-pre-wrap text-xs leading-6 text-slate-600">{message.run.answer_with_marker}</pre>
-                      </details>
-                    )}
-                  </div>
-                ))
-              )}
-
-              {isStreaming && !streamingAnswer && (
-                <div className="rounded-[28px] border border-white/80 bg-white/80 px-5 py-4">
-                  <div className="mb-3 flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-blue-600">
-                      <Bot size={18} />
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-slate-900">Assistant</p>
-                      <p className="text-sm text-slate-500">
-                        {streamingStatus === 'retrieving'
-                          ? 'Retrieving from knowledge base…'
-                          : streamingStatus === 'answering'
-                            ? 'Generating answer…'
-                            : streamingStatus === 'queued'
-                              ? 'Queued — waiting for execution slot…'
-                              : 'Running…'}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <div className="h-3 w-3/4 rounded-full bg-slate-200" />
-                    <div className="h-3 w-2/3 rounded-full bg-slate-200" />
-                  </div>
+                <div className="space-y-4">
+                  <p className="skill-console-rail-label">History</p>
+                  <p className="text-xs font-medium text-slate-500">{sessionSummaries.length} sessions</p>
                 </div>
-              )}
+                <PanelLeftOpen size={18} className="text-slate-400" />
+              </button>
             </div>
+          )
+        )}
 
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                handleRun(false);
-              }}
-              className="rounded-[28px] border border-white/80 bg-white/72 p-4"
-            >
-              <div className="flex gap-3">
-                <textarea
-                  value={question}
-                  onChange={(event) => setQuestion(event.target.value)}
-                  className="field min-h-[108px] flex-1 resize-none border-0 bg-transparent p-0 shadow-none focus:shadow-none"
-                  placeholder="Ask a question through this skill…"
-                  disabled={isStreaming}
-                />
-                {isStreaming ? (
-                  <button
-                    type="button"
-                    className="btn-secondary self-end"
-                    onClick={() => {
-                      streamAbortRef.current?.abort();
-                      if (streamingRunId) {
-                        chatApi.cancelRun(streamingRunId).catch(() => {});
-                      }
-                    }}
-                  >
-                    <Square size={16} />
-                    <span>Cancel</span>
-                  </button>
-                ) : (
-                  <div className="flex flex-col gap-2 self-end">
-                    {isConfigDirty && (
+        <div className="skill-console-stage">
+          <GlassPanel title="Chat" subtitle={selectedSession?.title || 'Create or pick a session to keep work grouped under this skill.'}>
+            <div className="space-y-4">
+              {chatAlert && (
+                <InlineAlert
+                  tone="danger"
+                  title={chatAlert.title}
+                  action={
+                    chatAlert.allowRetry ? (
                       <button
                         type="button"
                         className="btn-secondary"
-                        onClick={() => handleRun(true)}
-                        disabled={!question.trim() || isStreaming || draftModelMismatch}
+                        disabled={!lastQuestion || isStreaming}
+                        onClick={() => lastQuestion && runSkillMutation.mutate({ q: lastQuestion, isDraft: lastRunWasDraft })}
                       >
-                        <Bot size={16} />
-                        <span>Test with draft</span>
+                        <RefreshCcw size={16} />
+                        <span>Retry</span>
                       </button>
+                    ) : undefined
+                  }
+                >
+                  <div className="space-y-1">
+                    <p>{chatAlert.message}</p>
+                    {(chatAlert.code || chatAlert.requestId) && (
+                      <p className="text-xs text-slate-400">
+                        {chatAlert.code && <span>Code: {chatAlert.code}</span>}
+                        {chatAlert.requestId && <span> · Request ID: {chatAlert.requestId}</span>}
+                      </p>
                     )}
-                    <button
-                      type="submit"
-                      className="btn-primary w-full justify-center"
-                      disabled={!question.trim() || isStreaming || savedRunModelMismatch}
-                    >
-                      <Send size={16} />
-                      <span>{isConfigDirty ? 'Send (Saved config)' : 'Send'}</span>
-                    </button>
-                  </div>
-                )}
-              </div>
-            </form>
-          </div>
-        </GlassPanel>
-
-        <div className="space-y-6">
-          <GlassPanel title="Settings" subtitle="Saved skill defaults first. Run-only overrides stay separate below.">
-            <div className="space-y-4">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-semibold text-slate-900">Saved skill defaults</h3>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Provider, model, knowledge base, and system prompt are persisted on the skill. Draft KB changes still apply only after save.
-                  </p>
-                  {lastSavedAt && (
-                    <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">
-                      Last saved {formatRelativeTime(lastSavedAt)} · {formatDateTime(lastSavedAt)}
+                    <p className="text-sm text-slate-500">
+                      Provider: {activeExecutionContext.provider?.name || savedRunProvider?.name || 'Backend system default'} ·
+                      {' '}Model: {activeExecutionContext.model?.resolved_model || savedConfigModel || 'N/A'}
                     </p>
-                  )}
-                </div>
-                {isConfigDirty && (
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDraftName(skill.name);
-                        setDraftSystemPrompt(skill.system_prompt || '');
-                        setDraftModel(skill.model || '');
-                        setDraftKnowledgeBaseId(skill.knowledge_base_id || null);
-                        setDraftProviderId(skill.provider_id || '');
-                        setSaveFeedback(null);
-                      }}
-                      className="btn-secondary text-slate-500"
-                    >
-                      <Undo size={14} />
-                      <span>Revert</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => saveSkillMutation.mutate()}
-                      disabled={saveSkillMutation.isPending || draftModelMismatch || !draftModel.trim() || !draftProviderId}
-                      className="btn-primary"
-                    >
-                      {saveSkillMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                      <span>{saveSkillMutation.isPending ? 'Saving…' : 'Save skill'}</span>
-                    </button>
+                    <p className="text-sm text-slate-500">
+                      Resolved via: {formatResolutionSource(activeExecutionContext.provider?.resolution_source)}
+                    </p>
                   </div>
-                )}
-              </div>
-
-              {saveFeedback && (
-                <InlineAlert tone={saveFeedback.tone} title={saveFeedback.title}>
-                  {saveFeedback.message}
                 </InlineAlert>
               )}
 
-              <div className="rounded-[24px] border border-white/75 bg-white/58 p-4">
-                <p className="text-sm font-medium text-slate-900">Resolved provider chain</p>
-                <div className="mt-3 space-y-2 text-sm text-slate-500">
-                  <p>Saved skill provider: {skillProvider ? `${skillProvider.name} (${describeProviderScope(skillProvider)})` : 'Not bound on this skill'}</p>
-                  <p>Workspace default provider: {workspaceDefaultProvider ? `${workspaceDefaultProvider.name} (${describeProviderScope(workspaceDefaultProvider)})` : 'Not configured'}</p>
-                  <p>Tenant default provider: {tenantDefaultProvider ? `${tenantDefaultProvider.name} (${describeProviderScope(tenantDefaultProvider)})` : 'Not configured or not available here'}</p>
-                  <p>System default provider: backend-only hidden fallback</p>
-                </div>
-              </div>
-
-              {isLegacyUnboundSkill && !draftProviderId && (
-                <InlineAlert tone="warning" title="Legacy unbound skill">
-                  This skill does not have a saved provider yet. You can still inspect and test it, but saving now requires binding one workspace-available provider explicitly.
-                </InlineAlert>
-              )}
-
-              <Field label="Skill Name">
-                <input
-                  value={draftName}
-                  onChange={(event) => markDraftEdited(setDraftName)(event.target.value)}
-                  className="field"
-                />
-              </Field>
-
-              <Field label="System prompt" required>
-                <textarea
-                  value={draftSystemPrompt}
-                  onChange={(event) => markDraftEdited(setDraftSystemPrompt)(event.target.value)}
-                  className="field min-h-[120px]"
-                  required
-                />
-              </Field>
-
-              <Field label="Knowledge Base" hint="Only one knowledge base can be bound today. Draft KB changes do not affect runs until you save.">
-                <select
-                  value={draftKnowledgeBaseId || ''}
-                  onChange={(event) => markDraftEdited(setDraftKnowledgeBaseId)(event.target.value || null)}
-                  className="field"
-                >
-                  <option value="">No Knowledge Base bound</option>
-                  {knowledgeBases.map((kb) => (
-                    <option key={kb.id} value={kb.id}>
-                      {kb.name}
-                    </option>
-                  ))}
-                </select>
-                {skill.knowledge_base_id !== draftKnowledgeBaseId && (
-                  <p className="mt-1 text-xs text-amber-600">Knowledge Base changes stay draft-only until you save the skill.</p>
-                )}
-              </Field>
-
-              <Field label="Provider" hint="This is saved on the skill. Only current-workspace bindable providers appear here. System fallback is not selectable.">
-                <select value={draftProviderId} onChange={(event) => handleDraftProviderChange(event.target.value)} className="field">
-                  <option value="" disabled>
-                    {isLegacyUnboundSkill ? 'Select a provider to bind this skill' : 'Select a provider'}
-                  </option>
-                  {providers.map((provider) => (
-                    <option key={provider.id} value={provider.id}>
-                      {provider.name}{provider.scope === 'workspace' ? ' (workspace)' : provider.is_default ? ' (tenant default)' : ''}
-                    </option>
-                  ))}
-                </select>
-                <p className="mt-1 text-xs text-slate-500">
-                  Saved config resolution if left unbound today: {draftResolvedProvider?.name || 'Backend system default'}
-                </p>
-              </Field>
-
-              <Field
-                label="Model"
-                hint={draftResolvedProvider ? `Default model: ${draftResolvedProvider.default_model}` : 'Select a provider first to get provider-aware model suggestions.'}
-              >
-                <div className="space-y-3">
-                  {draftModelOptions.length > 0 ? (
-                    <select
-                      value={draftModelSelectValue}
-                      onChange={(event) => handleDraftModelSelectChange(event.target.value)}
-                      className="field"
-                    >
-                      <option value="" disabled>Select a model</option>
-                      {draftModelOptions.map((model) => (
-                        <option key={model} value={model}>
-                          {model}{model === draftResolvedProvider?.default_model ? ' (default)' : ''}
-                        </option>
-                      ))}
-                      <option value={CUSTOM_MODEL_VALUE}>Custom model…</option>
-                    </select>
-                  ) : null}
-                  {(draftModelOptions.length === 0 || draftModelSelectValue === CUSTOM_MODEL_VALUE) && (
-                    <input
-                      value={draftModel}
-                      onChange={(event) => markDraftEdited(setDraftModel)(event.target.value)}
-                      className="field"
-                      placeholder={draftResolvedProvider?.default_model || 'Enter model name'}
-                    />
-                  )}
-                </div>
-              </Field>
-
-              {draftModelMismatch && draftResolvedProvider && (
-                <InlineAlert tone="warning" title="Provider-model mismatch">
-                  {`Model "${draftModel}" is not in ${draftResolvedProvider.name}'s supported list.`}
-                </InlineAlert>
-              )}
-
-              {savedConfigModelMismatch && savedResolvedProvider && !isConfigDirty && (
-                <InlineAlert tone="warning" title="Saved config needs attention">
-                  {`Saved model "${skill.model}" is no longer in ${savedResolvedProvider.name}'s supported list.`}
-                </InlineAlert>
-              )}
-
-              <div className="rounded-[24px] border border-white/75 bg-white/58 p-4">
-                <div className="mb-4">
-                  <p className="text-sm font-medium text-slate-900">Run-time controls</p>
-                  <p className="mt-1 text-sm text-slate-500">These do not change the saved skill. Provider changes are tested through the draft provider above, not through Send (Saved config).</p>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <label className="flex items-center gap-2 text-sm text-slate-700">
-                    <input type="checkbox" checked={effectiveQueryRewriteWithHistory} onChange={(event) => setQueryRewriteWithHistory(event.target.checked)} />
-                    <span>Rewrite the search query using recent chat history</span>
-                  </label>
-                  <label className="flex items-center gap-2 text-sm text-slate-700">
-                    <input type="checkbox" checked={effectiveIncludeHistory} onChange={(event) => setIncludeHistory(event.target.checked)} />
-                    <span>Include recent chat history in the answer prompt</span>
-                  </label>
-                  <label className="flex items-center gap-2 text-sm text-slate-700">
-                    <input
-                      type="checkbox"
-                      checked={effectiveIncludeAssistantMessages}
-                      onChange={(event) => setIncludeAssistantMessages(event.target.checked)}
-                      disabled={!effectiveIncludeHistory}
-                    />
-                    <span>Include previous assistant replies in that history</span>
-                  </label>
-                  <Field label="Max user turns from history" hint="Counts recent user turns. Matching assistant replies are included only when enabled above.">
-                    <input type="number" min="1" value={effectiveHistoryTurnLimit} onChange={(event) => setHistoryTurnLimit(event.target.value)} className="field" />
-                  </Field>
-                  <Field label="History token budget" hint="Approximate cap for chat history included in this run.">
-                    <input type="number" min="1" value={effectiveHistoryTokenBudget} onChange={(event) => setHistoryTokenBudget(event.target.value)} className="field" />
-                  </Field>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Sections to retrieve" hint="Maximum outline sections selected before answer generation starts.">
-                  <input type="number" min="1" value={effectiveTopK} onChange={(event) => setTopK(event.target.value)} className="field" />
-                </Field>
-                <Field
-                  label="Section selection method"
-                  hint="Model-guided asks the model to choose outline sections first. Keyword fallback skips that step and matches section titles lexically."
-                >
-                  <select value={effectiveSelectionMode} onChange={(event) => setSelectionMode(event.target.value)} className="field">
-                    {SELECTION_MODE_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Max PDF pages in answer context" hint="Optional hard cap on the number of PDF pages pulled into the final answer context.">
-                  <input type="number" min="1" value={effectiveMaxContextPages} onChange={(event) => setMaxContextPages(event.target.value)} className="field" placeholder="Optional" />
-                </Field>
-                <Field label="Max excerpt tokens in answer context" hint="Optional approximate cap on excerpt tokens after section selection.">
-                  <input type="number" min="1" value={effectiveMaxContextTokens} onChange={(event) => setMaxContextTokens(event.target.value)} className="field" placeholder="Optional" />
-                </Field>
-              </div>
-
-              <Field label="Answer temperature" hint="0 is most deterministic. Backend accepts values from 0 to 2.">
-                <input type="number" min="0" step="0.1" value={effectiveTemperature} onChange={(event) => setTemperature(event.target.value)} className="field" />
-              </Field>
-            </div>
-          </GlassPanel>
-
-          <GlassPanel title="Runtime data" subtitle="Latest run telemetry, knowledge context, citations, and execution details.">
-            <div className="space-y-5">
-              <div className="grid grid-cols-2 gap-3">
-                <KeyMetric label="Session" value={selectedSession?.title || 'No session'} />
-                <KeyMetric label="Model" value={activeExecutionContext.model?.resolved_model || savedConfigModel || 'N/A'} />
-                <KeyMetric label="Provider" value={activeExecutionContext.provider?.name || savedRunProvider?.name || 'Backend system default'} />
-                <KeyMetric label="Provider source" value={formatResolutionSource(activeExecutionContext.provider?.resolution_source)} />
-                <KeyMetric label="Citations" value={displayRun?.citations.length ?? 0} />
-              </div>
-
-              {boundKnowledgeBase ? (
-                <div className="surface-soft p-4">
-                  <p className="metric-label">Knowledge Base</p>
-                  <p className="mt-2 font-medium text-slate-900">{boundKnowledgeBase.name}</p>
-                </div>
-              ) : skillDocuments.length > 0 ? (
-                <div className="surface-soft p-4">
-                  <p className="metric-label">Legacy Target Document</p>
-                  <p className="mt-2 font-medium text-slate-900">{skillDocuments.length} document(s) bound</p>
-                </div>
-              ) : null}
-
-              {(displayRun || activeStatus || activeExecutionContext.retrieval?.query || activeExecutionContext.model?.resolved_model) ? (
-                <>
-                  <div className="grid grid-cols-2 gap-3">
-                    <KeyMetric label="Latency" value={displayRun?.metrics.total_ms ? `${displayRun.metrics.total_ms} ms` : 'N/A'} />
-                    <KeyMetric label="Tokens" value={displayRun?.metrics.total_tokens ?? 'N/A'} />
-                    <KeyMetric label="Retrieved sections" value={displayRun ? (displayRun.metrics.selected_section_count ?? displayRun.selected_sections.length) : 'Pending'} />
-                    <KeyMetric label="History used" value={activeExecutionContext.conversation?.history_used ? 'Yes' : 'No'} />
+              <div ref={scrollRef} className="scroll-area max-h-[620px] space-y-4 overflow-auto pr-1">
+                {history.length === 0 ? (
+                  <div className="empty-state min-h-[420px]">
+                    <TextQuote size={22} className="text-blue-600" />
+                    <p className="text-base font-medium text-slate-900">Start a conversation</p>
+                    <p className="text-sm text-slate-500">Create a session from the history rail, then ask a question against this skill&apos;s saved knowledge context.</p>
                   </div>
-
-                  {activeStatus && (
-                    <div className="surface-soft p-4">
-                      <p className="metric-label">Run status</p>
-                      <div className="mt-2 flex items-center gap-2">
-                        <StatusBadge tone={activeStatus === 'completed' ? 'success' : activeStatus === 'failed' ? 'danger' : activeStatus === 'cancelled' ? 'warning' : 'accent'}>
-                          {activeStatus}
-                        </StatusBadge>
-                        {displayRun?.raw_status && displayRun.raw_status !== activeStatus && (
-                          <span className="text-xs text-slate-400">({displayRun.raw_status})</span>
-                        )}
-                      </div>
-                      {displayRun?.cancel_requested && (
-                        <p className="mt-2 text-xs text-amber-600">
-                          Cancel requested{displayRun.cancel_reason ? `: ${displayRun.cancel_reason}` : ''}
-                        </p>
-                      )}
-                      {displayRun?.last_error && activeStatus === 'failed' && (
-                        <p className="mt-2 text-xs text-red-500">{displayRun.last_error}</p>
-                      )}
-                    </div>
-                  )}
-
-                  {(activeExecutionContext.retrieval?.query || activeExecutionContext.retrieval?.rewritten_query) && (
-                    <div className="surface-soft p-4">
-                      <p className="metric-label">Retrieval query</p>
-                      <p className="mt-2 text-sm text-slate-700">{activeExecutionContext.retrieval?.query || 'N/A'}</p>
-                      {activeExecutionContext.retrieval?.rewrite_applied && activeExecutionContext.retrieval?.rewritten_query && (
-                        <p className="mt-2 text-xs text-slate-500">Rewritten query: {activeExecutionContext.retrieval.rewritten_query}</p>
-                      )}
-                    </div>
-                  )}
-
-                  {displayRun?.citations.length ? (
-                    <div className="space-y-3">
-                      <p className="text-sm font-semibold text-slate-900">Citations</p>
-                      {displayRun.citations.map((citation, index) => (
-                        <div key={`${citation.document_id || 'citation'}-${index}`} className="surface-soft p-4">
-                          <p className="font-medium text-slate-900">{citation.title || citation.document_id || 'Untitled citation'}</p>
-                          <p className="mt-2 text-sm text-slate-500">
-                            {citation.page_start || citation.page_end ? formatPageRange(citation.page_start, citation.page_end) : 'Page range unavailable'}
-                          </p>
+                ) : (
+                  history.map((message, index) => (
+                    <div
+                      key={`${message.role}-${index}`}
+                      className={`rounded-[28px] border px-5 py-4 ${message.role === 'assistant' ? 'border-white/85 bg-white/82' : 'border-white/70 bg-white/56'}`}
+                    >
+                      <div className="mb-3 flex items-center gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/82 text-blue-600">
+                          {message.role === 'assistant' ? <Bot size={18} /> : <User size={18} />}
                         </div>
-                      ))}
+                        <div>
+                          <p className="text-sm font-medium text-slate-900">{message.role === 'assistant' ? 'Assistant' : 'Operator'}</p>
+                          {resolveHistoryItemTimestamp(message) && <p className="text-sm text-slate-500">{formatDateTime(resolveHistoryItemTimestamp(message))}</p>}
+                        </div>
+                      </div>
+                      {message.role === 'assistant' ? (
+                        <AnswerContent content={message.content} />
+                      ) : (
+                        <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">{message.content}</div>
+                      )}
+                      {message.role === 'assistant' && message.run?.answer_with_marker && (
+                        <details className="mt-4 rounded-[20px] border border-white/70 bg-white/60 p-4">
+                          <summary className="cursor-pointer text-sm font-medium text-slate-700">Raw answer with citation marker payload</summary>
+                          <pre className="mt-3 overflow-auto whitespace-pre-wrap text-xs leading-6 text-slate-600">{message.run.answer_with_marker}</pre>
+                        </details>
+                      )}
                     </div>
-                  ) : null}
-                </>
-              ) : (
-                <div className="empty-state min-h-[220px]">
-                  <p className="text-base font-medium text-slate-900">No runtime telemetry yet</p>
-                  <p className="text-sm text-slate-500">Run the skill to see resolved provider/model details and citations here.</p>
+                  ))
+                )}
+
+                {isStreaming && !streamingAnswer && (
+                  <div className="rounded-[28px] border border-white/80 bg-white/80 px-5 py-4">
+                    <div className="mb-3 flex items-center gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-blue-600">
+                        <Bot size={18} />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-slate-900">Assistant</p>
+                        <p className="text-sm text-slate-500">
+                          {streamingStatus === 'retrieving'
+                            ? 'Retrieving from knowledge base…'
+                            : streamingStatus === 'answering'
+                              ? 'Generating answer…'
+                              : streamingStatus === 'queued'
+                                ? 'Queued — waiting for execution slot…'
+                                : 'Running…'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <div className="h-3 w-3/4 rounded-full bg-slate-200" />
+                      <div className="h-3 w-2/3 rounded-full bg-slate-200" />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  handleRun(false);
+                }}
+                className="skill-console-composer"
+              >
+                <div className="flex gap-3 max-md:flex-col">
+                  <textarea
+                    value={question}
+                    onChange={(event) => setQuestion(event.target.value)}
+                    className="field min-h-[108px] flex-1 resize-none border-0 bg-transparent p-0 shadow-none focus:shadow-none"
+                    placeholder="Ask a question through this skill…"
+                    disabled={isStreaming}
+                  />
+                  {isStreaming ? (
+                    <button
+                      type="button"
+                      className="btn-secondary self-end"
+                      onClick={() => {
+                        streamAbortRef.current?.abort();
+                        if (streamingRunId) {
+                          chatApi.cancelRun(streamingRunId).catch(() => {});
+                        }
+                      }}
+                    >
+                      <Square size={16} />
+                      <span>Cancel</span>
+                    </button>
+                  ) : (
+                    <div className="flex flex-col gap-2 self-end max-md:self-stretch">
+                      {isConfigDirty && (
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => handleRun(true)}
+                          disabled={!question.trim() || isStreaming || draftModelMismatch}
+                        >
+                          <Bot size={16} />
+                          <span>Test with draft</span>
+                        </button>
+                      )}
+                      <button
+                        type="submit"
+                        className="btn-primary w-full justify-center"
+                        disabled={!question.trim() || isStreaming || savedRunModelMismatch}
+                      >
+                        <Send size={16} />
+                        <span>{isConfigDirty ? 'Send (Saved config)' : 'Send'}</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
-              )}
+              </form>
             </div>
           </GlassPanel>
         </div>
+
+        {!isCompactLayout && (
+          layoutState.inspectorOpen ? (
+            <GlassPanel
+              className="skill-console-rail skill-console-rail-right"
+              title="Inspector"
+              subtitle="Saved skill defaults and runtime data stay separated in tabs."
+              actions={(
+                <SegmentedControl
+                  value={layoutState.inspectorTab}
+                  onChange={(value) => updateLayoutState({ inspectorTab: value as SkillConsoleLayoutState['inspectorTab'] })}
+                  items={[
+                    { value: 'settings', label: 'Settings' },
+                    { value: 'runtime', label: 'Runtime' },
+                  ]}
+                />
+              )}
+            >
+              {layoutState.inspectorTab === 'settings' ? settingsTabContent : runtimeTabContent}
+            </GlassPanel>
+          ) : (
+            <div className="skill-console-rail skill-console-rail-right skill-console-rail-collapsed">
+              <button
+                type="button"
+                className="skill-console-rail-trigger"
+                onClick={() => updateLayoutState({ inspectorOpen: true })}
+                aria-label="Expand inspector"
+              >
+                <div className="flex h-12 w-12 items-center justify-center rounded-[22px] bg-white/82 text-blue-600">
+                  <SlidersHorizontal size={18} />
+                </div>
+                <div className="space-y-4">
+                  <p className="skill-console-rail-label">Inspector</p>
+                  <p className="text-xs font-medium text-slate-500">{layoutState.inspectorTab === 'settings' ? 'Saved config' : 'Runtime data'}</p>
+                </div>
+                <PanelRightOpen size={18} className="text-slate-400" />
+              </button>
+            </div>
+          )
+        )}
       </div>
+
+      <ExpertDrawer
+        open={isCompactLayout && historyDrawerOpen}
+        onClose={() => setHistoryDrawerOpen(false)}
+        side="left"
+        widthClassName="w-[520px]"
+        title="History"
+        description="Sessions and recent questions for this skill only."
+      >
+        {historyPanelContent}
+      </ExpertDrawer>
+
+      <ExpertDrawer
+        open={isCompactLayout && inspectorDrawerOpen}
+        onClose={() => setInspectorDrawerOpen(false)}
+        side="right"
+        widthClassName="w-[560px]"
+        title="Inspector"
+        description="Saved defaults and runtime data are separated into tabs."
+      >
+        <div className="space-y-4">
+          <SegmentedControl
+            value={layoutState.inspectorTab}
+            onChange={(value) => updateLayoutState({ inspectorTab: value as SkillConsoleLayoutState['inspectorTab'] })}
+            items={[
+              { value: 'settings', label: 'Settings' },
+              { value: 'runtime', label: 'Runtime' },
+            ]}
+          />
+          {layoutState.inspectorTab === 'settings' ? settingsTabContent : runtimeTabContent}
+        </div>
+      </ExpertDrawer>
+
+      {actionsOpen && (
+        <SkillActionsModal
+          key={skill.id}
+          open={actionsOpen}
+          skill={skill}
+          onClose={() => setActionsOpen(false)}
+          onUpdated={(updatedSkill) => {
+            setDraftName(updatedSkill.name);
+            setLastSavedAt(updatedSkill.updated_at);
+            setSaveFeedback({
+              tone: 'success',
+              title: 'Skill updated',
+              message: 'Saved skill metadata changed.',
+            });
+          }}
+          onDeleted={() => navigate('/skills')}
+        />
+      )}
     </div>
   );
 };

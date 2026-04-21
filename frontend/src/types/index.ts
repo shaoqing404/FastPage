@@ -722,8 +722,11 @@ export interface ChatRunExecutionContext extends Record<string, unknown> {
     rewrite_applied?: boolean;
     top_k?: number;
     selection_mode?: string;
+    query_rewrite_strategy?: string;
+    outline_selection_strategy?: string | null;
     max_context_pages?: number | null;
     max_context_tokens?: number | null;
+    warnings?: string[];
   };
   generation?: {
     temperature?: number | null;

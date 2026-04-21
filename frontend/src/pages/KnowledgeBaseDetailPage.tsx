@@ -67,6 +67,7 @@ export const KnowledgeBaseDetailPage: React.FC = () => {
   // Upload state
   const [uploadPending, setUploadPending] = useState(false);
   const [uploadError, setUploadError] = useState('');
+  const [uploadDragActive, setUploadDragActive] = useState(false);
 
   const { data: kb, isLoading: kbLoading } = useQuery({
     queryKey: ['knowledge-base', kbId],
@@ -85,6 +86,16 @@ export const KnowledgeBaseDetailPage: React.FC = () => {
 
   const editable = kb && user?.id ? canEditKnowledgeBase(user.id, kb, workspaceMembership?.role ?? null, canManage) : false;
 
+  const syncKnowledgeBaseCaches = (updatedKnowledgeBase: KnowledgeBase) => {
+    queryClient.setQueryData(['knowledge-base', kbId], updatedKnowledgeBase);
+    queryClient.setQueryData<KnowledgeBase[] | undefined>(['knowledge-bases'], (current) => {
+      if (!current) return current;
+      const existingIndex = current.findIndex((item) => item.id === updatedKnowledgeBase.id);
+      if (existingIndex === -1) return [updatedKnowledgeBase, ...current];
+      return current.map((item) => (item.id === updatedKnowledgeBase.id ? updatedKnowledgeBase : item));
+    });
+  };
+
   // Metadata update
   const updateMetadataMutation = useMutation({
     mutationFn: (payload: Partial<MetadataFormState>) => knowledgeBasesApi.update(kbId!, payload),
@@ -102,11 +113,10 @@ export const KnowledgeBaseDetailPage: React.FC = () => {
   // Membership save (replace all)
   const saveMembershipMutation = useMutation({
     mutationFn: (docs: KnowledgeBaseDocumentBindingInput[]) => knowledgeBasesApi.replaceDocuments(kbId!, docs),
-    onSuccess: () => {
+    onSuccess: (updatedKnowledgeBase) => {
       setMembershipError('');
-      setMembership(null);
-      queryClient.invalidateQueries({ queryKey: ['knowledge-base', kbId] });
-      queryClient.invalidateQueries({ queryKey: ['knowledge-bases'] });
+      setMembership(deriveMembership(updatedKnowledgeBase));
+      syncKnowledgeBaseCaches(updatedKnowledgeBase);
     },
     onError: (e: unknown) => setMembershipError(getErrorMessage(e, 'Failed to save membership')),
   });
@@ -127,22 +137,31 @@ export const KnowledgeBaseDetailPage: React.FC = () => {
     setUploadPending(true);
     setUploadError('');
     try {
-      // Pass kbId so the backend records which KB triggered this upload
       const result = await documentsApi.upload(file, undefined, kbId);
-      // Auto-add to KB membership
       const newBinding: KnowledgeBaseDocumentBindingInput = {
         document_id: result.document_id,
         enabled: true,
         sort_order: effectiveMembership.length,
       };
-      await knowledgeBasesApi.addDocument(kbId, newBinding);
-      queryClient.invalidateQueries({ queryKey: ['knowledge-base', kbId] });
+      const updatedKnowledgeBase = await knowledgeBasesApi.addDocument(kbId, newBinding);
+      syncKnowledgeBaseCaches(updatedKnowledgeBase);
+      setMembership(deriveMembership(updatedKnowledgeBase));
       queryClient.invalidateQueries({ queryKey: ['documents'] });
-      setMembership(null); // reset to re-derive
+      queryClient.invalidateQueries({ queryKey: ['knowledge-bases'] });
+      queryClient.invalidateQueries({ queryKey: ['knowledge-base', kbId] });
+
+      try {
+        await documentsApi.parse(result.document_id, result.version_id);
+        queryClient.invalidateQueries({ queryKey: ['documents'] });
+        queryClient.invalidateQueries({ queryKey: ['all-jobs'] });
+      } catch (parseError) {
+        setUploadError(getErrorMessage(parseError, 'Upload completed, but parse request failed.'));
+      }
     } catch (e) {
       setUploadError(getErrorMessage(e, 'Upload failed'));
     } finally {
       setUploadPending(false);
+      setUploadDragActive(false);
     }
   };
 
@@ -229,7 +248,34 @@ export const KnowledgeBaseDetailPage: React.FC = () => {
                 <div className="space-y-3">
                   <label
                     htmlFor="kb-file-upload"
-                    className={`flex cursor-pointer items-center justify-center gap-3 rounded-xl border-2 border-dashed border-slate-300/80 bg-slate-50/50 p-8 text-sm text-slate-500 transition hover:border-blue-400 hover:bg-blue-50/30 ${uploadPending ? 'pointer-events-none opacity-60' : ''}`}
+                    className={`flex cursor-pointer items-center justify-center gap-3 rounded-xl border-2 border-dashed p-8 text-sm transition ${
+                      uploadDragActive
+                        ? 'border-blue-500 bg-blue-50/60 text-blue-700'
+                        : 'border-slate-300/80 bg-slate-50/50 text-slate-500 hover:border-blue-400 hover:bg-blue-50/30'
+                    } ${uploadPending ? 'pointer-events-none opacity-60' : ''}`}
+                    onDragEnter={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      if (!uploadPending) setUploadDragActive(true);
+                    }}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      if (!uploadPending) setUploadDragActive(true);
+                    }}
+                    onDragLeave={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setUploadDragActive(false);
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setUploadDragActive(false);
+                      if (uploadPending) return;
+                      const file = event.dataTransfer.files?.[0];
+                      if (file) void handleFileUpload(file);
+                    }}
                   >
                     {uploadPending ? (
                       <>

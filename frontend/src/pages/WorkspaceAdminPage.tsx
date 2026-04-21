@@ -17,7 +17,14 @@ import {
   storeAuthTokenResponse,
   updateStoredWorkspace,
 } from '../lib/api/client';
-import { formatDateTime, getErrorMessage, resolveWorkspaceDefaultProvider } from '../lib/utils';
+import { copyTextToClipboard } from '../lib/clipboard';
+import {
+  describeProviderAvailability,
+  describeProviderOwnership,
+  formatDateTime,
+  getErrorMessage,
+  resolveWorkspaceDefaultProvider,
+} from '../lib/utils';
 import type {
   Workspace,
   WorkspaceCapabilityKey,
@@ -132,13 +139,6 @@ const toIsoDateTime = (value: string) => (value ? new Date(value).toISOString() 
 
 const getInviteLink = (inviteId: string) =>
   typeof window === 'undefined' ? resolveAppPath(`/workspace-invites/${inviteId}/accept`) : `${window.location.origin}${resolveAppPath(`/workspace-invites/${inviteId}/accept`)}`;
-
-const copyToClipboard = async (value: string) => {
-  if (typeof navigator === 'undefined' || !navigator.clipboard) {
-    throw new Error('Clipboard is unavailable in this browser.');
-  }
-  await navigator.clipboard.writeText(value);
-};
 
 type EditableMemberCardProps = {
   actorRole: string | null;
@@ -601,8 +601,18 @@ export const WorkspaceAdminPage: React.FC = () => {
   const allProviders = providerHubQuery.data || [];
   const workspaceDefaultProvider = resolveWorkspaceDefaultProvider(workspace?.default_provider_id ?? null, availableProviders);
   const tenantDefaultProvider = availableProviders.find((provider) => provider.is_default) || null;
+  const importedSourceIds = new Set(
+    allProviders
+      .filter((provider) => provider.scope === 'workspace')
+      .map((provider) => provider.source_provider_id)
+      .filter((value): value is string => Boolean(value)),
+  );
   const importableProviders = allProviders.filter(
-    (provider) => provider.scope === 'tenant' && provider.available_in_current_workspace && !provider.managed_by_system,
+    (provider) =>
+      provider.scope === 'tenant' &&
+      provider.available_in_current_workspace &&
+      !provider.managed_by_system &&
+      !importedSourceIds.has(provider.id),
   );
   const founderTransferOptions = members.filter((member) => member.status === 'active' && member.role !== 'founder');
 
@@ -713,7 +723,7 @@ export const WorkspaceAdminPage: React.FC = () => {
                 <span>Workspace AI settings</span>
               </div>
               <p className="text-sm text-slate-500">
-                Workspace default provider must come from providers that are available in this workspace. Tenant default and backend system default stay as fallback only.
+                Workspace default provider must come from providers that are available in this workspace. Shared providers remain tenant-owned; importing one creates a workspace-owned copy. Tenant default and backend system fallback stay as fallback only.
               </p>
               <div className="grid gap-4 md:grid-cols-2">
                 <Field label="Workspace default provider" hint="Resolution order is saved skill provider, runtime test override, workspace default, tenant default, then backend system fallback.">
@@ -750,8 +760,13 @@ export const WorkspaceAdminPage: React.FC = () => {
                     {availableProviders.length > 0 ? (
                       availableProviders.map((provider) => (
                         <div key={provider.id} className="flex items-center justify-between gap-3 text-sm text-slate-600">
-                          <span>{provider.name}</span>
-                          <StatusBadge tone={provider.scope === 'workspace' ? 'accent' : 'success'}>{provider.scope}</StatusBadge>
+                          <div>
+                            <p className="font-medium text-slate-900">{provider.name}</p>
+                            <p className="text-xs text-slate-500">{describeProviderOwnership(provider)} · {describeProviderAvailability(provider)}</p>
+                          </div>
+                          <StatusBadge tone={provider.scope === 'workspace' ? 'accent' : 'success'}>
+                            {provider.scope === 'workspace' ? 'workspace-owned' : 'shared'}
+                          </StatusBadge>
                         </div>
                       ))
                     ) : (
@@ -760,13 +775,16 @@ export const WorkspaceAdminPage: React.FC = () => {
                   </div>
                 </div>
                 <div className="surface-subtle space-y-3 rounded-2xl border border-white/70 p-4">
-                  <p className="text-sm font-medium text-slate-900">Import tenant provider into this workspace</p>
+                  <p className="text-sm font-medium text-slate-900">Import shared provider into this workspace</p>
                   {canManageProviders ? (
                     <div className="space-y-2">
                       {importableProviders.length > 0 ? (
                         importableProviders.map((provider) => (
                           <div key={provider.id} className="flex items-center justify-between gap-3 text-sm text-slate-600">
-                            <span>{provider.name}</span>
+                            <div>
+                              <p className="font-medium text-slate-900">{provider.name}</p>
+                              <p className="text-xs text-slate-500">{describeProviderAvailability(provider)}</p>
+                            </div>
                             <button
                               type="button"
                               className="btn-secondary"
@@ -776,12 +794,12 @@ export const WorkspaceAdminPage: React.FC = () => {
                               }}
                               disabled={importProviderMutation.isPending}
                             >
-                              <span>Import</span>
+                              <span>Import copy</span>
                             </button>
                           </div>
                         ))
                       ) : (
-                        <p className="text-sm text-slate-500">No tenant provider is currently available to import here.</p>
+                        <p className="text-sm text-slate-500">No shared provider is currently available to import here.</p>
                       )}
                     </div>
                   ) : (
@@ -952,7 +970,7 @@ export const WorkspaceAdminPage: React.FC = () => {
                         className="btn-secondary"
                         onClick={async () => {
                           try {
-                            await copyToClipboard(latestInviteLink);
+                            await copyTextToClipboard(latestInviteLink);
                             setCopySuccess('Invite link copied.');
                           } catch (error) {
                             setCopySuccess(getErrorMessage(error, 'Unable to copy invite link'));
@@ -1002,7 +1020,7 @@ export const WorkspaceAdminPage: React.FC = () => {
                               className="btn-secondary"
                               onClick={async () => {
                                 try {
-                                  await copyToClipboard(getInviteLink(invite.id));
+                                  await copyTextToClipboard(getInviteLink(invite.id));
                                   setCopySuccess('Invite link copied.');
                                 } catch (error) {
                                   setCopySuccess(getErrorMessage(error, 'Unable to copy invite link'));

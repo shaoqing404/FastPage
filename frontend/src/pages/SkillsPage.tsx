@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Plus, Save, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
+import { SkillActionsModal } from '../components/skills/SkillActionsModal';
 import { SkillLibraryCard } from '../components/skills/SkillLibraryCard';
 import type { KnowledgeBaseSummary, SkillConsoleItem } from '../components/skills/types';
 import { EmptyState, Field, GlassPanel, InlineAlert, KeyMetric, SectionToolbar } from '../components/ui/workbench';
@@ -41,6 +42,7 @@ export const SkillsPage: React.FC = () => {
 
   const [isCreateMode, setIsCreateMode] = useState(false);
   const [createError, setCreateError] = useState('');
+  const [activeSkillActionId, setActiveSkillActionId] = useState<string | null>(null);
   const [formState, setFormState] = useState({
     name: '',
     description: '',
@@ -63,6 +65,10 @@ export const SkillsPage: React.FC = () => {
   const providers = useMemo(() => providersQuery.data || [], [providersQuery.data]);
   const knowledgeBases = useMemo(() => knowledgeBasesQuery.data || [], [knowledgeBasesQuery.data]);
   const storedWorkspace = resolveStoredWorkspace();
+  const selectedSkillForActions = useMemo(
+    () => skills.find((skill) => skill.id === activeSkillActionId) || null,
+    [activeSkillActionId, skills],
+  );
   const workspaceDefaultProvider = useMemo(
     () => resolveWorkspaceDefaultProvider(storedWorkspace?.default_provider_id ?? null, providers),
     [providers, storedWorkspace?.default_provider_id],
@@ -174,8 +180,8 @@ export const SkillsPage: React.FC = () => {
               {workspaceDefaultProvider
                 ? `This skill will start with workspace default provider ${workspaceDefaultProvider.name} and model ${workspaceDefaultProvider.default_model}.`
                 : tenantDefaultProvider
-                  ? `No workspace default is set, so creation will use tenant default provider ${tenantDefaultProvider.name}.`
-                  : 'No workspace or tenant default provider is available yet.'}
+                  ? `No workspace default is set, so creation will use shared default provider ${tenantDefaultProvider.name}.`
+                  : 'No workspace-available provider is configured yet. Share or import one in Provider Hub, or set a workspace default provider first.'}
             </InlineAlert>
             
             <div className="grid gap-6 lg:grid-cols-2">
@@ -234,10 +240,20 @@ export const SkillsPage: React.FC = () => {
                 providerLabel={providerLabel}
                 selected={false}
                 onSelect={() => navigate(`/skills/${skill.id}`)}
+                onOpenActions={() => setActiveSkillActionId(skill.id)}
               />
             );
           })}
         </div>
+      )}
+
+      {selectedSkillForActions && (
+        <SkillActionsModal
+          key={selectedSkillForActions.id}
+          open={Boolean(selectedSkillForActions)}
+          skill={selectedSkillForActions}
+          onClose={() => setActiveSkillActionId(null)}
+        />
       )}
     </div>
   );
