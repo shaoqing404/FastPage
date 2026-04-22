@@ -1404,6 +1404,7 @@ async def run_compliance_run(run_id: str) -> None:
         rerank_mode = str(retrieval_config.get("rerank_mode") or "auto")
         rerank_config = resolve_rerank_config(provider_config=provider_config, rerank_mode=rerank_mode)
         rerank_meta = {"applied": False, "mode": "disabled"}
+        rerank_warning = None
         reranked_candidates = candidate_sections[: int(retrieval_config["global_top_k"])]
         await _record_compliance_step_started(
             run,
@@ -1424,12 +1425,21 @@ async def run_compliance_run(run_id: str) -> None:
                     request_options={
                         "api_base": rerank_config.get("base_url"),
                         "api_key": rerank_config.get("api_key"),
+                        "provider_type": rerank_config.get("provider_type"),
                     },
                     stats_hook=stats_hook,
                     top_k=int(retrieval_config["global_top_k"]),
                 )
 
-            reranked_candidates, rerank_meta = await _retry_compliance_async("rerank", rerank_operation, run=run)
+            try:
+                reranked_candidates, rerank_meta = await _retry_compliance_async("rerank", rerank_operation, run=run)
+            except Exception as exc:
+                reranked_candidates = candidate_sections[: int(retrieval_config["global_top_k"])]
+                rerank_meta = {
+                    "applied": False,
+                    "mode": "fallback_original_order_after_error",
+                }
+                rerank_warning = f"Rerank failed and fell back to original retrieval order: {exc}"
         citations_with_internal = [
             _compliance_citation_from_candidate(candidate, knowledge_base_id=run.knowledge_base_id, index=index)
             for index, candidate in enumerate(reranked_candidates, start=1)
@@ -1443,6 +1453,7 @@ async def run_compliance_run(run_id: str) -> None:
                 "rerank_applied": rerank_meta.get("applied"),
                 "rerank_model": rerank_config.get("model"),
                 "rerank_provider_source": rerank_config.get("provider_source"),
+                "rerank_warning": rerank_warning,
             },
         )
 
@@ -1482,6 +1493,7 @@ async def run_compliance_run(run_id: str) -> None:
                 "rerank_resolved_mode": rerank_config.get("resolved_mode"),
                 "documents_considered": len(resolved_manuals),
                 "documents_with_hits": documents_with_hits,
+                "rerank_warning": rerank_warning,
             },
             "merge": {
                 "strategy": "rerank_merge" if rerank_meta.get("applied") else "sequential_kb_merge",

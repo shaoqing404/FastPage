@@ -15,11 +15,13 @@ set -a
 source "${ENV_FILE}"
 set +a
 
-: "${WORKER_REPLICAS:=1}"
-
 case "${PROFILE}" in
   full)
-    docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile full up -d --build --scale worker="${WORKER_REPLICAS}" mysql redis minio api worker
+    echo "==> Starting Infrastructure (MySQL, Redis, MinIO)..."
+    docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile full up -d --build mysql redis minio
+
+    echo "==> Starting API Service (worker starts inside the API container, including database migrations)..."
+    docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile full up -d --build api
     ;;
   local)
     docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile local up -d --build api-local

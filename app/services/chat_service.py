@@ -1477,6 +1477,7 @@ async def run_chat_run(run_id: str) -> None:
             "candidate_count": len(candidate_sections),
             "selected_count": len(reranked_candidates),
         }
+        rerank_warning = None
         await _record_chat_step_started(
             run,
             "rerank",
@@ -1496,6 +1497,7 @@ async def run_chat_run(run_id: str) -> None:
                     request_options={
                         "api_base": rerank_config.get("base_url"),
                         "api_key": rerank_config.get("api_key"),
+                        "provider_type": rerank_config.get("provider_type"),
                     },
                     trace_hook=run_trace_hook,
                     stats_hook=stats_hook,
@@ -1503,13 +1505,24 @@ async def run_chat_run(run_id: str) -> None:
                     diagnostics=rerank_diagnostics,
                 )
 
-            reranked_candidates, rerank_meta = await _retry_async(
-                "rerank",
-                rerank_operation,
-                retries=settings.run_step_max_retries,
-                base_delay_ms=settings.run_step_retry_base_ms,
-                run=run,
-            )
+            try:
+                reranked_candidates, rerank_meta = await _retry_async(
+                    "rerank",
+                    rerank_operation,
+                    retries=settings.run_step_max_retries,
+                    base_delay_ms=settings.run_step_retry_base_ms,
+                    run=run,
+                )
+            except Exception as exc:
+                reranked_candidates = candidate_sections[:top_k]
+                rerank_meta = {
+                    "applied": False,
+                    "mode": "fallback_original_order_after_error",
+                    "candidate_count": len(candidate_sections),
+                    "selected_count": len(reranked_candidates),
+                }
+                rerank_warning = f"Rerank failed and fell back to original retrieval order: {exc}"
+                retrieval_warnings.append(rerank_warning)
         elif len(candidate_sections) > top_k:
             reranked_candidates = candidate_sections[:top_k]
             rerank_meta = {
@@ -1533,6 +1546,7 @@ async def run_chat_run(run_id: str) -> None:
                 "rerank_applied": rerank_meta.get("applied"),
                 "rerank_model": rerank_config.get("model"),
                 "rerank_provider_source": rerank_config.get("provider_source"),
+                "rerank_warning": rerank_warning,
             },
         )
 
@@ -1582,6 +1596,7 @@ async def run_chat_run(run_id: str) -> None:
             "rerank_applied": rerank_meta.get("applied"),
             "rerank_model": rerank_config.get("model"),
             "rerank_provider_source": rerank_config.get("provider_source"),
+            "rerank_warning": rerank_warning,
         }
         generation_info = {
             "temperature": generation_options.get("temperature"),

@@ -6,7 +6,9 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 from app.core.errors import AppError, ErrorCode
 from app.services.provider_service import (
     normalize_execution_model,
+    normalize_rerank_provider_type,
     normalized_supported_execution_models,
+    resolve_rerank_config,
     validate_provider_model_selection,
 )
 
@@ -59,6 +61,33 @@ class TestProviderExecutionModelNormalization(unittest.TestCase):
         self.assertEqual(ctx.exception.code, ErrorCode.PROVIDER_MODEL_UNSUPPORTED)
         self.assertIn('Skill model "gpt-4o"', ctx.exception.message)
         self.assertIn('qwen3-plus', ctx.exception.message)
+
+    def test_resolve_rerank_config_normalizes_openai_compatible_model(self):
+        rerank_config = resolve_rerank_config(
+            provider_config={
+                "provider_type": "openai_compatible",
+                "base_url": "https://example.com/v1",
+                "api_key": "secret",
+                "capabilities": {
+                    "rerank_models": ["qwen3-vl-rerank"],
+                    "default_rerank_model": "qwen3-vl-rerank",
+                },
+            },
+            rerank_mode="provider",
+        )
+
+        self.assertTrue(rerank_config["enabled"])
+        self.assertEqual(rerank_config["resolved_mode"], "provider")
+        self.assertEqual(rerank_config["model"], "openai/qwen3-vl-rerank")
+
+    def test_native_rerank_base_url_switches_provider_type(self):
+        self.assertEqual(
+            normalize_rerank_provider_type(
+                "openai_compatible",
+                "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank",
+            ),
+            "dashscope_rerank",
+        )
 
 
 if __name__ == "__main__":

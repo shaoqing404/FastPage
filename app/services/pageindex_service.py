@@ -2,6 +2,8 @@ import asyncio
 import json
 import logging
 import time
+import urllib.error
+import urllib.request
 from typing import Any
 
 from pageindex.page_index import page_index_main
@@ -313,6 +315,111 @@ Rules:
 """.strip()
 
 
+def _is_native_rerank_provider(provider_type: str | None, base_url: str | None) -> bool:
+    normalized_provider_type = str(provider_type or "").strip().lower()
+    normalized_base_url = str(base_url or "").strip().lower()
+    return normalized_provider_type == "dashscope_rerank" or "/services/rerank/" in normalized_base_url
+
+
+def _build_native_rerank_document(candidate: dict) -> str:
+    return "\n".join(
+        [
+            f"document: {candidate.get('document_label') or candidate.get('document_id') or 'unknown'}",
+            f"title: {candidate.get('title') or 'untitled'}",
+            f"pages: {candidate.get('page_start')}-{candidate.get('page_end')}",
+        ]
+    )
+
+
+def _rerank_candidates_via_native_api(
+    question: str,
+    candidates: list[dict],
+    model: str,
+    *,
+    request_options: dict | None = None,
+    stats_hook=None,
+    top_k: int = 8,
+) -> tuple[list[dict], dict]:
+    options = dict(request_options or {})
+    api_base = str(options.get("api_base") or "").strip()
+    api_key = str(options.get("api_key") or "").strip()
+    if not api_base or not api_key:
+        raise RuntimeError("Native rerank requires api_base and api_key")
+
+    payload = {
+        "model": model,
+        "input": {
+            "query": question,
+            "documents": [_build_native_rerank_document(candidate) for candidate in candidates],
+        },
+        "parameters": {"top_n": min(top_k, len(candidates))},
+    }
+    request_obj = urllib.request.Request(
+        api_base,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request_obj, timeout=60) as response:
+            raw_body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Native rerank request failed: {exc.code} {body}") from exc
+
+    parsed = json.loads(raw_body)
+    results = ((parsed.get("output") or {}).get("results") or []) if isinstance(parsed, dict) else []
+    ranked: list[dict] = []
+    seen_indexes: set[int] = set()
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        try:
+            index = int(item.get("index"))
+        except (TypeError, ValueError):
+            continue
+        if index < 0 or index >= len(candidates) or index in seen_indexes:
+            continue
+        seen_indexes.add(index)
+        ranked_candidate = dict(candidates[index])
+        try:
+            score = float(item.get("relevance_score"))
+        except (TypeError, ValueError):
+            score = 0.0
+        ranked_candidate["rerank_score"] = max(0.0, min(score, 1.0))
+        ranked_candidate["rerank_reason"] = None
+        ranked.append(ranked_candidate)
+        if len(ranked) >= top_k:
+            break
+
+    if stats_hook:
+        stats_hook(
+            {
+                "ok": True,
+                "usage": (parsed.get("usage") or {}) if isinstance(parsed, dict) else {},
+            }
+        )
+
+    if not ranked:
+        selected = candidates[:top_k]
+        return selected, {
+            "applied": False,
+            "mode": "fallback_original_order",
+            "candidate_count": len(candidates),
+            "selected_count": len(selected),
+        }
+
+    return ranked, {
+        "applied": True,
+        "mode": "native_rerank",
+        "candidate_count": len(candidates),
+        "selected_count": len(ranked),
+    }
+
+
 def rerank_candidates(
     question: str,
     candidates: list[dict],
@@ -340,11 +447,22 @@ def rerank_candidates(
             "selected_count": len(selected),
         }
 
+    options = dict(request_options or {})
+    if _is_native_rerank_provider(options.get("provider_type"), options.get("api_base")):
+        return _rerank_candidates_via_native_api(
+            question,
+            candidates,
+            model,
+            request_options=options,
+            stats_hook=stats_hook,
+            top_k=top_k,
+        )
+
     response = llm_completion(
         model=model,
         prompt=build_rerank_prompt(question, candidates, top_k=top_k),
         raise_on_error=True,
-        request_options=request_options,
+        request_options=options,
         trace_hook=trace_hook,
         trace_label="candidate_rerank",
         stats_hook=stats_hook,
@@ -352,7 +470,7 @@ def rerank_candidates(
     payload, repair_meta = extract_json_with_repair(
         raw_response=response,
         model=model,
-        request_options=request_options,
+        request_options=options,
         trace_hook=trace_hook,
         stats_hook=stats_hook,
         trace_label="candidate_rerank",

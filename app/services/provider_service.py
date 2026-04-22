@@ -35,6 +35,13 @@ RERANK_MODEL_KEYWORDS = (
 )
 
 
+def normalize_rerank_provider_type(provider_type: str | None, base_url: str | None) -> str | None:
+    normalized_base = str(base_url or "").strip().lower()
+    if "/services/rerank/" in normalized_base:
+        return "dashscope_rerank"
+    return provider_type
+
+
 def normalize_execution_model(provider_type: str | None, model: str | None) -> str | None:
     if model is None:
         return None
@@ -818,6 +825,10 @@ def resolve_provider_config(
 
 
 def resolve_system_rerank_config() -> dict:
+    provider_type = normalize_rerank_provider_type(
+        settings.system_rerank_provider_type,
+        settings.system_rerank_base_url,
+    )
     enabled = bool(
         settings.system_rerank_enabled
         and settings.system_rerank_base_url
@@ -826,7 +837,7 @@ def resolve_system_rerank_config() -> dict:
     )
     return {
         "enabled": enabled,
-        "provider_type": settings.system_rerank_provider_type,
+        "provider_type": provider_type,
         "base_url": settings.system_rerank_base_url,
         "api_key": settings.system_rerank_api_key,
         "model": settings.system_rerank_model,
@@ -858,25 +869,37 @@ def resolve_rerank_config(
         }
 
     if normalized_mode in {"auto", "provider"} and provider_rerank_models:
+        provider_type = normalize_rerank_provider_type(
+            provider_config.get("provider_type"),
+            provider_config.get("base_url"),
+        )
+        resolved_model = normalize_execution_model(
+            provider_type,
+            provider_capabilities.get("default_rerank_model") or provider_rerank_models[0],
+        )
         return {
             "enabled": True,
             "resolved_mode": "provider",
             "provider_source": "provider",
-            "model": provider_capabilities.get("default_rerank_model") or provider_rerank_models[0],
+            "model": resolved_model,
             "base_url": provider_config.get("base_url"),
             "api_key": provider_config.get("api_key"),
-            "provider_type": provider_config.get("provider_type"),
+            "provider_type": provider_type,
         }
 
     if normalized_mode in {"auto", "system"} and system_config["enabled"]:
+        provider_type = normalize_rerank_provider_type(
+            system_config["provider_type"],
+            system_config["base_url"],
+        )
         return {
             "enabled": True,
             "resolved_mode": "system",
             "provider_source": "system",
-            "model": system_config["model"],
+            "model": normalize_execution_model(provider_type, system_config["model"]),
             "base_url": system_config["base_url"],
             "api_key": system_config["api_key"],
-            "provider_type": system_config["provider_type"],
+            "provider_type": provider_type,
         }
 
     return {

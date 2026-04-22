@@ -2,7 +2,7 @@
 
 This directory supports two clearly separated runtime modes for PageIndex Service:
 
-1. `full`: recommended deployment mode with MySQL + Redis + MinIO + API + Worker
+1. `full`: recommended deployment mode with MySQL + Redis + MinIO + API, with the worker launched inside the API container
 2. `local`: minimal startup mode with SQLite + local storage + local task queue + API only
 
 Source startup with Python 3.12 and `uv` remains the recommended development path outside containers.
@@ -23,9 +23,8 @@ Recommended deployment mode:
 - `redis`
 - `minio`
 - `api`
-- `worker`
 
-This is the recommended production-style deployment shape.
+This is the recommended production-style deployment shape. The API container launches the worker process internally.
 
 Required runtime settings:
 
@@ -76,8 +75,8 @@ Production requirements:
 1. Start MySQL, Redis, and MinIO.
 2. Configure `docker/.env`.
 3. Execute `alembic upgrade head`.
-4. Start the API.
-5. Start the Worker.
+4. Start the API container.
+5. The API container starts the worker process internally.
 6. Then access the frontend or API.
 
 Compose entrypoint:
@@ -88,6 +87,8 @@ cp .env.example .env
 docker compose --profile full up -d --build
 docker compose --profile full exec api alembic upgrade head
 ```
+
+The API container runs migrations on startup. The `alembic upgrade head` line is only needed if you want to rerun them manually.
 
 Helper script:
 
@@ -100,7 +101,7 @@ docker compose --profile full exec api alembic upgrade head
 
 Important notes:
 
-- `worker` is only valid when `TASK_QUEUE_BACKEND=redis`
+- the worker process is only started when `TASK_QUEUE_BACKEND=redis`
 - if the API is exposed beyond localhost, `API_HOST=0.0.0.0` must be paired with a reverse proxy and TLS
 - reverse-proxy upload size must be aligned with `MAX_UPLOAD_BYTES`
 - `STORAGE_BACKEND=minio` stores artifacts in MinIO keys such as `tenants/<tenant_id>/...`
@@ -166,18 +167,23 @@ PAGEINDEX_COMPOSE_PROFILE=local bash start.sh
 docker compose --profile local exec api-local alembic upgrade head
 ```
 
+If you run `docker/docker-entrypoint.sh` directly, pass `local` explicitly to start API-only mode:
+
+```bash
+./docker-entrypoint.sh local
+```
+
 ## Updating
 
 ### Updating Complete Component Mode
 
 1. Pull new code or images.
-2. Stop API and Worker.
+2. Stop the API container.
 3. Back up MySQL and object storage data.
 4. Execute `alembic upgrade head`.
 5. Start API.
-6. Start Worker.
-7. Check `/healthz`.
-8. Validate critical pages: KB, Skills, Chat, Compliance.
+6. Check `/healthz`.
+7. Validate critical pages: KB, Skills, Chat, Compliance.
 
 ### Updating Minimal Startup Mode
 
