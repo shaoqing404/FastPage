@@ -26,6 +26,20 @@ PROVIDER_SCOPE_SYSTEM = "system"
 PROVIDER_SHARE_NONE = "none"
 PROVIDER_SHARE_ALL = "all"
 PROVIDER_SHARE_SELECTED = "selected"
+RERANK_MODEL_KEYWORDS = (
+    "rerank",
+    "re-rank",
+    "bge-reranker",
+    "jina-reranker",
+    "cohere-rerank",
+)
+
+
+def normalize_rerank_provider_type(provider_type: str | None, base_url: str | None) -> str | None:
+    normalized_base = str(base_url or "").strip().lower()
+    if "/services/rerank/" in normalized_base:
+        return "dashscope_rerank"
+    return provider_type
 
 
 def normalize_execution_model(provider_type: str | None, model: str | None) -> str | None:
@@ -121,6 +135,24 @@ def validate_provider_model_selection(
 def _normalize_supported_models(default_model: str, supported_models: list[str] | None) -> list[str]:
     normalized = _normalize_model_candidates(default_model, supported_models)
     return normalized or [default_model]
+
+
+def _is_rerank_model_name(model_name: str | None) -> bool:
+    lowered = str(model_name or "").strip().lower()
+    if not lowered:
+        return False
+    return any(keyword in lowered for keyword in RERANK_MODEL_KEYWORDS)
+
+
+def classify_provider_capabilities(default_model: str | None, supported_models: list[str] | None) -> dict:
+    models = _normalize_model_candidates(default_model, supported_models)
+    rerank_models = [model for model in models if _is_rerank_model_name(model)]
+    chat_models = [model for model in models if model not in rerank_models]
+    return {
+        "chat_models": chat_models,
+        "rerank_models": rerank_models,
+        "default_rerank_model": rerank_models[0] if rerank_models else None,
+    }
 
 
 def provider_scope(provider: ModelProvider) -> str:
@@ -240,6 +272,7 @@ def serialize_provider(
             current_workspace_id,
             shared_workspace_ids=shared_workspace_ids,
         ),
+        "capabilities": classify_provider_capabilities(provider.default_model, normalized_supported_models),
         "created_at": provider.created_at,
         "updated_at": provider.updated_at,
     }
@@ -764,6 +797,13 @@ def resolve_provider_config(
             "extra_headers": json.loads(provider.extra_headers_json or "{}"),
             "resolution_source": resolution_source,
             "scope": provider_scope(provider),
+            "capabilities": classify_provider_capabilities(
+                provider.default_model,
+                _normalize_supported_models(
+                    provider.default_model,
+                    json.loads(provider.supported_models_json or "[]") if provider.supported_models_json else [],
+                ),
+            ),
         }
 
     return {
@@ -776,4 +816,98 @@ def resolve_provider_config(
         "extra_headers": {},
         "resolution_source": "system_default_provider",
         "scope": PROVIDER_SCOPE_SYSTEM,
+        "capabilities": {
+            "chat_models": [],
+            "rerank_models": [],
+            "default_rerank_model": None,
+        },
+    }
+
+
+def resolve_system_rerank_config() -> dict:
+    provider_type = normalize_rerank_provider_type(
+        settings.system_rerank_provider_type,
+        settings.system_rerank_base_url,
+    )
+    enabled = bool(
+        settings.system_rerank_enabled
+        and settings.system_rerank_base_url
+        and settings.system_rerank_api_key
+        and settings.system_rerank_model
+    )
+    return {
+        "enabled": enabled,
+        "provider_type": provider_type,
+        "base_url": settings.system_rerank_base_url,
+        "api_key": settings.system_rerank_api_key,
+        "model": settings.system_rerank_model,
+        "source": "system" if enabled else "disabled",
+    }
+
+
+def resolve_rerank_config(
+    *,
+    provider_config: dict,
+    rerank_mode: str | None,
+) -> dict:
+    normalized_mode = str(rerank_mode or "auto").strip().lower()
+    if normalized_mode not in {"auto", "off", "provider", "system"}:
+        normalized_mode = "auto"
+    provider_capabilities = dict(provider_config.get("capabilities") or {})
+    provider_rerank_models = list(provider_capabilities.get("rerank_models") or [])
+    system_config = resolve_system_rerank_config()
+
+    if normalized_mode == "off":
+        return {
+            "enabled": False,
+            "resolved_mode": "off",
+            "provider_source": None,
+            "model": None,
+            "base_url": None,
+            "api_key": None,
+            "provider_type": None,
+        }
+
+    if normalized_mode in {"auto", "provider"} and provider_rerank_models:
+        provider_type = normalize_rerank_provider_type(
+            provider_config.get("provider_type"),
+            provider_config.get("base_url"),
+        )
+        resolved_model = normalize_execution_model(
+            provider_type,
+            provider_capabilities.get("default_rerank_model") or provider_rerank_models[0],
+        )
+        return {
+            "enabled": True,
+            "resolved_mode": "provider",
+            "provider_source": "provider",
+            "model": resolved_model,
+            "base_url": provider_config.get("base_url"),
+            "api_key": provider_config.get("api_key"),
+            "provider_type": provider_type,
+        }
+
+    if normalized_mode in {"auto", "system"} and system_config["enabled"]:
+        provider_type = normalize_rerank_provider_type(
+            system_config["provider_type"],
+            system_config["base_url"],
+        )
+        return {
+            "enabled": True,
+            "resolved_mode": "system",
+            "provider_source": "system",
+            "model": normalize_execution_model(provider_type, system_config["model"]),
+            "base_url": system_config["base_url"],
+            "api_key": system_config["api_key"],
+            "provider_type": provider_type,
+        }
+
+    return {
+        "enabled": False,
+        "resolved_mode": "fallback_none" if normalized_mode == "auto" else normalized_mode,
+        "provider_source": None,
+        "model": None,
+        "base_url": None,
+        "api_key": None,
+        "provider_type": None,
     }

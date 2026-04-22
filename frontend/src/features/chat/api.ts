@@ -1,5 +1,5 @@
 import { ApiClientError, parseApiErrorResponse, resolveApiUrl, apiClient } from '../../lib/api/client';
-import type { ApiErrorPayload, ChatMessage, ChatRun, ChatRunExecutionContext, ChatSession, RunStatus, StandardRunStatus } from '../../types';
+import type { ApiErrorPayload, ChatMessage, ChatRun, ChatRunExecutionContext, ChatSession, RunObservationEvent, RunStatus, StandardRunStatus } from '../../types';
 
 export interface AskRequest {
   question: string;
@@ -37,6 +37,7 @@ export interface SkillRunStreamHandlers {
   onRunStarted?: (payload: { run_id: string; session_id: string | null; created_at: string }) => void;
   onStatus?: (payload: { status: RunStatus }) => void;
   onContext?: (payload: { execution_context: SkillRunExecutionContext }) => void;
+  onObservation?: (payload: RunObservationEvent) => void;
   onAnswerDelta?: (payload: { delta: string; seq?: number }) => void;
   onCompleted?: (payload: ChatRun) => void;
   onError?: (payload: SkillStreamErrorPayload) => void;
@@ -203,6 +204,10 @@ export const chatApi = {
       }
       if (parsed.event === 'context') {
         handlers.onContext?.(payloadData as { execution_context: SkillRunExecutionContext });
+        return;
+      }
+      if (parsed.event === 'observation') {
+        handlers.onObservation?.(payloadData as RunObservationEvent);
         return;
       }
       if (parsed.event === 'answer_delta') {

@@ -52,15 +52,44 @@ class Settings:
     redis_url: str
     queue_name_parse: str
     queue_name_chat: str
+    queue_name_compliance: str
 
     # ── Worker ──────────────────────────────────────────────────────────────
     worker_node_code: str
+    worker_process_count: int
+    worker_max_tasks_per_child: int
+    worker_max_rss_mb: int
+    worker_heartbeat_interval_seconds: int
+    worker_heartbeat_ttl_seconds: int
+    worker_reconnect_delay_ms: int
+    worker_registry_prefix: str
+    redis_socket_timeout_seconds: int
+    redis_socket_connect_timeout_seconds: int
+    redis_health_check_interval_seconds: int
 
     # ── Chat run ────────────────────────────────────────────────────────────
     chat_run_poll_interval_ms: int
     chat_run_request_timeout_seconds: int
     chat_run_lease_timeout_seconds: int
     chat_run_queue_retry_delay_ms: int
+    compliance_run_poll_interval_ms: int
+    compliance_run_request_timeout_seconds: int
+    compliance_run_lease_timeout_seconds: int
+    compliance_run_queue_retry_delay_ms: int
+
+    # ── Retrieval / rerank ──────────────────────────────────────────────────
+    retrieval_max_concurrency: int
+    run_max_manuals: int
+    run_step_max_retries: int
+    run_step_retry_base_ms: int
+    system_rerank_enabled: bool
+    system_rerank_base_url: str
+    system_rerank_api_key: str
+    system_rerank_model: str
+    system_rerank_provider_type: str
+
+    # ── Runtime observability ───────────────────────────────────────────────
+    observation_text_max_chars: int
 
     # ── Upload limits ───────────────────────────────────────────────────────
     max_upload_bytes: int
@@ -224,14 +253,39 @@ def get_settings() -> Settings:
         redis_url=os.getenv("REDIS_URL", ""),
         queue_name_parse=os.getenv("QUEUE_NAME_PARSE", "pageindex:parse"),
         queue_name_chat=os.getenv("QUEUE_NAME_CHAT", "pageindex:chat"),
+        queue_name_compliance=os.getenv("QUEUE_NAME_COMPLIANCE", "pageindex:compliance"),
         worker_node_code=os.getenv(
             "WORKER_NODE_CODE",
             f"{os.getenv('WORKER_NODE_CODE_PREFIX', 'worker')}:{os.getenv('HOSTNAME', 'local')}",
         ),
+        worker_process_count=int(os.getenv("WORKER_PROCESS_COUNT", "1")),
+        worker_max_tasks_per_child=int(os.getenv("WORKER_MAX_TASKS_PER_CHILD", "50")),
+        worker_max_rss_mb=int(os.getenv("WORKER_MAX_RSS_MB", "1024")),
+        worker_heartbeat_interval_seconds=int(os.getenv("WORKER_HEARTBEAT_INTERVAL_SECONDS", "15")),
+        worker_heartbeat_ttl_seconds=int(os.getenv("WORKER_HEARTBEAT_TTL_SECONDS", "45")),
+        worker_reconnect_delay_ms=int(os.getenv("WORKER_RECONNECT_DELAY_MS", "2000")),
+        worker_registry_prefix=os.getenv("WORKER_REGISTRY_PREFIX", "pageindex:workers"),
+        redis_socket_timeout_seconds=int(os.getenv("REDIS_SOCKET_TIMEOUT_SECONDS", "30")),
+        redis_socket_connect_timeout_seconds=int(os.getenv("REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS", "5")),
+        redis_health_check_interval_seconds=int(os.getenv("REDIS_HEALTH_CHECK_INTERVAL_SECONDS", "30")),
         chat_run_poll_interval_ms=int(os.getenv("CHAT_RUN_POLL_INTERVAL_MS", "200")),
         chat_run_request_timeout_seconds=int(os.getenv("CHAT_RUN_REQUEST_TIMEOUT_SECONDS", "30")),
         chat_run_lease_timeout_seconds=int(os.getenv("CHAT_RUN_LEASE_TIMEOUT_SECONDS", "90")),
         chat_run_queue_retry_delay_ms=int(os.getenv("CHAT_RUN_QUEUE_RETRY_DELAY_MS", "500")),
+        compliance_run_poll_interval_ms=int(os.getenv("COMPLIANCE_RUN_POLL_INTERVAL_MS", "500")),
+        compliance_run_request_timeout_seconds=int(os.getenv("COMPLIANCE_RUN_REQUEST_TIMEOUT_SECONDS", "30")),
+        compliance_run_lease_timeout_seconds=int(os.getenv("COMPLIANCE_RUN_LEASE_TIMEOUT_SECONDS", "120")),
+        compliance_run_queue_retry_delay_ms=int(os.getenv("COMPLIANCE_RUN_QUEUE_RETRY_DELAY_MS", "500")),
+        retrieval_max_concurrency=int(os.getenv("RETRIEVAL_MAX_CONCURRENCY", "8")),
+        run_max_manuals=int(os.getenv("RUN_MAX_MANUALS", "20")),
+        run_step_max_retries=int(os.getenv("RUN_STEP_MAX_RETRIES", "2")),
+        run_step_retry_base_ms=int(os.getenv("RUN_STEP_RETRY_BASE_MS", "500")),
+        system_rerank_enabled=os.getenv("SYSTEM_RERANK_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
+        system_rerank_base_url=os.getenv("SYSTEM_RERANK_BASE_URL", ""),
+        system_rerank_api_key=os.getenv("SYSTEM_RERANK_API_KEY", ""),
+        system_rerank_model=os.getenv("SYSTEM_RERANK_MODEL", ""),
+        system_rerank_provider_type=os.getenv("SYSTEM_RERANK_PROVIDER_TYPE", "openai_compatible"),
+        observation_text_max_chars=int(os.getenv("OBSERVATION_TEXT_MAX_CHARS", "12000")),
         max_upload_bytes=int(os.getenv("MAX_UPLOAD_BYTES", "2147483648")),  # 2 GB
         provider_url_allow_private_nets=provider_url_allow_private,
         api_host=os.getenv("API_HOST", "127.0.0.1"),

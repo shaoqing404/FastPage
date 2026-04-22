@@ -1,6 +1,7 @@
 import React from 'react';
 import { AlertTriangle, Loader2, Sparkles } from 'lucide-react';
 
+import { RunObservationTimeline } from '../runtime/RunObservationTimeline';
 import type { ComplianceCheck, ComplianceRun, KnowledgeBase, ModelProvider } from '../../types';
 import { formatDateTime, resolveProviderName } from '../../lib/utils';
 import { AnswerContent } from '../ui/AnswerContent';
@@ -33,10 +34,11 @@ export const ComplianceRunDetail: React.FC<{
   check?: ComplianceCheck | null;
   knowledgeBase?: KnowledgeBase | null;
   providers?: ModelProvider[];
+  observationSnapshot?: import('../../types').RunObservationSnapshot | null;
   isLoading?: boolean;
   isRefreshing?: boolean;
   loadError?: string;
-}> = ({ run, check = null, knowledgeBase = null, providers = [], isLoading = false, isRefreshing = false, loadError }) => {
+}> = ({ run, check = null, knowledgeBase = null, providers = [], observationSnapshot = null, isLoading = false, isRefreshing = false, loadError }) => {
   if (isLoading && !run) {
     return (
       <GlassPanel title="Run detail" subtitle="Structured compliance result">
@@ -162,6 +164,15 @@ export const ComplianceRunDetail: React.FC<{
             <AnswerContent content={run.answer} emptyFallback="No answer body was returned for this run." />
           </div>
         </div>
+      </GlassPanel>
+
+      <GlassPanel title="Runtime timeline" subtitle="Observe worker stage transitions, rerank decisions, and model I/O.">
+        <RunObservationTimeline
+          snapshot={observationSnapshot}
+          title="Compliance execution timeline"
+          emptyTitle="No runtime timeline yet"
+          emptyDescription="Run this check to populate the backend execution timeline."
+        />
       </GlassPanel>
 
       <GlassPanel title="Evidence" subtitle="Each evidence statement carries its citation ids and full provenance chain.">

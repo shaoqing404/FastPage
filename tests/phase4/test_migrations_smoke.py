@@ -5,11 +5,13 @@ from pathlib import Path
 
 import sqlalchemy as sa
 
+from scripts.phase47.runtime_reset import REPO_OWNED_SCHEMA_TABLES
+
 
 PHASE3_COMPLIANCE_REVISION = "20260407_0005"
 PHASE4_BACKFILL_REVISION = "20260410_0007"
 PHASE45_INVARIANT_REVISION = "20260415_0008"
-CURRENT_MIGRATION_HEAD = "20260416_0010"
+CURRENT_MIGRATION_HEAD = "20260422_0012"
 
 
 class TestPhase4MigrationsSmoke(unittest.TestCase):
@@ -65,6 +67,7 @@ class TestPhase4MigrationsSmoke(unittest.TestCase):
         engine = sa.create_engine(self.db_url, future=True)
         self.addCleanup(engine.dispose)
         inspector = sa.inspect(engine)
+        self.assertEqual(set(inspector.get_table_names()), set(REPO_OWNED_SCHEMA_TABLES))
         self.assertIn("active_founder_workspace_id", {col["name"] for col in inspector.get_columns("workspace_memberships")})
         self.assertIn("pending_normalized_email", {col["name"] for col in inspector.get_columns("workspace_invites")})
         self.assertIn("must_change_password", {col["name"] for col in inspector.get_columns("users")})

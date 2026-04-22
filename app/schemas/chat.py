@@ -20,6 +20,8 @@ class SkillRunRequest(BaseModel):
     question: str
     document_id: str | None = None
     provider_id: str | None = None
+    model: str | None = None
+    system_prompt: str | None = None
     session_id: str | None = None
     auto_create_session: bool = False
     session_title: str | None = None

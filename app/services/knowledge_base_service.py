@@ -30,6 +30,9 @@ def serialize_knowledge_base_document(document: KnowledgeBaseDocument) -> dict:
         "enabled": document.enabled,
         "label": document.label,
         "sort_order": document.sort_order,
+        "document_display_name": document.document.display_name if document.document else None,
+        "document_source_filename": document.document.source_filename if document.document else None,
+        "document_status": document.document.status if document.document else None,
     }
 
 
@@ -50,6 +53,54 @@ def serialize_knowledge_base(knowledge_base: KnowledgeBase) -> dict:
     }
 
 
+def resolve_ready_knowledge_base_manuals(
+    db: Session,
+    principal: Principal,
+    workspace_id: str,
+    knowledge_base: KnowledgeBase,
+) -> list[dict]:
+    bindings = [binding for binding in knowledge_base.documents if binding.enabled]
+    if not bindings:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Knowledge base has no enabled manuals")
+
+    documents = list_accessible_documents_by_ids(db, principal, [binding.document_id for binding in bindings])
+    documents_by_id = {document.id: document for document in documents}
+    if len(documents_by_id) != len(bindings):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="One or more knowledge base documents are not accessible")
+
+    resolved_manuals: list[dict] = []
+    for binding in sorted(bindings, key=lambda item: (item.sort_order, item.created_at or datetime.min, item.document_id)):
+        document = documents_by_id[binding.document_id]
+        version_id = binding.pinned_version_id or document.active_version_id
+        if not version_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Document {document.id} has no resolved version for querying",
+            )
+        version = db.get(DocumentVersion, version_id)
+        if version is None or version.document_id != document.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Resolved version {version_id} was not found for document {document.id}",
+            )
+        if version.parse_status != "index_ready" or not version.parsed_structure_path:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Document {document.id} version {version.id} is not ready for querying",
+            )
+        resolved_manuals.append(
+            {
+                "binding": binding,
+                "document": document,
+                "version": version,
+                "document_label": binding.label or document.display_name,
+                "version_label": f"v{version.version_no}",
+                "workspace_id": workspace_id,
+            }
+        )
+    return resolved_manuals
+
+
 def list_knowledge_bases(db: Session, principal: Principal, workspace_id: str) -> list[KnowledgeBase]:
     ensure_workspace_access(principal, workspace_id)
     knowledge_bases = db.scalars(
@@ -58,7 +109,7 @@ def list_knowledge_bases(db: Session, principal: Principal, workspace_id: str) -
             KnowledgeBase.tenant_id == principal.tenant_id,
             KnowledgeBase.workspace_id == workspace_id,
         )
-        .options(selectinload(KnowledgeBase.documents))
+        .options(selectinload(KnowledgeBase.documents).selectinload(KnowledgeBaseDocument.document))
         .order_by(KnowledgeBase.created_at.desc())
     ).all()
     return [knowledge_base for knowledge_base in knowledge_bases if can_read_knowledge_base(principal, knowledge_base)]
@@ -73,7 +124,7 @@ def get_knowledge_base_or_404(db: Session, principal: Principal, workspace_id: s
             KnowledgeBase.tenant_id == principal.tenant_id,
             KnowledgeBase.workspace_id == workspace_id,
         )
-        .options(selectinload(KnowledgeBase.documents))
+        .options(selectinload(KnowledgeBase.documents).selectinload(KnowledgeBaseDocument.document))
     )
     if knowledge_base is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base not found")

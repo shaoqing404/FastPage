@@ -31,6 +31,7 @@ REPO_OWNED_SCHEMA_TABLES: tuple[str, ...] = (
     "model_providers",
     "parse_jobs",
     "revoked_tokens",
+    "run_observation_events",
     "tenant_memberships",
     "tenants",
     "users",

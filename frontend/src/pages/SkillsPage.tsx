@@ -11,7 +11,7 @@ import { providersApi } from '../features/providers/api';
 import { skillsApi } from '../features/skills/api';
 import { apiClient, resolveStoredWorkspace } from '../lib/api/client';
 import { getErrorMessage, resolveProviderById, resolveWorkspaceDefaultProvider } from '../lib/utils';
-import type { SkillMutationPayload } from '../features/skills/api';
+import type { ChatSkillCreateInput as SkillMutationPayload } from '../types';
 
 type StoredUserContext = {
   workspace_id?: string | null;

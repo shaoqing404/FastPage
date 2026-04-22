@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
+import { RunObservationTimeline } from '../components/runtime/RunObservationTimeline';
 import { SkillActionsModal } from '../components/skills/SkillActionsModal';
 import { AnswerContent } from '../components/ui/AnswerContent';
 import { ExpertDrawer, Field, GlassPanel, InlineAlert, KeyMetric, SectionToolbar, SegmentedControl, StatusBadge } from '../components/ui/workbench';
@@ -29,6 +30,7 @@ import { chatApi } from '../features/chat/api';
 import { documentsApi } from '../features/documents/api';
 import { knowledgeBasesApi } from '../features/knowledge-bases/api';
 import { providersApi } from '../features/providers/api';
+import { runtimeObservationsApi } from '../features/runtime-observations/api';
 import { skillsApi } from '../features/skills/api';
 import { isApiClientError, resolveStoredWorkspace } from '../lib/api/client';
 import {
@@ -45,7 +47,7 @@ import {
   resolveProviderModelOption,
   resolveWorkspaceDefaultProvider,
 } from '../lib/utils';
-import type { ChatMessage, ChatRun, ChatSession, ChatSkill, Document, KnowledgeBase, ModelProvider, RunStatus } from '../types';
+import type { ChatMessage, ChatRun, ChatSession, ChatSkill, Document, KnowledgeBase, ModelProvider, RunObservationEvent, RunObservationSnapshot, RunStatus } from '../types';
 
 type HistoryItem = {
   role: 'user' | 'assistant';
@@ -200,7 +202,9 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   const [selectionMode, setSelectionMode] = useState('');
   const [maxContextPages, setMaxContextPages] = useState('');
   const [maxContextTokens, setMaxContextTokens] = useState('');
+  const [rerankMode, setRerankMode] = useState('');
   const [temperature, setTemperature] = useState('');
+  const [streamingObservations, setStreamingObservations] = useState<RunObservationEvent[]>([]);
   const [chatAlert, setChatAlert] = useState<AlertState | null>(null);
   const [saveFeedback, setSaveFeedback] = useState<SaveFeedback | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(skill.updated_at);
@@ -210,6 +214,20 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     setLayoutState((current) => ({ ...current, ...nextValue }));
   };
 
+  const resetSavedConfigOverrides = () => {
+    setQueryRewriteWithHistory(null);
+    setIncludeHistory(null);
+    setIncludeAssistantMessages(null);
+    setHistoryTurnLimit('');
+    setHistoryTokenBudget('');
+    setTopK('');
+    setSelectionMode('');
+    setMaxContextPages('');
+    setMaxContextTokens('');
+    setRerankMode('');
+    setTemperature('');
+  };
+
   const applySavedSkillState = (nextSkill: ChatSkill) => {
     setDraftName(nextSkill.name);
     setDraftSystemPrompt(nextSkill.system_prompt || '');
@@ -217,6 +235,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     setDraftKnowledgeBaseId(nextSkill.knowledge_base_id || null);
     setDraftProviderId(nextSkill.provider_id || '');
     setLastSavedAt(nextSkill.updated_at);
+    resetSavedConfigOverrides();
   };
 
   const workspaceDefaultProvider = useMemo(
@@ -301,14 +320,6 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   );
   const draftModelSelectValue = draftSelectedModelOption || (draftModel.trim() ? CUSTOM_MODEL_VALUE : '');
 
-  const isConfigDirty = (
-    draftName !== skill.name ||
-    draftSystemPrompt !== (skill.system_prompt || '') ||
-    draftModel !== (skill.model || '') ||
-    draftKnowledgeBaseId !== (skill.knowledge_base_id || null) ||
-    draftProviderId !== (skill.provider_id || '')
-  );
-
   const savedConfigModel = skill.model || savedResolvedProvider?.default_model || '';
   const savedConfigModelMismatch = Boolean(
     savedResolvedProvider &&
@@ -341,10 +352,45 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   const effectiveSelectionMode = selectionMode || (typeof skillRetrievalDefaults.selection_mode === 'string' ? skillRetrievalDefaults.selection_mode : 'outline_llm');
   const effectiveMaxContextPages = maxContextPages || (skillRetrievalDefaults.max_context_pages ? String(skillRetrievalDefaults.max_context_pages) : '');
   const effectiveMaxContextTokens = maxContextTokens || (skillRetrievalDefaults.max_context_tokens ? String(skillRetrievalDefaults.max_context_tokens) : '');
+  const effectiveRerankMode = rerankMode || (typeof skillRetrievalDefaults.rerank_mode === 'string' ? skillRetrievalDefaults.rerank_mode : 'auto');
   const effectiveTemperature = temperature || (
     skillGenerationDefaults.temperature !== undefined && skillGenerationDefaults.temperature !== null
       ? String(skillGenerationDefaults.temperature)
       : '0'
+  );
+  const savedQueryRewriteWithHistory = skillConversationDefaults.query_rewrite_with_history !== false;
+  const savedIncludeHistory = skillConversationDefaults.include_history !== false;
+  const savedIncludeAssistantMessages = skillConversationDefaults.include_assistant_messages !== false;
+  const savedHistoryTurnLimit = String(skillConversationDefaults.history_turn_limit ?? DEFAULT_CONVERSATION_CONFIG.history_turn_limit);
+  const savedHistoryTokenBudget = String(skillConversationDefaults.history_token_budget ?? DEFAULT_CONVERSATION_CONFIG.history_token_budget);
+  const savedTopK = String(skillRetrievalDefaults.top_k ?? 5);
+  const savedSelectionMode = typeof skillRetrievalDefaults.selection_mode === 'string' ? skillRetrievalDefaults.selection_mode : 'outline_llm';
+  const savedMaxContextPages = skillRetrievalDefaults.max_context_pages ? String(skillRetrievalDefaults.max_context_pages) : '';
+  const savedMaxContextTokens = skillRetrievalDefaults.max_context_tokens ? String(skillRetrievalDefaults.max_context_tokens) : '';
+  const savedRerankMode = typeof skillRetrievalDefaults.rerank_mode === 'string' ? skillRetrievalDefaults.rerank_mode : 'auto';
+  const savedTemperature = (
+    skillGenerationDefaults.temperature !== undefined && skillGenerationDefaults.temperature !== null
+      ? String(skillGenerationDefaults.temperature)
+      : '0'
+  );
+
+  const isConfigDirty = (
+    draftName !== skill.name ||
+    draftSystemPrompt !== (skill.system_prompt || '') ||
+    draftModel !== (skill.model || '') ||
+    draftKnowledgeBaseId !== (skill.knowledge_base_id || null) ||
+    draftProviderId !== (skill.provider_id || '') ||
+    effectiveQueryRewriteWithHistory !== savedQueryRewriteWithHistory ||
+    effectiveIncludeHistory !== savedIncludeHistory ||
+    effectiveIncludeAssistantMessages !== savedIncludeAssistantMessages ||
+    effectiveHistoryTurnLimit !== savedHistoryTurnLimit ||
+    effectiveHistoryTokenBudget !== savedHistoryTokenBudget ||
+    effectiveTopK !== savedTopK ||
+    effectiveSelectionMode !== savedSelectionMode ||
+    effectiveMaxContextPages !== savedMaxContextPages ||
+    effectiveMaxContextTokens !== savedMaxContextTokens ||
+    effectiveRerankMode !== savedRerankMode ||
+    effectiveTemperature !== savedTemperature
   );
 
   const { data: sessions = [] } = useQuery({
@@ -420,6 +466,30 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   const displayRun = isStreaming ? null : activeRun;
   const activeExecutionContext = streamingExecutionContext || activeRun?.execution_context || {};
   const activeStatus = streamingStatus || activeRun?.status || null;
+  const activeObservationRunId = streamingRunId || displayRun?.id || activeRun?.id || null;
+  const { data: observationSnapshotData } = useQuery({
+    queryKey: ['runtime-observation', 'chat', activeObservationRunId],
+    queryFn: () => runtimeObservationsApi.getSnapshot('chat', activeObservationRunId!),
+    enabled: Boolean(activeObservationRunId),
+    refetchInterval: activeStatus === 'running' || activeStatus === 'queued' ? 3000 : false,
+  });
+  const activeObservationSnapshot = useMemo<RunObservationSnapshot | null>(() => {
+    if (!observationSnapshotData && streamingObservations.length === 0) return null;
+    if (streamingObservations.length === 0) return observationSnapshotData || null;
+    const lastEvent = streamingObservations[streamingObservations.length - 1] || null;
+    return {
+      run_kind: 'chat',
+      run_id: activeObservationRunId || observationSnapshotData?.run_id || '',
+      status: activeStatus || observationSnapshotData?.status || 'queued',
+      current_step: lastEvent?.step || observationSnapshotData?.current_step || null,
+      worker_node_code: observationSnapshotData?.worker_node_code || null,
+      queue: observationSnapshotData?.queue || {},
+      timings: observationSnapshotData?.timings || {},
+      execution_context: (activeExecutionContext || observationSnapshotData?.execution_context || {}) as Record<string, unknown>,
+      partial_answer: streamingAnswer || observationSnapshotData?.partial_answer || null,
+      events: streamingObservations,
+    };
+  }, [activeExecutionContext, activeObservationRunId, activeStatus, observationSnapshotData, streamingAnswer, streamingObservations]);
 
   const createSessionMutation = useMutation({
     mutationFn: (title: string) => chatApi.createSkillSession(skillId, { title }),
@@ -456,9 +526,21 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
         provider_id: draftProviderId,
         document_ids: skill.document_ids,
         request_config: skill.request_config || {},
-        conversation_config: skill.conversation_config || {},
-        retrieval_config: skill.retrieval_config || {},
-        generation_config: skill.generation_config || {},
+        conversation_config: {
+          query_rewrite_with_history: effectiveQueryRewriteWithHistory,
+          include_history: effectiveIncludeHistory,
+          include_assistant_messages: effectiveIncludeAssistantMessages,
+          history_turn_limit: Number(effectiveHistoryTurnLimit || DEFAULT_CONVERSATION_CONFIG.history_turn_limit),
+          history_token_budget: Number(effectiveHistoryTokenBudget || DEFAULT_CONVERSATION_CONFIG.history_token_budget),
+        },
+        retrieval_config: {
+          top_k: Number(effectiveTopK || 5),
+          selection_mode: effectiveSelectionMode,
+          rerank_mode: effectiveRerankMode,
+          ...(effectiveMaxContextPages.trim() ? { max_context_pages: Number(effectiveMaxContextPages) } : {}),
+          ...(effectiveMaxContextTokens.trim() ? { max_context_tokens: Number(effectiveMaxContextTokens) } : {}),
+        },
+        generation_config: { temperature: Number(effectiveTemperature || 0) },
       });
     },
     onSuccess: (updatedSkill) => {
@@ -488,6 +570,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       const retrieval_config = {
         top_k: Number(effectiveTopK || 5),
         selection_mode: effectiveSelectionMode,
+        rerank_mode: effectiveRerankMode,
         ...(effectiveMaxContextPages.trim() ? { max_context_pages: Number(effectiveMaxContextPages) } : {}),
         ...(effectiveMaxContextTokens.trim() ? { max_context_tokens: Number(effectiveMaxContextTokens) } : {}),
       };
@@ -531,6 +614,11 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
           onContext: ({ execution_context }) => {
             setStreamingExecutionContext(execution_context);
           },
+          onObservation: (event) => {
+            setStreamingObservations((current) => (
+              current.some((item) => item.id === event.id) ? current : [...current, event]
+            ));
+          },
           onAnswerDelta: ({ delta }) => {
             setStreamingAnswer((current) => `${current}${delta}`);
           },
@@ -547,6 +635,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       setStreamingRunId(null);
       setStreamingStatus('accepted');
       setStreamingExecutionContext(null);
+      setStreamingObservations([]);
     },
     onSuccess: (run) => {
       streamAbortRef.current = null;
@@ -567,6 +656,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       setStreamingRunId(null);
       setStreamingStatus(null);
       setStreamingExecutionContext(run.execution_context || null);
+      setStreamingObservations([]);
       queryClient.invalidateQueries({ queryKey: ['skill-runs-all-sessions', skillId] });
       queryClient.invalidateQueries({ queryKey: ['skill-session-runs', skillId, effectiveSessionId] });
       queryClient.invalidateQueries({ queryKey: ['skill-session-messages', skillId, effectiveSessionId] });
@@ -581,6 +671,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       setStreamingRunId(null);
       setStreamingStatus(null);
       setStreamingExecutionContext(null);
+      setStreamingObservations([]);
       if (error instanceof DOMException && error.name === 'AbortError') {
         setChatAlert(null);
       } else {
@@ -859,31 +950,31 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       </Field>
 
       {draftModelMismatch && draftResolvedProvider && (
-        <InlineAlert tone="warning" title="Provider-model mismatch">
-          {`Model "${draftModel}" is not in ${draftResolvedProvider.name}'s supported list.`}
+        <InlineAlert tone="warning" title="Provider 与模型不匹配">
+          {`模型“${draftModel}”不在 ${draftResolvedProvider.name} 的支持列表中。`}
         </InlineAlert>
       )}
 
       {savedConfigModelMismatch && savedResolvedProvider && !isConfigDirty && (
-        <InlineAlert tone="warning" title="Saved config needs attention">
-          {`Saved model "${skill.model}" is no longer in ${savedResolvedProvider.name}'s supported list.`}
+        <InlineAlert tone="warning" title="已保存配置需要检查">
+          {`已保存的模型“${skill.model}”已不在 ${savedResolvedProvider.name} 的支持列表中。`}
         </InlineAlert>
       )}
 
       <div className="rounded-[24px] border border-white/75 bg-white/58 p-4">
         <div className="mb-4">
-          <p className="text-sm font-medium text-slate-900">Run-time controls</p>
-          <p className="mt-1 text-sm text-slate-500">These do not change the saved skill. Provider changes are tested through the draft provider above, not through Send (Saved config).</p>
+          <p className="text-sm font-medium text-slate-900">检索与生成默认配置</p>
+          <p className="mt-1 text-sm text-slate-500">这里的值会立即用于下一次运行；点击“Save skill”后，这些值也会保存为该 skill 的默认配置。Provider 仍然通过上面的已保存 provider 进行管理。</p>
         </div>
 
         <div className="grid gap-4 xl:grid-cols-2">
           <label className="flex items-center gap-2 text-sm text-slate-700">
             <input type="checkbox" checked={effectiveQueryRewriteWithHistory} onChange={(event) => setQueryRewriteWithHistory(event.target.checked)} />
-            <span>Rewrite the search query using recent chat history</span>
+            <span>根据最近聊天历史改写检索问题</span>
           </label>
           <label className="flex items-center gap-2 text-sm text-slate-700">
             <input type="checkbox" checked={effectiveIncludeHistory} onChange={(event) => setIncludeHistory(event.target.checked)} />
-            <span>Include recent chat history in the answer prompt</span>
+            <span>在回答提示词中带入最近聊天历史</span>
           </label>
           <label className="flex items-center gap-2 text-sm text-slate-700">
             <input
@@ -892,20 +983,20 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
               onChange={(event) => setIncludeAssistantMessages(event.target.checked)}
               disabled={!effectiveIncludeHistory}
             />
-            <span>Include previous assistant replies in that history</span>
+            <span>在上述历史中包含之前的 assistant 回复</span>
           </label>
-          <Field label="Max user turns from history" hint="Counts recent user turns. Matching assistant replies are included only when enabled above.">
+          <Field label="历史最大用户轮数" hint="按最近的用户轮次统计。只有在上方开启后，匹配的 assistant 回复才会一起带入。">
             <input type="number" min="1" value={effectiveHistoryTurnLimit} onChange={(event) => setHistoryTurnLimit(event.target.value)} className="field" />
           </Field>
-          <Field label="History token budget" hint="Approximate cap for chat history included in this run.">
+          <Field label="历史 Token 预算" hint="本次运行中可带入聊天历史的大致 token 上限。">
             <input type="number" min="1" value={effectiveHistoryTokenBudget} onChange={(event) => setHistoryTokenBudget(event.target.value)} className="field" />
           </Field>
-          <Field label="Sections to retrieve" hint="Maximum outline sections selected before answer generation starts.">
+          <Field label="检索段落数" hint="在生成答案前，最多从目录/大纲中选出的候选段落数量。">
             <input type="number" min="1" value={effectiveTopK} onChange={(event) => setTopK(event.target.value)} className="field" />
           </Field>
           <Field
-            label="Section selection method"
-            hint="Model-guided asks the model to choose outline sections first. Keyword fallback skips that step and matches section titles lexically."
+            label="段落选择方式"
+            hint="模型引导模式会先让模型选择目录段落；关键词回退模式会跳过这一步，直接按标题做词法匹配。"
           >
             <select value={effectiveSelectionMode} onChange={(event) => setSelectionMode(event.target.value)} className="field">
               {SELECTION_MODE_OPTIONS.map((option) => (
@@ -915,16 +1006,31 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
               ))}
             </select>
           </Field>
-          <Field label="Max PDF pages in answer context" hint="Optional hard cap on the number of PDF pages pulled into the final answer context.">
-            <input type="number" min="1" value={effectiveMaxContextPages} onChange={(event) => setMaxContextPages(event.target.value)} className="field" placeholder="Optional" />
+          <Field label="回答上下文最大 PDF 页数" hint="可选。限制最终回答阶段最多带入多少页 PDF 内容。">
+            <input type="number" min="1" value={effectiveMaxContextPages} onChange={(event) => setMaxContextPages(event.target.value)} className="field" placeholder="可选" />
           </Field>
-          <Field label="Max excerpt tokens in answer context" hint="Optional approximate cap on excerpt tokens after section selection.">
-            <input type="number" min="1" value={effectiveMaxContextTokens} onChange={(event) => setMaxContextTokens(event.target.value)} className="field" placeholder="Optional" />
+          <Field label="回答上下文最大摘录 Token 数" hint="可选。限制段落选择后带入回答上下文的摘录 token 总量。">
+            <input type="number" min="1" value={effectiveMaxContextTokens} onChange={(event) => setMaxContextTokens(event.target.value)} className="field" placeholder="可选" />
+          </Field>
+          <Field
+            label="Rerank 模式"
+            hint={
+              draftResolvedProvider?.capabilities?.rerank_models?.length
+                ? `当前 Provider 可用的 rerank 模型：${draftResolvedProvider.capabilities.rerank_models.join(', ')}`
+                : 'Auto 会优先使用可用的 rerank；如果系统未配置可用 rerank，则回退为原始检索顺序。'
+            }
+          >
+            <select value={effectiveRerankMode} onChange={(event) => setRerankMode(event.target.value)} className="field">
+              <option value="auto">自动</option>
+              <option value="off">关闭</option>
+              <option value="provider">Provider rerank</option>
+              <option value="system">系统 rerank</option>
+            </select>
           </Field>
         </div>
       </div>
 
-      <Field label="Answer temperature" hint="0 is most deterministic. Backend accepts values from 0 to 2.">
+      <Field label="回答温度" hint="0 最稳定。后端接受 0 到 2 之间的数值。">
         <input type="number" min="0" step="0.1" value={effectiveTemperature} onChange={(event) => setTemperature(event.target.value)} className="field" />
       </Field>
     </div>
@@ -1016,6 +1122,13 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
               ))}
             </div>
           ) : null}
+
+          <RunObservationTimeline
+            snapshot={activeObservationSnapshot}
+            title="Execution timeline"
+            emptyTitle="No runtime telemetry yet"
+            emptyDescription="Run the skill to see live backend steps, rerank decisions, and model I/O here."
+          />
         </>
       ) : (
         <div className="empty-state min-h-[220px]">

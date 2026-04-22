@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 
 from fastapi.encoders import jsonable_encoder
 
@@ -7,6 +8,7 @@ from app.core.config import get_settings
 
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 def chat_event_channel(run_id: str) -> str:
@@ -18,6 +20,9 @@ class BaseTaskQueue:
         raise NotImplementedError
 
     def enqueue_chat_run(self, run_id: str) -> None:
+        raise NotImplementedError
+
+    def enqueue_compliance_run(self, run_id: str) -> None:
         raise NotImplementedError
 
 
@@ -32,12 +37,20 @@ class LocalTaskQueue(BaseTaskQueue):
 
         asyncio.create_task(run_chat_run(run_id))
 
+    def enqueue_compliance_run(self, run_id: str) -> None:
+        from app.services.compliance_service import run_compliance_run
+
+        asyncio.create_task(run_compliance_run(run_id))
+
 
 class RedisTaskQueue(BaseTaskQueue):
     def __init__(self) -> None:
         if not settings.redis_url:
             raise RuntimeError("REDIS_URL is required for redis task queue backend")
-        import redis
+        try:
+            import redis
+        except ImportError as exc:  # pragma: no cover - environment fallback
+            raise RuntimeError("redis package is not installed") from exc
 
         self.client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
 
@@ -48,6 +61,10 @@ class RedisTaskQueue(BaseTaskQueue):
     def enqueue_chat_run(self, run_id: str) -> None:
         payload = json.dumps({"kind": "chat_run", "run_id": run_id})
         self.client.rpush(settings.queue_name_chat, payload)
+
+    def enqueue_compliance_run(self, run_id: str) -> None:
+        payload = json.dumps({"kind": "compliance_run", "run_id": run_id})
+        self.client.rpush(settings.queue_name_compliance, payload)
 
 
 class BaseChatEventSubscription:
@@ -157,11 +174,13 @@ class RedisChatEventSubscription(BaseChatEventSubscription):
         await self.client.aclose()
 
 
-async def publish_chat_event(run_id: str, event: dict) -> None:
-    payload = json.dumps(jsonable_encoder(event), ensure_ascii=False)
-    channel = chat_event_channel(run_id)
+async def _publish_channel_event(channel: str, payload: str) -> None:
     if settings.task_queue_backend == "redis":
-        import redis.asyncio as redis_async
+        try:
+            import redis.asyncio as redis_async
+        except ImportError:  # pragma: no cover - environment fallback
+            await _local_chat_event_bus.publish(channel, payload)
+            return
 
         client = redis_async.Redis.from_url(settings.redis_url, decode_responses=True)
         try:
@@ -172,6 +191,21 @@ async def publish_chat_event(run_id: str, event: dict) -> None:
     await _local_chat_event_bus.publish(channel, payload)
 
 
+async def _open_channel_subscription(channel: str) -> BaseChatEventSubscription:
+    if settings.task_queue_backend == "redis":
+        try:
+            return await RedisChatEventSubscription(channel).start()
+        except ImportError:  # pragma: no cover - environment fallback
+            return await LocalChatEventSubscription(channel).start()
+    return await LocalChatEventSubscription(channel).start()
+
+
+async def publish_chat_event(run_id: str, event: dict) -> None:
+    payload = json.dumps(jsonable_encoder(event), ensure_ascii=False)
+    channel = chat_event_channel(run_id)
+    await _publish_channel_event(channel, payload)
+
+
 async def close_chat_event_stream(run_id: str) -> None:
     if settings.task_queue_backend == "redis":
         return
@@ -180,14 +214,15 @@ async def close_chat_event_stream(run_id: str) -> None:
 
 async def open_chat_event_subscription(run_id: str) -> BaseChatEventSubscription:
     channel = chat_event_channel(run_id)
-    if settings.task_queue_backend == "redis":
-        return await RedisChatEventSubscription(channel).start()
-    return await LocalChatEventSubscription(channel).start()
+    return await _open_channel_subscription(channel)
 
 
 def get_task_queue() -> BaseTaskQueue:
     if settings.task_queue_backend == "redis":
-        return RedisTaskQueue()
+        try:
+            return RedisTaskQueue()
+        except RuntimeError as exc:
+            logger.warning("Falling back to local task queue: %s", exc)
     return LocalTaskQueue()
 
 
@@ -200,3 +235,20 @@ def enqueue_parse_job(job_id: str) -> None:
 
 def enqueue_chat_run(run_id: str) -> None:
     task_queue.enqueue_chat_run(run_id)
+
+
+def runtime_observation_channel(run_kind: str, run_id: str) -> str:
+    return f"pageindex:runtime:observations:{run_kind}:{run_id}"
+
+
+async def publish_runtime_observation(run_kind: str, run_id: str, event: dict) -> None:
+    payload = json.dumps(jsonable_encoder(event), ensure_ascii=False)
+    await _publish_channel_event(runtime_observation_channel(run_kind, run_id), payload)
+
+
+async def open_runtime_observation_subscription(run_kind: str, run_id: str) -> BaseChatEventSubscription:
+    return await _open_channel_subscription(runtime_observation_channel(run_kind, run_id))
+
+
+def enqueue_compliance_run(run_id: str) -> None:
+    task_queue.enqueue_compliance_run(run_id)

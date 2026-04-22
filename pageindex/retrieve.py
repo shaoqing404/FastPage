@@ -1,5 +1,8 @@
 import json
-import PyPDF2
+try:
+    import PyPDF2
+except ImportError:  # pragma: no cover - optional dependency for PDF retrieval
+    PyPDF2 = None
 
 try:
     from .utils import get_number_of_pages, remove_fields

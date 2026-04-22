@@ -72,7 +72,7 @@ export const ComplianceLaunchPanel: React.FC<ComplianceLaunchPanelProps> = ({ kn
       if (!effectiveAdhocKnowledgeBaseId) throw new Error('Knowledge Base is required');
 
       return complianceApi.runs.createAdHoc({
-        execution_mode: 'sync',
+        execution_mode: 'async',
         input: {
           question,
           facts: parseFactsInput(adhocFacts),
@@ -98,7 +98,7 @@ export const ComplianceLaunchPanel: React.FC<ComplianceLaunchPanelProps> = ({ kn
       if (!question) throw new Error('Question is required');
 
       return complianceApi.runs.fromCheck(effectiveSelectedCheckId, {
-        execution_mode: 'sync',
+        execution_mode: 'async',
         input: {
           question,
           facts: parseFactsInput(checkFacts),
