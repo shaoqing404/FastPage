@@ -7,7 +7,13 @@ from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 sys.modules.setdefault("litellm", MagicMock())
+sys.modules.setdefault("PyPDF2", MagicMock())
+sys.modules.setdefault("pymupdf", MagicMock())
+sys.modules.setdefault("dotenv", MagicMock())
+sys.modules.setdefault("yaml", MagicMock())
+sys.modules.setdefault("redis", MagicMock())
 
+from app.core.errors import AppError, ErrorCode
 from app.core.principal import Principal
 from app.models import ChatRun, Document, DocumentVersion, User
 from app.services.chat_service import _create_pending_run, create_chat_run, serialize_run, wait_for_chat_run_terminal
@@ -103,6 +109,37 @@ class TestChatContextCleanup(unittest.TestCase):
         )
 
         self.assertEqual(run.model, "openai/qwen3.5-plus")
+
+    @patch("app.services.chat_service.resolve_provider_config")
+    @patch("app.services.chat_service._resolve_session_for_run")
+    def test_create_pending_run_rejects_unsupported_provider_model_pair(
+        self,
+        mock_resolve_session,
+        mock_resolve_provider_config,
+    ):
+        db = MagicMock()
+        mock_resolve_session.return_value = None
+        mock_resolve_provider_config.return_value = {
+            "provider_id": "provider_1",
+            "provider_type": "openai_compatible",
+            "name": "Tenant OpenAI Compatible",
+            "default_model": "qwen3-plus",
+            "supported_models": ["qwen3-plus", "qwen3.5-plus"],
+        }
+
+        with self.assertRaises(AppError) as ctx:
+            _create_pending_run(
+                db,
+                principal=self.principal,
+                user=self.user,
+                document=self.document,
+                version=self.version,
+                question="What changed?",
+                model="gpt-4o",
+                request_config={},
+            )
+
+        self.assertEqual(ctx.exception.code, ErrorCode.PROVIDER_MODEL_UNSUPPORTED)
 
     @patch("app.services.chat_service.wait_for_chat_run_terminal")
     @patch("app.services.chat_service._create_and_enqueue_run")

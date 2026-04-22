@@ -5,10 +5,8 @@ import textwrap
 from datetime import datetime
 import time
 import json
-import PyPDF2
 import copy
 import asyncio
-import pymupdf
 from io import BytesIO
 from dotenv import load_dotenv
 load_dotenv()
@@ -17,11 +15,39 @@ import yaml
 from pathlib import Path
 from types import SimpleNamespace as config
 
+try:
+    import PyPDF2
+except ImportError:  # pragma: no cover - optional dependency for PDF extraction
+    PyPDF2 = None
+
+try:
+    import pymupdf
+except ImportError:  # pragma: no cover - optional dependency for PDF extraction
+    pymupdf = None
+
 # Backward compatibility: support CHATGPT_API_KEY as alias for OPENAI_API_KEY
 if not os.getenv("OPENAI_API_KEY") and os.getenv("CHATGPT_API_KEY"):
     os.environ["OPENAI_API_KEY"] = os.getenv("CHATGPT_API_KEY")
 
 litellm.drop_params = True
+
+_FATAL_LLM_MODEL_ERROR_PATTERNS = (
+    "model_not_found",
+    "model not found",
+    "unknown model",
+    "unsupported model",
+    "not a valid model",
+    "invalid model",
+    "does not exist",
+    "deploymentnotfound",
+)
+
+
+def is_fatal_llm_model_error(error) -> bool:
+    text = str(error or "").strip().lower()
+    if not text:
+        return False
+    return any(pattern in text for pattern in _FATAL_LLM_MODEL_ERROR_PATTERNS)
 
 def count_tokens(text, model=None):
     if not text:
@@ -50,6 +76,29 @@ def _json_safe(value):
     return str(value)
 
 
+def _redact_sensitive_data(value, *, key_name=None):
+    sensitive_keys = {
+        "api_key",
+        "authorization",
+        "x_api_key",
+        "x-api-key",
+        "access_token",
+        "refresh_token",
+    }
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            normalized = str(key).strip().lower().replace("-", "_")
+            if normalized in sensitive_keys or normalized.endswith("_token"):
+                redacted[str(key)] = "***redacted***"
+            else:
+                redacted[str(key)] = _redact_sensitive_data(item, key_name=str(key))
+        return redacted
+    if isinstance(value, list):
+        return [_redact_sensitive_data(item, key_name=key_name) for item in value]
+    return value
+
+
 def llm_completion(
     model,
     prompt,
@@ -74,6 +123,17 @@ def llm_completion(
         completion_kwargs.update(request_options)
     for i in range(max_retries):
         call_started = time.perf_counter()
+        sanitized_request = _redact_sensitive_data(_json_safe(completion_kwargs))
+        if trace_hook:
+            trace_hook(
+                {
+                    "type": "llm_completion",
+                    "label": trace_label or "completion",
+                    "attempt": i + 1,
+                    "phase": "request",
+                    "request": sanitized_request,
+                }
+            )
         try:
             response = litellm.completion(**completion_kwargs)
             content = response.choices[0].message.content
@@ -93,9 +153,10 @@ def llm_completion(
                         "type": "llm_completion",
                         "label": trace_label or "completion",
                         "attempt": i + 1,
+                        "phase": "response",
                         "ok": True,
                         "duration_ms": int((time.perf_counter() - call_started) * 1000),
-                        "request": _json_safe(completion_kwargs),
+                        "request": sanitized_request,
                         "response": _json_safe(response),
                         "response_text": content,
                         "finish_reason": response.choices[0].finish_reason,
@@ -121,14 +182,17 @@ def llm_completion(
                         "type": "llm_completion",
                         "label": trace_label or "completion",
                         "attempt": i + 1,
+                        "phase": "error",
                         "ok": False,
                         "duration_ms": int((time.perf_counter() - call_started) * 1000),
-                        "request": _json_safe(completion_kwargs),
+                        "request": sanitized_request,
                         "error": str(e),
                     }
                 )
             print('************* Retrying *************')
             logging.error(f"Error: {e}")
+            if is_fatal_llm_model_error(e):
+                raise RuntimeError(f"Fatal model configuration error: {e}") from e
             if i < max_retries - 1:
                 time.sleep(1)
             else:
@@ -178,7 +242,7 @@ def get_json_content(response):
     return json_content
          
 
-def extract_json(content):
+def extract_json(content, *, log_errors=True):
     try:
         # First, try to extract JSON enclosed within ```json and ```
         start_idx = content.find("```json")
@@ -198,17 +262,20 @@ def extract_json(content):
         # Attempt to parse and return the JSON object
         return json.loads(json_content)
     except json.JSONDecodeError as e:
-        logging.error(f"Failed to extract JSON: {e}")
+        if log_errors:
+            logging.error(f"Failed to extract JSON: {e}")
         # Try to clean up the content further if initial parsing fails
         try:
             # Remove any trailing commas before closing brackets/braces
             json_content = json_content.replace(',]', ']').replace(',}', '}')
             return json.loads(json_content)
         except:
-            logging.error("Failed to parse JSON even after cleanup")
+            if log_errors:
+                logging.error("Failed to parse JSON even after cleanup")
             return {}
     except Exception as e:
-        logging.error(f"Unexpected error while extracting JSON: {e}")
+        if log_errors:
+            logging.error(f"Unexpected error while extracting JSON: {e}")
         return {}
 
 def write_node_id(data, node_id=0):

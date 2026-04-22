@@ -1,18 +1,25 @@
 import asyncio
 import json
+import logging
 import time
+from typing import Any
 
 from pageindex.page_index import page_index_main
+from app.services.storage_service import local_artifact_path
 from pageindex.utils import (
     ConfigLoader,
     count_tokens,
     extract_json,
     get_page_tokens,
     get_text_of_pdf_pages_with_labels,
+    is_fatal_llm_model_error,
     llm_completion,
     structure_to_list,
 )
 from app.services.storage_service import read_json_artifact
+
+
+logger = logging.getLogger(__name__)
 
 
 def parse_pdf_to_structure(pdf_path: str, model: str) -> dict:
@@ -57,6 +64,73 @@ Rules:
 """
 
 
+def build_json_repair_prompt(raw_response: str, schema_hint: str) -> str:
+    return f"""
+You are repairing a model response so it becomes valid JSON.
+
+Target JSON shape:
+{schema_hint}
+
+Rules:
+- Return JSON only.
+- Do not wrap the JSON in markdown fences.
+- Preserve the original meaning when possible.
+- If the original response does not contain enough information, return the smallest valid JSON that matches the target shape.
+
+Original response:
+{raw_response}
+"""
+
+
+def _record_diagnostic(diagnostics: dict | None, message: str) -> None:
+    if diagnostics is None:
+        return
+    warnings = diagnostics.setdefault("warnings", [])
+    if message not in warnings:
+        warnings.append(message)
+
+
+def extract_json_with_repair(
+    *,
+    raw_response: str,
+    model: str,
+    request_options: dict | None = None,
+    trace_hook=None,
+    stats_hook=None,
+    trace_label: str,
+    schema_hint: str,
+    expected_keys: tuple[str, ...],
+) -> tuple[dict, dict]:
+    payload = extract_json(raw_response, log_errors=False)
+    if isinstance(payload, dict) and any(key in payload for key in expected_keys):
+        return payload, {"repair_applied": False, "repair_succeeded": False}
+
+    logger.warning("%s returned non-JSON or missing keys; attempting JSON repair", trace_label)
+    try:
+        repaired_response = llm_completion(
+            model=model,
+            prompt=build_json_repair_prompt(raw_response, schema_hint),
+            raise_on_error=True,
+            request_options=request_options,
+            trace_hook=trace_hook,
+            trace_label=f"{trace_label}_json_repair",
+            stats_hook=stats_hook,
+        )
+    except Exception as exc:
+        if is_fatal_llm_model_error(exc):
+            raise
+        logger.warning("%s JSON repair failed: %s", trace_label, exc)
+        return {}, {"repair_applied": True, "repair_succeeded": False}
+
+    repaired_payload = extract_json(repaired_response, log_errors=False)
+    if isinstance(repaired_payload, dict) and any(key in repaired_payload for key in expected_keys):
+        logger.warning("%s JSON repair succeeded", trace_label)
+        return repaired_payload, {"repair_applied": True, "repair_succeeded": True}
+
+    logger.warning("%s JSON repair still returned invalid JSON", trace_label)
+    return {}, {"repair_applied": True, "repair_succeeded": False}
+
+
 def choose_relevant_nodes_lexical(structure: list[dict], question: str, top_k: int) -> list[dict]:
     flat_nodes = [node for node in structure_to_list(structure) if node.get("node_id")]
     lowered_tokens = [token for token in question.lower().split() if token]
@@ -82,29 +156,284 @@ def choose_relevant_nodes(
     stats_hook=None,
     top_k: int = 5,
     selection_mode: str = "outline_llm",
+    diagnostics: dict | None = None,
 ) -> list[dict]:
     flat_nodes = {node["node_id"]: node for node in structure_to_list(structure) if node.get("node_id")}
     if selection_mode == "lexical_fallback":
+        if diagnostics is not None:
+            diagnostics["outline_selection_strategy"] = "lexical_fallback"
         return choose_relevant_nodes_lexical(structure, question, top_k)
-    response = llm_completion(
+    try:
+        response = llm_completion(
+            model=model,
+            prompt=build_outline_prompt(structure, question),
+            raise_on_error=True,
+            request_options=request_options,
+            trace_hook=trace_hook,
+            trace_label="outline_selection",
+            stats_hook=stats_hook,
+        )
+    except Exception as exc:
+        if is_fatal_llm_model_error(exc):
+            raise
+        _record_diagnostic(diagnostics, "大纲选段模型调用失败，已自动回退到关键词选段。")
+        if diagnostics is not None:
+            diagnostics["outline_selection_strategy"] = "lexical_fallback_after_llm_error"
+        return choose_relevant_nodes_lexical(structure, question, top_k)
+    payload, repair_meta = extract_json_with_repair(
+        raw_response=response,
         model=model,
-        prompt=build_outline_prompt(structure, question),
         request_options=request_options,
         trace_hook=trace_hook,
-        trace_label="outline_selection",
         stats_hook=stats_hook,
+        trace_label="outline_selection",
+        schema_hint='{"node_ids": ["0001"], "why": "short reason"}',
+        expected_keys=("node_ids",),
     )
-    payload = extract_json(response)
+    if repair_meta.get("repair_succeeded"):
+        _record_diagnostic(diagnostics, "大纲选段返回的 JSON 不规范，系统已自动修复后继续运行。")
+    elif repair_meta.get("repair_applied"):
+        _record_diagnostic(diagnostics, "大纲选段返回的 JSON 无法修复，系统已自动回退到关键词选段。")
     node_ids = payload.get("node_ids", []) if isinstance(payload, dict) else []
     selected = [flat_nodes[node_id] for node_id in node_ids if node_id in flat_nodes][:top_k]
 
     if not selected:
+        if diagnostics is not None:
+            diagnostics["outline_selection_strategy"] = "lexical_fallback_after_invalid_json"
         selected = choose_relevant_nodes_lexical(structure, question, top_k)
+    else:
+        if diagnostics is not None:
+            diagnostics["outline_selection_strategy"] = "outline_llm"
 
     if not selected:
         selected = list(flat_nodes.values())[:top_k]
 
     return selected
+
+
+def retrieve_candidate_nodes_for_manual(
+    structure: list[dict],
+    question: str,
+    model: str,
+    *,
+    request_options: dict | None = None,
+    trace_hook=None,
+    stats_hook=None,
+    candidate_top_k: int = 12,
+    selection_mode: str = "outline_llm",
+    diagnostics: dict | None = None,
+) -> list[dict]:
+    selected = choose_relevant_nodes(
+        structure,
+        question,
+        model,
+        request_options=request_options,
+        trace_hook=trace_hook,
+        stats_hook=stats_hook,
+        top_k=candidate_top_k,
+        selection_mode=selection_mode,
+        diagnostics=diagnostics,
+    )
+    return [
+        {
+            "node_id": node.get("node_id"),
+            "title": node.get("title"),
+            "start_index": node.get("start_index"),
+            "end_index": node.get("end_index"),
+            "node": node,
+        }
+        for node in selected
+    ]
+
+
+async def retrieve_candidates_for_manual_async(
+    structure: list[dict],
+    question: str,
+    model: str,
+    *,
+    request_options: dict | None = None,
+    trace_hook=None,
+    stats_hook=None,
+    candidate_top_k: int = 12,
+    selection_mode: str = "outline_llm",
+    diagnostics: dict | None = None,
+) -> list[dict]:
+    return await asyncio.to_thread(
+        retrieve_candidate_nodes_for_manual,
+        structure,
+        question,
+        model,
+        request_options=request_options,
+        trace_hook=trace_hook,
+        stats_hook=stats_hook,
+        candidate_top_k=candidate_top_k,
+        selection_mode=selection_mode,
+        diagnostics=diagnostics,
+    )
+
+
+def build_rerank_prompt(question: str, candidates: list[dict], *, top_k: int) -> str:
+    candidate_lines = []
+    for candidate in candidates:
+        candidate_lines.append(
+            "\n".join(
+                [
+                    f"candidate_id: {candidate['candidate_id']}",
+                    f"document: {candidate.get('document_label') or candidate.get('document_id') or 'unknown'}",
+                    f"title: {candidate.get('title') or 'untitled'}",
+                    f"pages: {candidate.get('page_start')}-{candidate.get('page_end')}",
+                ]
+            )
+        )
+    return f"""
+You are reranking retrieved manual sections for a question-answering system.
+
+Question:
+{question}
+
+Candidates:
+{chr(10).join(candidate_lines)}
+
+Return JSON only:
+{{
+  "items": [
+    {{
+      "candidate_id": "cand_1",
+      "score": 0.95,
+      "why": "short reason"
+    }}
+  ]
+}}
+
+Rules:
+- Return at most {top_k} items.
+- Scores must be between 0 and 1.
+- Prefer specific sections that directly answer the question.
+- Do not invent candidate_ids.
+""".strip()
+
+
+def rerank_candidates(
+    question: str,
+    candidates: list[dict],
+    model: str | None,
+    *,
+    request_options: dict | None = None,
+    trace_hook=None,
+    stats_hook=None,
+    top_k: int = 8,
+    diagnostics: dict | None = None,
+) -> tuple[list[dict], dict]:
+    if not candidates:
+        return [], {
+            "applied": False,
+            "mode": "empty",
+            "candidate_count": 0,
+            "selected_count": 0,
+        }
+    if not model:
+        selected = candidates[:top_k]
+        return selected, {
+            "applied": False,
+            "mode": "disabled",
+            "candidate_count": len(candidates),
+            "selected_count": len(selected),
+        }
+
+    response = llm_completion(
+        model=model,
+        prompt=build_rerank_prompt(question, candidates, top_k=top_k),
+        raise_on_error=True,
+        request_options=request_options,
+        trace_hook=trace_hook,
+        trace_label="candidate_rerank",
+        stats_hook=stats_hook,
+    )
+    payload, repair_meta = extract_json_with_repair(
+        raw_response=response,
+        model=model,
+        request_options=request_options,
+        trace_hook=trace_hook,
+        stats_hook=stats_hook,
+        trace_label="candidate_rerank",
+        schema_hint='{"items": [{"candidate_id": "cand_1", "score": 0.95, "why": "short reason"}]}',
+        expected_keys=("items",),
+    )
+    if diagnostics is not None:
+        diagnostics["json_repair_applied"] = bool(repair_meta.get("repair_applied"))
+        diagnostics["json_repair_succeeded"] = bool(repair_meta.get("repair_succeeded"))
+
+    ranking_items = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(ranking_items, list):
+        selected = candidates[:top_k]
+        return selected, {
+            "applied": False,
+            "mode": "fallback_original_order",
+            "candidate_count": len(candidates),
+            "selected_count": len(selected),
+        }
+
+    candidate_map = {candidate["candidate_id"]: candidate for candidate in candidates}
+    ranked: list[dict] = []
+    seen_ids: set[str] = set()
+    for item in ranking_items:
+        if not isinstance(item, dict):
+            continue
+        candidate_id = str(item.get("candidate_id") or "").strip()
+        if not candidate_id or candidate_id in seen_ids or candidate_id not in candidate_map:
+            continue
+        score_raw = item.get("score")
+        try:
+            score = float(score_raw)
+        except (TypeError, ValueError):
+            score = 0.0
+        ranked_candidate = dict(candidate_map[candidate_id])
+        ranked_candidate["rerank_score"] = max(0.0, min(score, 1.0))
+        ranked_candidate["rerank_reason"] = str(item.get("why") or "").strip() or None
+        ranked.append(ranked_candidate)
+        seen_ids.add(candidate_id)
+        if len(ranked) >= top_k:
+            break
+
+    if not ranked:
+        selected = candidates[:top_k]
+        return selected, {
+            "applied": False,
+            "mode": "fallback_original_order",
+            "candidate_count": len(candidates),
+            "selected_count": len(selected),
+        }
+
+    return ranked, {
+        "applied": True,
+        "mode": "model_rerank",
+        "candidate_count": len(candidates),
+        "selected_count": len(ranked),
+    }
+
+
+async def rerank_candidates_async(
+    question: str,
+    candidates: list[dict],
+    model: str | None,
+    *,
+    request_options: dict | None = None,
+    trace_hook=None,
+    stats_hook=None,
+    top_k: int = 8,
+    diagnostics: dict | None = None,
+) -> tuple[list[dict], dict]:
+    return await asyncio.to_thread(
+        rerank_candidates,
+        question,
+        candidates,
+        model,
+        request_options=request_options,
+        trace_hook=trace_hook,
+        stats_hook=stats_hook,
+        top_k=top_k,
+        diagnostics=diagnostics,
+    )
 
 
 def build_answer_context(
@@ -146,7 +475,7 @@ def build_answer_prompt(question: str, selected_nodes: list[dict], context: str,
     section_list = "\n".join(
         f"- {node.get('title')} ({node.get('start_index')}-{node.get('end_index')})" for node in selected_nodes
     )
-    extra = f"System instruction:\n{system_prompt}\n\n" if system_prompt else ""
+    extra = f"System prompt:\n{system_prompt}\n\n" if system_prompt else ""
     return f"""
 {extra}Answer the question using only the provided PDF excerpts.
 
@@ -200,7 +529,7 @@ def build_generation_prompt(
     section_list = "\n".join(
         f"- {node.get('title')} ({node.get('start_index')}-{node.get('end_index')})" for node in selected_nodes
     )
-    extra = f"System instruction:\n{system_prompt}\n\n" if system_prompt else ""
+    extra = f"System prompt:\n{system_prompt}\n\n" if system_prompt else ""
     history_block = f"Recent conversation context:\n{history_context}\n\n" if history_context else ""
     return f"""
 {extra}{history_block}Answer the question using only the provided PDF excerpts.
@@ -233,6 +562,62 @@ def build_citations(selected_nodes: list[dict]) -> list[dict]:
         }
         for node in selected_nodes
     ]
+
+
+def _build_context_block_for_citation(
+    citation: dict[str, Any],
+    *,
+    model: str,
+    max_context_pages: int | None,
+    max_context_tokens: int | None,
+) -> str:
+    node = citation.get("_node") or {
+        "title": citation.get("title"),
+        "start_index": citation.get("page_start"),
+        "end_index": citation.get("page_end"),
+    }
+    storage_path = citation.get("_storage_path")
+    if not storage_path:
+        return ""
+    with local_artifact_path(storage_path) as pdf_path:
+        excerpt = build_answer_context(
+            [node],
+            str(pdf_path),
+            model,
+            max_context_pages=max_context_pages,
+            max_context_tokens=max_context_tokens,
+        )
+    if not excerpt.strip():
+        return ""
+    return "\n".join(
+        [
+            f"[{citation.get('citation_id') or citation.get('candidate_id')}]",
+            f"source: {citation.get('document_label') or citation.get('document_id') or 'unknown'}",
+            f"pages: {citation.get('page_start')}-{citation.get('page_end')}",
+            f"title: {citation.get('title') or 'untitled'}",
+            excerpt,
+        ]
+    )
+
+
+async def build_context_from_citations_async(
+    citations: list[dict[str, Any]],
+    *,
+    model: str,
+    max_context_pages: int | None,
+    max_context_tokens: int | None,
+) -> list[str]:
+    async def build_one(citation: dict[str, Any]) -> str:
+        return await asyncio.to_thread(
+            _build_context_block_for_citation,
+            citation,
+            model=model,
+            max_context_pages=max_context_pages,
+            max_context_tokens=max_context_tokens,
+        )
+
+    blocks = await asyncio.gather(*(build_one(citation) for citation in citations))
+    return [block for block in blocks if block.strip()]
 
 
 def build_answer_with_marker(answer_text: str, citations: list[dict]) -> str:
@@ -319,6 +704,7 @@ def answer_question_against_structure(
             rewrite_response = llm_completion(
                 model=model,
                 prompt=build_query_rewrite_prompt(question, history_context),
+                raise_on_error=True,
                 request_options=retrieval_request_options,
                 trace_hook=trace_hook,
                 trace_label="query_rewrite",
@@ -330,7 +716,9 @@ def answer_question_against_structure(
                 rewritten_query = candidate.strip()
                 retrieval_query = rewritten_query
                 rewrite_applied = retrieval_query != question
-        except Exception:
+        except Exception as exc:
+            if is_fatal_llm_model_error(exc):
+                raise
             retrieval_query = question
 
     selected_nodes = choose_relevant_nodes(

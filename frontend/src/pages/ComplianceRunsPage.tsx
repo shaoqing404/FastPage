@@ -8,7 +8,8 @@ import { InlineAlert, KeyMetric, SectionToolbar, GlassPanel } from '../component
 import { complianceApi } from '../features/compliance';
 import { knowledgeBasesApi } from '../features/knowledge-bases/api';
 import { providersApi } from '../features/providers/api';
-import type { ComplianceRun } from '../types';
+import { runtimeObservationsApi } from '../features/runtime-observations/api';
+import type { ComplianceRun, RunObservationEvent, RunObservationSnapshot } from '../types';
 import { getErrorMessage } from '../lib/utils';
 
 const matchesSearch = (run: ComplianceRun, query: string) => {
@@ -32,6 +33,7 @@ export const ComplianceRunsPage: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState('all');
   const [modeFilter, setModeFilter] = useState('all');
   const [checkFilter, setCheckFilter] = useState('all');
+  const [streamedObservationEvents, setStreamedObservationEvents] = useState<RunObservationEvent[]>([]);
 
   const runsQuery = useQuery({
     queryKey: ['compliance-runs'],
@@ -48,7 +50,7 @@ export const ComplianceRunsPage: React.FC = () => {
   });
   const providersQuery = useQuery({
     queryKey: ['providers'],
-    queryFn: providersApi.list,
+    queryFn: () => providersApi.list(),
   });
 
   const runs = useMemo(() => runsQuery.data || [], [runsQuery.data]);
@@ -90,10 +92,46 @@ export const ComplianceRunsPage: React.FC = () => {
     enabled: Boolean(selectedRunId),
     refetchInterval: selectedRunSummary && ['queued', 'running'].includes(selectedRunSummary.status) ? 3000 : false,
   });
+  const observationSnapshotQuery = useQuery({
+    queryKey: ['runtime-observation', 'compliance', selectedRunId],
+    queryFn: () => runtimeObservationsApi.getSnapshot('compliance', selectedRunId),
+    enabled: Boolean(selectedRunId),
+    refetchInterval: selectedRunSummary && ['queued', 'running'].includes(selectedRunSummary.status) ? 3000 : false,
+  });
 
   const selectedRun = selectedRunQuery.data || selectedRunSummary || null;
+  useEffect(() => {
+    setStreamedObservationEvents([]);
+    if (!selectedRunId || !selectedRunSummary || !['queued', 'running'].includes(selectedRunSummary.status)) return undefined;
+    const controller = new AbortController();
+    runtimeObservationsApi.stream('compliance', selectedRunId, {
+      signal: controller.signal,
+      onObservation: (event) => {
+        setStreamedObservationEvents((current) => (
+          current.some((item) => item.id === event.id) ? current : [...current, event]
+        ));
+      },
+    }).catch(() => {});
+    return () => controller.abort();
+  }, [selectedRunId, selectedRunSummary]);
   const selectedCheck = selectedRun?.compliance_check_id ? checksById[selectedRun.compliance_check_id] || null : null;
   const selectedKnowledgeBase = selectedRun ? knowledgeBasesById[selectedRun.target.knowledge_base_id] || null : null;
+  const observationSnapshot = useMemo<RunObservationSnapshot | null>(() => {
+    const base = observationSnapshotQuery.data || null;
+    if (!streamedObservationEvents.length) return base;
+    return {
+      run_kind: 'compliance',
+      run_id: selectedRunId,
+      status: selectedRun?.status || base?.status || 'queued',
+      current_step: streamedObservationEvents[streamedObservationEvents.length - 1]?.step || base?.current_step || null,
+      worker_node_code: base?.worker_node_code || null,
+      queue: base?.queue || {},
+      timings: base?.timings || {},
+      execution_context: (selectedRun?.execution_context || base?.execution_context || {}) as Record<string, unknown>,
+      partial_answer: selectedRun?.answer || base?.partial_answer || null,
+      events: streamedObservationEvents,
+    };
+  }, [observationSnapshotQuery.data, selectedRun, selectedRunId, streamedObservationEvents]);
 
   const pageError = [runsQuery.error, checksQuery.error, knowledgeBasesQuery.error, providersQuery.error]
     .filter(Boolean)
@@ -161,6 +199,7 @@ export const ComplianceRunsPage: React.FC = () => {
           check={selectedCheck}
           knowledgeBase={selectedKnowledgeBase}
           providers={providers}
+          observationSnapshot={observationSnapshot}
           isLoading={selectedRunQuery.isLoading && !selectedRunSummary}
           isRefreshing={selectedRunQuery.isFetching}
           loadError={selectedRunQuery.error ? getErrorMessage(selectedRunQuery.error, 'Failed to refresh selected run') : ''}

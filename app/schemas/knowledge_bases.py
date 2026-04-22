@@ -48,6 +48,9 @@ class KnowledgeBaseDocumentOut(BaseModel):
     enabled: bool
     label: str | None
     sort_order: int
+    document_display_name: str | None = None
+    document_source_filename: str | None = None
+    document_status: str | None = None
 
 
 class KnowledgeBaseOut(BaseModel):

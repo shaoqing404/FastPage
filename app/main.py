@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.routers import auth, chat, documents, jobs, knowledge_bases, metrics, platform, providers, skills
+from app.api.routers import runtime_observations
 from app.api.routers import compliance_checks, compliance_runs
 from app.api.routers import workspaces, workspace_invites
 from app.core.bootstrap import init_db
@@ -121,6 +122,7 @@ app.include_router(compliance_runs.router)
 app.include_router(skills.router)
 app.include_router(chat.router)
 app.include_router(providers.router)
+app.include_router(runtime_observations.router)
 app.include_router(metrics.router)
 app.include_router(workspaces.router)
 app.include_router(workspace_invites.router)

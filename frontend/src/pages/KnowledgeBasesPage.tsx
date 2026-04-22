@@ -1,14 +1,13 @@
 import React, { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowRight, BookMarked, Database, Layers3, Loader2, Plus, Save, X } from 'lucide-react';
+import { ArrowRight, BookMarked, Database, Loader2, Plus, Save, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 import { EmptyState, Field, GlassPanel, InlineAlert, KeyMetric, SectionToolbar, StatusBadge } from '../components/ui/workbench';
 import { documentsApi } from '../features/documents/api';
 import { knowledgeBasesApi } from '../features/knowledge-bases/api';
-import type { KnowledgeBase, KnowledgeBaseMutationPayload } from '../features/knowledge-bases/types';
-import { formatDateTime, getErrorMessage } from '../lib/utils';
-import { cn } from '../lib/utils';
+import type { KnowledgeBaseMutationPayload } from '../features/knowledge-bases/types';
+import { getErrorMessage } from '../lib/utils';
 
 type KnowledgeBaseFormState = {
   name: string;

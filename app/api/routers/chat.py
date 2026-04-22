@@ -1,12 +1,14 @@
 import json
+import logging
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_principal
 from app.core.db import get_db
+from app.core.errors import AppError, ErrorCode, status_to_error_code
 from app.core.principal import Principal
 from app.schemas.chat import (
     AskRequest,
@@ -22,6 +24,7 @@ from app.services.chat_service import (
     list_runs_for_principal,
     request_run_cancel,
     resolve_document_version,
+    resolve_skill_run_targets,
     serialize_run,
 )
 from app.services.chat_service import stream_skill_run_events
@@ -33,10 +36,38 @@ from app.services.workspace_access_service import require_workspace_capability
 
 
 router = APIRouter(prefix="/api/v1", tags=["chat"])
+logger = logging.getLogger(__name__)
 
 
 def _sse(event: str, data) -> str:
     return f"event: {event}\ndata: {json.dumps(jsonable_encoder(data), ensure_ascii=False)}\n\n"
+
+
+def _stream_error_payload(exc: Exception) -> dict:
+    if isinstance(exc, AppError):
+        payload = {
+            "code": exc.code,
+            "message": exc.message,
+            "detail": exc.message,
+        }
+        if exc.details is not None:
+            payload["details"] = exc.details
+        return payload
+    if isinstance(exc, HTTPException):
+        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        return {
+            "code": status_to_error_code(exc.status_code),
+            "message": detail,
+            "detail": detail,
+        }
+
+    logger.exception("Unexpected failure while streaming skill run")
+    detail = str(exc) or "Skill stream failed before completion"
+    return {
+        "code": ErrorCode.INTERNAL_ERROR,
+        "message": detail,
+        "detail": detail,
+    }
 
 
 def _require_can_run_skills(principal: Principal) -> None:
@@ -84,48 +115,47 @@ async def run_skill(
     principal: Principal = Depends(get_current_principal),
 ):
     _require_can_run_skills(principal)
-    skill = get_skill_or_404(db, principal, skill_id)
-    request_config = json.loads(skill.request_config_json or "{}")
-    conversation_config = json.loads(skill.conversation_config_json or "{}")
-    retrieval_config = json.loads(skill.retrieval_config_json or "{}")
-    generation_config = json.loads(skill.generation_config_json or "{}")
-    document_ids = [link.document_id for link in skill.documents]
-    if payload.document_id:
-        document_id = payload.document_id
-    elif document_ids:
-        document_id = document_ids[0]
-    else:
-        from fastapi import HTTPException, status
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Skill has no target document")
-    document, version = resolve_document_version(db, principal, document_id, None)
-    session_id = payload.session_id
-    if not session_id and payload.auto_create_session:
-        session = create_session(
-            db,
-            principal,
-            payload.session_title or skill.name,
-            skill_id=skill.id,
-        )
-        session_id = session.id
     if payload.stream:
         async def event_stream():
-            async for event in stream_skill_run_events(
-                db,
-                principal=principal,
-                user=principal.user,
-                skill=skill,
-                document=document,
-                version=version,
-                question=payload.question,
-                request_config=request_config,
-                conversation_config={**conversation_config, **payload.conversation_config},
-                retrieval_config={**retrieval_config, **payload.retrieval_config},
-                generation_config={**generation_config, **payload.generation_config},
-                provider_id=payload.provider_id,
-                session_id=session_id,
-                disconnect_check=request.is_disconnected,
-            ):
-                yield _sse(event["event"], event["data"])
+            try:
+                skill = get_skill_or_404(db, principal, skill_id)
+                request_config = json.loads(skill.request_config_json or "{}")
+                conversation_config = json.loads(skill.conversation_config_json or "{}")
+                retrieval_config = json.loads(skill.retrieval_config_json or "{}")
+                generation_config = json.loads(skill.generation_config_json or "{}")
+                session_id = payload.session_id
+                if not session_id and payload.auto_create_session:
+                    session = create_session(
+                        db,
+                        principal,
+                        payload.session_title or skill.name,
+                        skill_id=skill.id,
+                    )
+                    session_id = session.id
+                async for event in stream_skill_run_events(
+                    db,
+                    principal=principal,
+                    user=principal.user,
+                    skill=skill,
+                    document=None,
+                    version=None,
+                    question=payload.question,
+                    model=payload.model or skill.model,
+                    request_config={
+                        **request_config,
+                        **({"system_prompt": payload.system_prompt} if payload.system_prompt else {}),
+                    },
+                    conversation_config={**conversation_config, **payload.conversation_config},
+                    retrieval_config={**retrieval_config, **payload.retrieval_config},
+                    generation_config={**generation_config, **payload.generation_config},
+                    document_id=payload.document_id,
+                    provider_id=payload.provider_id,
+                    session_id=session_id,
+                    disconnect_check=request.is_disconnected,
+                ):
+                    yield _sse(event["event"], event["data"])
+            except Exception as exc:
+                yield _sse("error", _stream_error_payload(exc))
 
         return StreamingResponse(
             event_stream(),
@@ -136,6 +166,26 @@ async def run_skill(
                 "X-Accel-Buffering": "no",
             },
         )
+    skill = get_skill_or_404(db, principal, skill_id)
+    request_config = json.loads(skill.request_config_json or "{}")
+    conversation_config = json.loads(skill.conversation_config_json or "{}")
+    retrieval_config = json.loads(skill.retrieval_config_json or "{}")
+    generation_config = json.loads(skill.generation_config_json or "{}")
+    document, version, run_target = resolve_skill_run_targets(
+        db,
+        principal=principal,
+        skill=skill,
+        document_id=payload.document_id,
+    )
+    session_id = payload.session_id
+    if not session_id and payload.auto_create_session:
+        session = create_session(
+            db,
+            principal,
+            payload.session_title or skill.name,
+            skill_id=skill.id,
+        )
+        session_id = session.id
     run = await create_chat_run(
         db,
         principal=principal,
@@ -143,8 +193,12 @@ async def run_skill(
         document=document,
         version=version,
         question=payload.question,
-        model=skill.model,
-        request_config=request_config,
+        model=payload.model or skill.model,
+        request_config={
+            **request_config,
+            **({"system_prompt": payload.system_prompt} if payload.system_prompt else {}),
+            "_run_target": run_target,
+        },
         conversation_config={**conversation_config, **payload.conversation_config},
         retrieval_config={**retrieval_config, **payload.retrieval_config},
         generation_config={**generation_config, **payload.generation_config},
@@ -164,49 +218,46 @@ async def run_skill_stream(
     principal: Principal = Depends(get_current_principal),
 ):
     _require_can_run_skills(principal)
-    skill = get_skill_or_404(db, principal, skill_id)
-    request_config = json.loads(skill.request_config_json or "{}")
-    conversation_config = json.loads(skill.conversation_config_json or "{}")
-    retrieval_config = json.loads(skill.retrieval_config_json or "{}")
-    generation_config = json.loads(skill.generation_config_json or "{}")
-    document_ids = [link.document_id for link in skill.documents]
-    if payload.document_id:
-        document_id = payload.document_id
-    elif document_ids:
-        document_id = document_ids[0]
-    else:
-        from fastapi import HTTPException, status
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Skill has no target document")
-    document, version = resolve_document_version(db, principal, document_id, None)
-    session_id = payload.session_id
-    if not session_id and payload.auto_create_session:
-        session = create_session(
-            db,
-            principal,
-            payload.session_title or skill.name,
-            skill_id=skill.id,
-        )
-        session_id = session.id
-    payload.stream = True
-
     async def event_stream():
-        async for event in stream_skill_run_events(
-            db,
-            principal=principal,
-            user=principal.user,
-            skill=skill,
-            document=document,
-            version=version,
-            question=payload.question,
-            request_config=request_config,
-            conversation_config={**conversation_config, **payload.conversation_config},
-            retrieval_config={**retrieval_config, **payload.retrieval_config},
-            generation_config={**generation_config, **payload.generation_config},
-            provider_id=payload.provider_id,
-            session_id=session_id,
-            disconnect_check=request.is_disconnected,
-        ):
-            yield _sse(event["event"], event["data"])
+        try:
+            skill = get_skill_or_404(db, principal, skill_id)
+            request_config = json.loads(skill.request_config_json or "{}")
+            conversation_config = json.loads(skill.conversation_config_json or "{}")
+            retrieval_config = json.loads(skill.retrieval_config_json or "{}")
+            generation_config = json.loads(skill.generation_config_json or "{}")
+            session_id = payload.session_id
+            if not session_id and payload.auto_create_session:
+                session = create_session(
+                    db,
+                    principal,
+                    payload.session_title or skill.name,
+                    skill_id=skill.id,
+                )
+                session_id = session.id
+            async for event in stream_skill_run_events(
+                db,
+                principal=principal,
+                user=principal.user,
+                skill=skill,
+                document=None,
+                version=None,
+                question=payload.question,
+                model=payload.model or skill.model,
+                request_config={
+                    **request_config,
+                    **({"system_prompt": payload.system_prompt} if payload.system_prompt else {}),
+                },
+                conversation_config={**conversation_config, **payload.conversation_config},
+                retrieval_config={**retrieval_config, **payload.retrieval_config},
+                generation_config={**generation_config, **payload.generation_config},
+                document_id=payload.document_id,
+                provider_id=payload.provider_id,
+                session_id=session_id,
+                disconnect_check=request.is_disconnected,
+            ):
+                yield _sse(event["event"], event["data"])
+        except Exception as exc:
+            yield _sse("error", _stream_error_payload(exc))
 
     return StreamingResponse(
         event_stream(),

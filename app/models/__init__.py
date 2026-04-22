@@ -16,6 +16,7 @@ from .chat_session import ChatSession, ChatMessage
 from .revoked_token import RevokedToken
 from .audit_event import AuditEvent
 from .compliance import ComplianceCheck, ComplianceRun
+from .run_observation_event import RunObservationEvent
 
 __all__ = [
     "Tenant",
@@ -41,4 +42,5 @@ __all__ = [
     "AuditEvent",
     "ComplianceCheck",
     "ComplianceRun",
+    "RunObservationEvent",
 ]

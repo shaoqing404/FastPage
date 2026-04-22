@@ -103,9 +103,7 @@ services:
     environment:
       WORKER_NODE_CODE_PREFIX: ${WORKER_NODE_CODE_PREFIX:-worker}
     command:
-      - sh
-      - -lc
-      - python -m app.worker
+      - /app/docker/worker-entrypoint.sh
     depends_on:
       mysql:
         condition: service_healthy

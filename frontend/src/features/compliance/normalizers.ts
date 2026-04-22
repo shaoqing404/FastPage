@@ -43,6 +43,7 @@ const DEFAULT_RETRIEVAL_CONFIG: ComplianceRetrievalConfig = {
   per_document_top_k: 5,
   global_top_k: 8,
   selection_mode: 'outline_llm',
+  rerank_mode: 'auto',
   max_context_pages: 20,
   max_context_tokens: 12000,
 };
@@ -116,6 +117,7 @@ const normalizeRetrievalConfig = (value: unknown): ComplianceRetrievalConfig => 
     per_document_top_k: toNumberOrNull(record.per_document_top_k) ?? DEFAULT_RETRIEVAL_CONFIG.per_document_top_k,
     global_top_k: toNumberOrNull(record.global_top_k) ?? DEFAULT_RETRIEVAL_CONFIG.global_top_k,
     selection_mode: toStringOrFallback(record.selection_mode, DEFAULT_RETRIEVAL_CONFIG.selection_mode),
+    rerank_mode: toStringOrFallback(record.rerank_mode, DEFAULT_RETRIEVAL_CONFIG.rerank_mode) as ComplianceRetrievalConfig['rerank_mode'],
     max_context_pages: record.max_context_pages === null ? null : (toNumberOrNull(record.max_context_pages) ?? DEFAULT_RETRIEVAL_CONFIG.max_context_pages),
     max_context_tokens:
       record.max_context_tokens === null ? null : (toNumberOrNull(record.max_context_tokens) ?? DEFAULT_RETRIEVAL_CONFIG.max_context_tokens),
@@ -268,6 +270,8 @@ const normalizeExecutionContextRetrieval = (value: unknown): ComplianceExecution
     per_document_top_k: toNumberOrNull(record.per_document_top_k),
     global_top_k: toNumberOrNull(record.global_top_k),
     selection_mode: toStringOrNull(record.selection_mode),
+    rerank_mode: toStringOrNull(record.rerank_mode),
+    rerank_resolved_mode: toStringOrNull(record.rerank_resolved_mode),
     documents_considered: toNumberOrNull(record.documents_considered),
     documents_with_hits: toNumberOrNull(record.documents_with_hits),
   };
@@ -320,6 +324,8 @@ const normalizeMetrics = (value: unknown): ComplianceRunMetrics => {
     merge_ms: toNumberOrNull(record.merge_ms),
     answer_ms: toNumberOrNull(record.answer_ms),
     total_ms: toNumberOrNull(record.total_ms),
+    queue_ms: toNumberOrNull(record.queue_ms),
+    wall_clock_ms: toNumberOrNull(record.wall_clock_ms),
     manual_count: toNumberOrNull(record.manual_count),
     documents_considered: toNumberOrNull(record.documents_considered),
     documents_with_hits: toNumberOrNull(record.documents_with_hits),

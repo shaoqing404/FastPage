@@ -28,6 +28,7 @@ class ComplianceRetrievalConfig(BaseModel):
     per_document_top_k: int = 5
     global_top_k: int = 8
     selection_mode: Literal["outline_llm", "lexical_fallback"] = "outline_llm"
+    rerank_mode: Literal["auto", "off", "provider", "system"] = "auto"
     max_context_pages: int | None = 20
     max_context_tokens: int | None = 12000
 
@@ -87,7 +88,7 @@ class ComplianceRunInput(BaseModel):
 
 
 class ComplianceRunCreate(BaseModel):
-    execution_mode: Literal["sync"] = "sync"
+    execution_mode: Literal["async"] = "async"
     input: ComplianceRunInput
     target: ComplianceTarget
     instructions: str | None = None
@@ -100,7 +101,7 @@ class ComplianceRunCreate(BaseModel):
 
 
 class ComplianceRunFromCheckCreate(BaseModel):
-    execution_mode: Literal["sync"] = "sync"
+    execution_mode: Literal["async"] = "async"
     input: ComplianceRunInput
     provider_id: str | None = None
     model: str | None = None

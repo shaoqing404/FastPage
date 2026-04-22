@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
+import { RunObservationTimeline } from '../components/runtime/RunObservationTimeline';
 import { SkillActionsModal } from '../components/skills/SkillActionsModal';
 import { AnswerContent } from '../components/ui/AnswerContent';
 import { ExpertDrawer, Field, GlassPanel, InlineAlert, KeyMetric, SectionToolbar, SegmentedControl, StatusBadge } from '../components/ui/workbench';
@@ -29,6 +30,7 @@ import { chatApi } from '../features/chat/api';
 import { documentsApi } from '../features/documents/api';
 import { knowledgeBasesApi } from '../features/knowledge-bases/api';
 import { providersApi } from '../features/providers/api';
+import { runtimeObservationsApi } from '../features/runtime-observations/api';
 import { skillsApi } from '../features/skills/api';
 import { isApiClientError, resolveStoredWorkspace } from '../lib/api/client';
 import {
@@ -45,7 +47,7 @@ import {
   resolveProviderModelOption,
   resolveWorkspaceDefaultProvider,
 } from '../lib/utils';
-import type { ChatMessage, ChatRun, ChatSession, ChatSkill, Document, KnowledgeBase, ModelProvider, RunStatus } from '../types';
+import type { ChatMessage, ChatRun, ChatSession, ChatSkill, Document, KnowledgeBase, ModelProvider, RunObservationEvent, RunObservationSnapshot, RunStatus } from '../types';
 
 type HistoryItem = {
   role: 'user' | 'assistant';
@@ -200,7 +202,9 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   const [selectionMode, setSelectionMode] = useState('');
   const [maxContextPages, setMaxContextPages] = useState('');
   const [maxContextTokens, setMaxContextTokens] = useState('');
+  const [rerankMode, setRerankMode] = useState('');
   const [temperature, setTemperature] = useState('');
+  const [streamingObservations, setStreamingObservations] = useState<RunObservationEvent[]>([]);
   const [chatAlert, setChatAlert] = useState<AlertState | null>(null);
   const [saveFeedback, setSaveFeedback] = useState<SaveFeedback | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(skill.updated_at);
@@ -341,6 +345,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   const effectiveSelectionMode = selectionMode || (typeof skillRetrievalDefaults.selection_mode === 'string' ? skillRetrievalDefaults.selection_mode : 'outline_llm');
   const effectiveMaxContextPages = maxContextPages || (skillRetrievalDefaults.max_context_pages ? String(skillRetrievalDefaults.max_context_pages) : '');
   const effectiveMaxContextTokens = maxContextTokens || (skillRetrievalDefaults.max_context_tokens ? String(skillRetrievalDefaults.max_context_tokens) : '');
+  const effectiveRerankMode = rerankMode || (typeof skillRetrievalDefaults.rerank_mode === 'string' ? skillRetrievalDefaults.rerank_mode : 'auto');
   const effectiveTemperature = temperature || (
     skillGenerationDefaults.temperature !== undefined && skillGenerationDefaults.temperature !== null
       ? String(skillGenerationDefaults.temperature)
@@ -420,6 +425,30 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   const displayRun = isStreaming ? null : activeRun;
   const activeExecutionContext = streamingExecutionContext || activeRun?.execution_context || {};
   const activeStatus = streamingStatus || activeRun?.status || null;
+  const activeObservationRunId = streamingRunId || displayRun?.id || activeRun?.id || null;
+  const { data: observationSnapshotData } = useQuery({
+    queryKey: ['runtime-observation', 'chat', activeObservationRunId],
+    queryFn: () => runtimeObservationsApi.getSnapshot('chat', activeObservationRunId!),
+    enabled: Boolean(activeObservationRunId),
+    refetchInterval: activeStatus === 'running' || activeStatus === 'queued' ? 3000 : false,
+  });
+  const activeObservationSnapshot = useMemo<RunObservationSnapshot | null>(() => {
+    if (!observationSnapshotData && streamingObservations.length === 0) return null;
+    if (streamingObservations.length === 0) return observationSnapshotData || null;
+    const lastEvent = streamingObservations[streamingObservations.length - 1] || null;
+    return {
+      run_kind: 'chat',
+      run_id: activeObservationRunId || observationSnapshotData?.run_id || '',
+      status: activeStatus || observationSnapshotData?.status || 'queued',
+      current_step: lastEvent?.step || observationSnapshotData?.current_step || null,
+      worker_node_code: observationSnapshotData?.worker_node_code || null,
+      queue: observationSnapshotData?.queue || {},
+      timings: observationSnapshotData?.timings || {},
+      execution_context: (activeExecutionContext || observationSnapshotData?.execution_context || {}) as Record<string, unknown>,
+      partial_answer: streamingAnswer || observationSnapshotData?.partial_answer || null,
+      events: streamingObservations,
+    };
+  }, [activeExecutionContext, activeObservationRunId, activeStatus, observationSnapshotData, streamingAnswer, streamingObservations]);
 
   const createSessionMutation = useMutation({
     mutationFn: (title: string) => chatApi.createSkillSession(skillId, { title }),
@@ -456,9 +485,21 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
         provider_id: draftProviderId,
         document_ids: skill.document_ids,
         request_config: skill.request_config || {},
-        conversation_config: skill.conversation_config || {},
-        retrieval_config: skill.retrieval_config || {},
-        generation_config: skill.generation_config || {},
+        conversation_config: {
+          query_rewrite_with_history: effectiveQueryRewriteWithHistory,
+          include_history: effectiveIncludeHistory,
+          include_assistant_messages: effectiveIncludeAssistantMessages,
+          history_turn_limit: Number(effectiveHistoryTurnLimit || DEFAULT_CONVERSATION_CONFIG.history_turn_limit),
+          history_token_budget: Number(effectiveHistoryTokenBudget || DEFAULT_CONVERSATION_CONFIG.history_token_budget),
+        },
+        retrieval_config: {
+          top_k: Number(effectiveTopK || 5),
+          selection_mode: effectiveSelectionMode,
+          rerank_mode: effectiveRerankMode,
+          ...(effectiveMaxContextPages.trim() ? { max_context_pages: Number(effectiveMaxContextPages) } : {}),
+          ...(effectiveMaxContextTokens.trim() ? { max_context_tokens: Number(effectiveMaxContextTokens) } : {}),
+        },
+        generation_config: { temperature: Number(effectiveTemperature || 0) },
       });
     },
     onSuccess: (updatedSkill) => {
@@ -488,6 +529,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       const retrieval_config = {
         top_k: Number(effectiveTopK || 5),
         selection_mode: effectiveSelectionMode,
+        rerank_mode: effectiveRerankMode,
         ...(effectiveMaxContextPages.trim() ? { max_context_pages: Number(effectiveMaxContextPages) } : {}),
         ...(effectiveMaxContextTokens.trim() ? { max_context_tokens: Number(effectiveMaxContextTokens) } : {}),
       };
@@ -531,6 +573,11 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
           onContext: ({ execution_context }) => {
             setStreamingExecutionContext(execution_context);
           },
+          onObservation: (event) => {
+            setStreamingObservations((current) => (
+              current.some((item) => item.id === event.id) ? current : [...current, event]
+            ));
+          },
           onAnswerDelta: ({ delta }) => {
             setStreamingAnswer((current) => `${current}${delta}`);
           },
@@ -547,6 +594,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       setStreamingRunId(null);
       setStreamingStatus('accepted');
       setStreamingExecutionContext(null);
+      setStreamingObservations([]);
     },
     onSuccess: (run) => {
       streamAbortRef.current = null;
@@ -567,6 +615,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       setStreamingRunId(null);
       setStreamingStatus(null);
       setStreamingExecutionContext(run.execution_context || null);
+      setStreamingObservations([]);
       queryClient.invalidateQueries({ queryKey: ['skill-runs-all-sessions', skillId] });
       queryClient.invalidateQueries({ queryKey: ['skill-session-runs', skillId, effectiveSessionId] });
       queryClient.invalidateQueries({ queryKey: ['skill-session-messages', skillId, effectiveSessionId] });
@@ -581,6 +630,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       setStreamingRunId(null);
       setStreamingStatus(null);
       setStreamingExecutionContext(null);
+      setStreamingObservations([]);
       if (error instanceof DOMException && error.name === 'AbortError') {
         setChatAlert(null);
       } else {
@@ -921,6 +971,21 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
           <Field label="Max excerpt tokens in answer context" hint="Optional approximate cap on excerpt tokens after section selection.">
             <input type="number" min="1" value={effectiveMaxContextTokens} onChange={(event) => setMaxContextTokens(event.target.value)} className="field" placeholder="Optional" />
           </Field>
+          <Field
+            label="Rerank mode"
+            hint={
+              draftResolvedProvider?.capabilities?.rerank_models?.length
+                ? `Provider rerank models: ${draftResolvedProvider.capabilities.rerank_models.join(', ')}`
+                : 'Auto uses system rerank when configured, otherwise falls back to the original retrieval order.'
+            }
+          >
+            <select value={effectiveRerankMode} onChange={(event) => setRerankMode(event.target.value)} className="field">
+              <option value="auto">Auto</option>
+              <option value="off">Off</option>
+              <option value="provider">Provider rerank</option>
+              <option value="system">System rerank</option>
+            </select>
+          </Field>
         </div>
       </div>
 
@@ -1016,6 +1081,13 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
               ))}
             </div>
           ) : null}
+
+          <RunObservationTimeline
+            snapshot={activeObservationSnapshot}
+            title="Execution timeline"
+            emptyTitle="No runtime telemetry yet"
+            emptyDescription="Run the skill to see live backend steps, rerank decisions, and model I/O here."
+          />
         </>
       ) : (
         <div className="empty-state min-h-[220px]">

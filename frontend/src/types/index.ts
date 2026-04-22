@@ -225,6 +225,11 @@ export interface ModelProvider {
   source_provider_id?: string | null;
   source_provider_name?: string | null;
   is_workspace_default_candidate: boolean;
+  capabilities: {
+    chat_models: string[];
+    rerank_models: string[];
+    default_rerank_model: string | null;
+  };
   created_at: string;
   updated_at: string;
 }
@@ -381,6 +386,7 @@ export interface ComplianceRetrievalConfig {
   per_document_top_k: number;
   global_top_k: number;
   selection_mode: 'outline_llm' | 'lexical_fallback' | (string & {});
+  rerank_mode: 'auto' | 'off' | 'provider' | 'system' | (string & {});
   max_context_pages: number | null;
   max_context_tokens: number | null;
 }
@@ -455,6 +461,8 @@ export interface ComplianceExecutionContextRetrieval {
   per_document_top_k: number | null;
   global_top_k: number | null;
   selection_mode: string | null;
+  rerank_mode?: string | null;
+  rerank_resolved_mode?: string | null;
   documents_considered: number | null;
   documents_with_hits: number | null;
 }
@@ -565,7 +573,7 @@ export interface ComplianceCheckUpdateInput {
 }
 
 export interface ComplianceRunCreateInput {
-  execution_mode?: 'sync';
+  execution_mode?: 'async';
   input: ComplianceRunInput;
   target: ComplianceTarget;
   instructions?: string | null;
@@ -578,7 +586,7 @@ export interface ComplianceRunCreateInput {
 }
 
 export interface ComplianceRunFromCheckCreateInput {
-  execution_mode?: 'sync';
+  execution_mode?: 'async';
   input: ComplianceRunInput;
   provider_id?: string | null;
   model?: string | null;
@@ -721,29 +729,83 @@ export interface ChatRunExecutionContext extends Record<string, unknown> {
     rewritten_query?: string | null;
     rewrite_applied?: boolean;
     top_k?: number;
+    candidate_top_k?: number;
     selection_mode?: string;
     query_rewrite_strategy?: string;
     outline_selection_strategy?: string | null;
     max_context_pages?: number | null;
     max_context_tokens?: number | null;
+    documents_considered?: number | null;
+    documents_with_hits?: number | null;
+    rerank_mode?: string | null;
+    rerank_resolved_mode?: string | null;
+    rerank_applied?: boolean;
+    rerank_model?: string | null;
+    rerank_provider_source?: string | null;
     warnings?: string[];
   };
   generation?: {
     temperature?: number | null;
   };
+  target?: {
+    requested_mode?: string | null;
+    resolved_mode?: string | null;
+    knowledge_base_id?: string | null;
+  };
+  resolved_manuals?: Array<{
+    document_id?: string | null;
+    version_id?: string | null;
+    label?: string | null;
+    version_label?: string | null;
+  }>;
+  merge?: {
+    strategy?: string | null;
+    candidate_count?: number | null;
+    selected_citation_count?: number | null;
+  };
 }
 
 export interface ChatRunMetrics extends Record<string, unknown> {
+  queue_ms?: number;
   retrieve_ms?: number;
   answer_ms?: number;
   total_ms?: number;
+  wall_clock_ms?: number;
   ttft_ms?: number;
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
   manual_count?: number;
   selected_section_count?: number;
+  documents_considered?: number;
+  documents_with_hits?: number;
+  citations_count?: number;
   successful_llm_calls?: number;
+}
+
+export interface RunObservationEvent {
+  id: string;
+  run_kind: 'chat' | 'compliance';
+  run_id: string;
+  sequence_no: number;
+  event_type: string;
+  step: string | null;
+  status: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface RunObservationSnapshot {
+  run_kind: 'chat' | 'compliance';
+  run_id: string;
+  status: string;
+  current_step: string | null;
+  worker_node_code: string | null;
+  queue: Record<string, unknown>;
+  timings: Record<string, unknown>;
+  execution_context: Record<string, unknown>;
+  partial_answer: string | null;
+  events: RunObservationEvent[];
 }
 
 export interface ChatRun {

@@ -35,7 +35,7 @@ class WorkspaceOut(BaseModel):
     slug: str
     status: str
     is_default: bool
-    default_provider_id: str | None
+    default_provider_id: str | None = None
 
 
 class MembershipOut(BaseModel):

@@ -59,6 +59,7 @@ class ModelProviderOut(BaseModel):
     source_provider_id: str | None
     source_provider_name: str | None
     is_workspace_default_candidate: bool
+    capabilities: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
 
