@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
+from fastapi.encoders import jsonable_encoder
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -67,7 +68,7 @@ def _json_loads(text: str | None, fallback):
 
 
 def _json_dumps(payload: Any) -> str:
-    return json.dumps(payload, ensure_ascii=False)
+    return json.dumps(jsonable_encoder(payload), ensure_ascii=False)
 
 
 def _coerce_positive_int(name: str, value: Any) -> int:
@@ -179,8 +180,8 @@ def serialize_compliance_check(check: ComplianceCheck) -> dict[str, Any]:
         "retrieval_config": _json_loads(check.retrieval_config_json, DEFAULT_RETRIEVAL_CONFIG),
         "generation_config": _json_loads(check.generation_config_json, DEFAULT_GENERATION_CONFIG),
         "created_by": check.created_by,
-        "created_at": check.created_at,
-        "updated_at": check.updated_at,
+        "created_at": check.created_at.isoformat() if check.created_at else None,
+        "updated_at": check.updated_at.isoformat() if check.updated_at else None,
     }
 
 
@@ -215,9 +216,9 @@ def serialize_compliance_run(run: ComplianceRun) -> dict[str, Any]:
         "execution_context": _json_loads(run.execution_context_json, {}),
         "metrics": _json_loads(run.metrics_json, {}),
         "error": _json_loads(run.error_json, None),
-        "created_at": run.created_at,
-        "started_at": run.started_at,
-        "finished_at": run.finished_at,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
     }
 
 

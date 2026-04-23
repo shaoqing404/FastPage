@@ -2,7 +2,7 @@
 
 - Repository root: current PageIndex checkout
 - Parent stage: `Phase 4 Access, Admin, and Pre-Phase5 Closeout`
-- Status date: `2026-04-21`
+- Status date: `2026-04-22`
 - Current decision: `NO-GO`
 
 ## 1. Gate Summary
@@ -10,17 +10,19 @@
 - `Phase 4.5`: `Conditional GO`
 - `Phase 4.6`: `GO`
 - `Phase 4.7`: `GO` on the `2026-04-17` hardening baseline, but current-tree rerun still pending
-- `Phase 4.8`: `NO-GO`
+- `Phase 4.8`: `GO`
+- `Phase 4.9`: `Conditional GO`
 - `Phase 4 parent stage`: `NO-GO`
 - `Phase 5`: `NO-GO`
 
 Reason:
 
 - the provider/workspace uplift and the follow-up frontend usability fixes are now materially landed in code
+- the `Phase 4.9` runtime foundation is now materially landed and has its own closeout note in:
+  - [`phase4_9_multi_manual_runtime_and_observability_closeout.md`](phase4_9_multi_manual_runtime_and_observability_closeout.md)
 - the `Phase 4.7` validation harness has been restored into `spec/` and aligned to the current skill-session contract
 - local harness contract checks now pass again
-- the current frontend tree still does not pass repository-wide `npm run build`
-- the full post-`4.8` real-runtime closeout chain has not yet been rerun and archived on the current tree
+- the current frontend tree now passes `npm run build`, but the full post-`4.9` rerun artifact chain has not yet been refreshed after the latest compliance serialization fix
 
 ## 2. Landed Since The 4.7 Baseline
 
@@ -45,31 +47,24 @@ The repository now materially includes:
 
 ## 3. Verified Local Truth On This Workspace
 
-Confirmed on `2026-04-21`:
+Confirmed on `2026-04-22`:
 
 - `uv run python -m unittest tests.phase4.test_phase47_validation_defaults tests.phase4.test_phase47_backend_validation_harness`
   - `PASS`
 - `cd frontend && npm run build`
-  - `FAIL`
-
-Current frontend build blockers:
-
-- `frontend/src/pages/ChatPage.tsx`
-- `frontend/src/pages/ComplianceRunsPage.tsx`
-- `frontend/src/pages/KnowledgeBasesPage.tsx`
-- `frontend/src/pages/SkillsPage.tsx`
-
-These are closeout blockers because `Phase 4.8` is explicitly responsible for frontend/backend product-surface continuity.
+  - `PASS`
+- `uv run python -m unittest tests.phase4.test_compliance_serialization tests.phase4.test_runtime_observation_serialization tests.phase4.test_provider_execution_model_normalization tests.phase4.test_pageindex_native_rerank tests.phase4.test_skill_stream_runtime_contract tests.phase4.test_chat_run_worker_logging`
+  - `PASS`
 
 ## 4. Remaining Parent-Stage Gates
 
 `Phase 4` cannot close until all of the following are true:
 
-1. repository-wide frontend build passes again
-2. the post-`4.8` real-runtime validation chain is rerun on the current local stack
+1. the post-`4.9` real-runtime validation chain is rerun on the current local stack
 3. the rerun covers:
    - workspace create / switch
    - provider / KB / document / skill / skill-chat continuity
+   - compliance final completion after serialization fix
    - portrait / control-plane verification
    - cleanup / artifact retention outcome
 4. the final runtime artifact is written to `results/` and linked from the closeout docs
@@ -89,8 +84,8 @@ The following remain outside the closeout bar unless they block a tested current
 
 Recommended next gate is:
 
-1. clear the frontend build errors listed above
-2. rerun the `Phase 4.7` real-runtime validation chain on the current tree
+1. rerun the compliance saved-check path on the current tree after the `datetime` serialization fix
+2. rerun the broader `Phase 4.7` / `Phase 4.9` real-runtime validation chain on the current tree
 3. update this file from `NO-GO` to either:
    - `Conditional GO`
    - or `GO`

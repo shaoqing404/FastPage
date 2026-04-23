@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from fastapi.encoders import jsonable_encoder
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -43,7 +44,7 @@ def _trim_text(text: str | None) -> dict[str, Any]:
 
 
 def sanitize_observation_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
-    raw = dict(payload or {})
+    raw = jsonable_encoder(payload or {})
     for key in ("prompt", "prompt_text", "response_text", "delta", "error"):
         if key in raw:
             raw[key] = _trim_text(raw.get(key))

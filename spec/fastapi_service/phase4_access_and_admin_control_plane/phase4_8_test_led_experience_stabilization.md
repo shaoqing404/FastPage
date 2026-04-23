@@ -247,11 +247,11 @@ Known intentional non-goals retained after this uplift:
 - provider governance workflow
 - user/private provider ownership
 
-## 9. Current Closeout Snapshot (`2026-04-21`)
+## 9. Current Closeout Snapshot (`2026-04-23`)
 
 Current gate:
 
-- `Phase 4.8`: `NO-GO`
+- `Phase 4.8`: `GO`
 - `Phase 4`: `NO-GO`
 
 What is now fixed in code:
@@ -264,10 +264,16 @@ What is now fixed in code:
 - clipboard interactions now share one fallback-aware copy path
 - the `Phase 4.7` validation harness has been re-aligned to the current skill-session contract and its local harness tests pass again
 
-What is still blocking closeout:
+What is no longer blocking `Phase 4.8` closeout:
 
-- repository-wide frontend `build` still fails on the current tree
-- the post-uplift real-runtime validation chain has not yet been rerun and archived
+- repository-wide frontend `build` now passes on the current tree
+- the provider/workspace uplift and the required frontend continuity fixes are materially landed
+
+What remains outside the `Phase 4.8` gate and is now carried by `Phase 4.9` / parent-stage closeout:
+
+- worker/runtime deep observability hardening
+- multi-manual runtime closeout reruns after the compliance serialization fix
+- final parent-stage runtime artifact refresh
 
 Therefore the current required next step is:
 
