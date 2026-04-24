@@ -77,7 +77,7 @@ class Settings:
     compliance_run_lease_timeout_seconds: int
     compliance_run_queue_retry_delay_ms: int
 
-    # ── Retrieval / rerank ──────────────────────────────────────────────────
+    # ── Retrieval / rerank / embedding ──────────────────────────────────────
     retrieval_max_concurrency: int
     run_max_manuals: int
     run_step_max_retries: int
@@ -87,6 +87,16 @@ class Settings:
     system_rerank_api_key: str
     system_rerank_model: str
     system_rerank_provider_type: str
+    system_embedding_enabled: bool
+    system_embedding_base_url: str
+    system_embedding_api_key: str
+    system_embedding_model: str
+    system_embedding_provider_type: str
+
+    # ── Routing asset build hooks ───────────────────────────────────────────
+    routing_route_docs_build_mode: str
+    routing_synthetic_queries_build_mode: str
+    routing_embeddings_build_mode: str
 
     # ── Runtime observability ───────────────────────────────────────────────
     observation_text_max_chars: int
@@ -107,6 +117,14 @@ def _env_text(name: str) -> str | None:
         return None
     stripped = value.strip()
     return stripped or None
+
+
+def _env_first(names: tuple[str, ...], default: str) -> str:
+    for name in names:
+        value = _env_text(name)
+        if value is not None:
+            return value
+    return default
 
 
 def _infer_database_mode_from_url(database_url: str) -> str:
@@ -285,6 +303,23 @@ def get_settings() -> Settings:
         system_rerank_api_key=os.getenv("SYSTEM_RERANK_API_KEY", ""),
         system_rerank_model=os.getenv("SYSTEM_RERANK_MODEL", ""),
         system_rerank_provider_type=os.getenv("SYSTEM_RERANK_PROVIDER_TYPE", "openai_compatible"),
+        system_embedding_enabled=os.getenv("SYSTEM_EMBEDDING_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
+        system_embedding_base_url=os.getenv("SYSTEM_EMBEDDING_BASE_URL", ""),
+        system_embedding_api_key=os.getenv("SYSTEM_EMBEDDING_API_KEY", ""),
+        system_embedding_model=os.getenv("SYSTEM_EMBEDDING_MODEL", ""),
+        system_embedding_provider_type=os.getenv("SYSTEM_EMBEDDING_PROVIDER_TYPE", "openai_compatible"),
+        routing_route_docs_build_mode=_env_first(
+            ("ROUTING_ROUTE_DOCS_BUILD_MODE", "ROUTING_ROUTE_DOC_BUILD_MODE"),
+            "disabled",
+        ),
+        routing_synthetic_queries_build_mode=_env_first(
+            ("ROUTING_SYNTHETIC_QUERIES_BUILD_MODE",),
+            "disabled",
+        ),
+        routing_embeddings_build_mode=_env_first(
+            ("ROUTING_EMBEDDINGS_BUILD_MODE",),
+            "disabled",
+        ),
         observation_text_max_chars=int(os.getenv("OBSERVATION_TEXT_MAX_CHARS", "12000")),
         max_upload_bytes=int(os.getenv("MAX_UPLOAD_BYTES", "2147483648")),  # 2 GB
         provider_url_allow_private_nets=provider_url_allow_private,

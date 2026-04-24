@@ -4,6 +4,7 @@ import logging
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from typing import Any
 
 from pageindex.page_index import page_index_main
@@ -12,6 +13,7 @@ from pageindex.utils import (
     ConfigLoader,
     count_tokens,
     extract_json,
+    ensure_run_reuse_cache,
     get_page_tokens,
     get_text_of_pdf_pages_with_labels,
     is_fatal_llm_model_error,
@@ -19,16 +21,58 @@ from pageindex.utils import (
     structure_to_list,
 )
 from app.services.storage_service import read_json_artifact
+from app.models.routing_asset_contract import (
+    ROUTING_ASSET_DEFERRED,
+    ROUTING_ASSET_PENDING,
+    ROUTING_ASSET_READY,
+    ROUTING_ASSET_SCHEMA_VERSION,
+    normalize_routing_index_payload,
+    routing_asset_readiness_defaults,
+)
 
 
 logger = logging.getLogger(__name__)
+
+ROUTING_BUILD_MODE_DISABLED = "disabled"
+ROUTING_BUILD_MODE_DRY_RUN = "dry_run"
+ROUTING_BUILD_MODE_ENABLED = "enabled"
+ROUTING_BUILD_MODES = {
+    ROUTING_BUILD_MODE_DISABLED,
+    ROUTING_BUILD_MODE_DRY_RUN,
+    ROUTING_BUILD_MODE_ENABLED,
+}
+
+ROUTING_SYNC_PARSE_JOB_STEPS = (
+    "parse_pdf_to_structure",
+    "write_document_structure",
+    "build_base_routing_nodes",
+    "compute_summary_coverage",
+    "run_disabled_or_dry_run_hook_stubs",
+    "write_routing_index",
+    "replace_document_routing_node_rows",
+)
+ROUTING_ASYNC_BACKFILL_STEPS = (
+    "route_doc_materialization",
+    "synthetic_query_generation",
+    "embedding_backfill",
+)
+
+
+@dataclass(frozen=True)
+class RoutingBuildOptions:
+    route_docs_mode: str = ROUTING_BUILD_MODE_DISABLED
+    synthetic_queries_mode: str = ROUTING_BUILD_MODE_DISABLED
+    embeddings_mode: str = ROUTING_BUILD_MODE_DISABLED
+
+    @classmethod
+    def disabled(cls) -> "RoutingBuildOptions":
+        return cls()
 
 
 def parse_pdf_to_structure(pdf_path: str, model: str) -> dict:
     opt = ConfigLoader().load(
         {
             "model": model,
-            "if_add_node_summary": "no",
             "if_add_doc_description": "no",
             "if_add_node_text": "no",
             "if_add_node_id": "yes",
@@ -37,13 +81,342 @@ def parse_pdf_to_structure(pdf_path: str, model: str) -> dict:
     return page_index_main(pdf_path, opt)
 
 
-def build_outline_prompt(structure: list[dict], question: str) -> str:
+def _normalize_routing_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _normalize_routing_build_mode(value: Any) -> str:
+    text = _normalize_routing_text(value)
+    if text is None:
+        return ROUTING_BUILD_MODE_DISABLED
+    normalized = text.lower().replace("-", "_")
+    if normalized in {"0", "false", "no", "off", "disable", "disabled"}:
+        return ROUTING_BUILD_MODE_DISABLED
+    if normalized in {"dryrun", "dry_run", "dry"}:
+        return ROUTING_BUILD_MODE_DRY_RUN
+    if normalized in {"1", "true", "yes", "on", "enable", "enabled", "persist", "materialize", "build"}:
+        return ROUTING_BUILD_MODE_ENABLED
+    if normalized in ROUTING_BUILD_MODES:
+        return normalized
+    logger.warning("Unknown routing build mode %r; using disabled", value)
+    return ROUTING_BUILD_MODE_DISABLED
+
+
+def routing_build_options_from_settings(settings_obj: Any) -> RoutingBuildOptions:
+    return normalize_routing_build_options(
+        RoutingBuildOptions(
+            route_docs_mode=getattr(settings_obj, "routing_route_docs_build_mode", None),
+            synthetic_queries_mode=getattr(settings_obj, "routing_synthetic_queries_build_mode", None),
+            embeddings_mode=getattr(settings_obj, "routing_embeddings_build_mode", None),
+        )
+    )
+
+
+def normalize_routing_build_options(build_options: RoutingBuildOptions | None = None) -> RoutingBuildOptions:
+    if build_options is None:
+        return RoutingBuildOptions.disabled()
+    return RoutingBuildOptions(
+        route_docs_mode=_normalize_routing_build_mode(build_options.route_docs_mode),
+        synthetic_queries_mode=_normalize_routing_build_mode(build_options.synthetic_queries_mode),
+        embeddings_mode=_normalize_routing_build_mode(build_options.embeddings_mode),
+    )
+
+
+def _routing_breadcrumb(document_label: str | None, ancestors: list[str]) -> str | None:
+    breadcrumb_parts: list[str] = []
+    normalized_label = _normalize_routing_text(document_label)
+    if normalized_label:
+        breadcrumb_parts.append(normalized_label)
+    breadcrumb_parts.extend(part for part in ancestors if part)
+    if not breadcrumb_parts:
+        return None
+    return " / ".join(breadcrumb_parts)
+
+
+def _collect_routing_index_nodes(
+    nodes: list[dict] | dict | None,
+    *,
+    document_label: str | None,
+    parent_node_id: str | None = None,
+    depth: int = 0,
+    ancestors: list[str] | None = None,
+    collected: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    if collected is None:
+        collected = []
+    if not nodes:
+        return collected
+
+    node_list = nodes if isinstance(nodes, list) else [nodes]
+    ancestor_titles = list(ancestors or [])
+    for node in node_list:
+        node_id = _normalize_routing_text(node.get("node_id"))
+        title = _normalize_routing_text(node.get("title"))
+        current_titles = ancestor_titles + ([title] if title else [])
+        collected.append(
+            {
+                "node_id": node_id,
+                "parent_node_id": parent_node_id,
+                "depth": depth,
+                "title": title,
+                "breadcrumb": _routing_breadcrumb(document_label, current_titles),
+                "page_start": node.get("start_index"),
+                "page_end": node.get("end_index"),
+                "route_summary": _normalize_routing_text(node.get("summary")),
+                "contrastive_summary": None,
+                "aliases_json": None,
+                "keywords_json": None,
+                "manual_profile_text": None,
+            }
+        )
+        child_nodes = node.get("nodes") or []
+        if child_nodes:
+            _collect_routing_index_nodes(
+                child_nodes,
+                document_label=document_label,
+                parent_node_id=node_id,
+                depth=depth + 1,
+                ancestors=current_titles,
+                collected=collected,
+            )
+    return collected
+
+
+def compute_summary_coverage(routing_nodes: list[dict[str, Any]]) -> dict[str, Any]:
+    total_nodes = len(routing_nodes)
+    missing_summary_node_ids: list[str | None] = []
+    summary_count = 0
+
+    for node in routing_nodes:
+        if _normalize_routing_text(node.get("route_summary")):
+            summary_count += 1
+            continue
+        missing_summary_node_ids.append(_normalize_routing_text(node.get("node_id")))
+
+    missing_summary_count = total_nodes - summary_count
+    if total_nodes == 0:
+        coverage_ratio = 1.0
+        coverage_state = "empty"
+    else:
+        coverage_ratio = round(summary_count / total_nodes, 4)
+        if missing_summary_count == 0:
+            coverage_state = "complete"
+        elif summary_count > 0:
+            coverage_state = "partial"
+        else:
+            coverage_state = "missing"
+
+    return {
+        "total_nodes": total_nodes,
+        "summary_count": summary_count,
+        "missing_summary_count": missing_summary_count,
+        "coverage_ratio": coverage_ratio,
+        "coverage_state": coverage_state,
+        "has_any_summary": summary_count > 0,
+        "all_nodes_have_summary": missing_summary_count == 0,
+        "missing_summary_node_ids": missing_summary_node_ids,
+    }
+
+
+def build_route_doc_for_routing_node(node: dict[str, Any]) -> dict[str, Any]:
+    node_id = _normalize_routing_text(node.get("node_id"))
+    title = _normalize_routing_text(node.get("title"))
+    breadcrumb = _normalize_routing_text(node.get("breadcrumb"))
+    summary = _normalize_routing_text(node.get("route_summary"))
+    page_start = node.get("page_start")
+    page_end = node.get("page_end")
+
+    text_parts = []
+    if breadcrumb:
+        text_parts.append(f"Path: {breadcrumb}")
+    elif title:
+        text_parts.append(f"Title: {title}")
+    if page_start is not None or page_end is not None:
+        text_parts.append(f"Pages: {page_start or ''}-{page_end or ''}".strip())
+    if summary:
+        text_parts.append(f"Summary: {summary}")
+
+    return {
+        "route_doc_id": f"{node_id}:route_doc" if node_id else None,
+        "node_id": node_id,
+        "title": title,
+        "breadcrumb": breadcrumb,
+        "page_start": page_start,
+        "page_end": page_end,
+        "text": "\n".join(text_parts) or None,
+        "summary_available": summary is not None,
+    }
+
+
+def build_route_docs_for_routing_nodes(routing_nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [build_route_doc_for_routing_node(node) for node in routing_nodes]
+
+
+def _disabled_hook_result(stage: str) -> dict[str, Any]:
+    return {
+        "stage": stage,
+        "mode": ROUTING_BUILD_MODE_DISABLED,
+        "status": "disabled",
+        "readiness": ROUTING_ASSET_DEFERRED,
+        "execution": "async_backfill",
+        "asset_count": 0,
+    }
+
+
+def _build_route_docs_hook_result(
+    routing_nodes: list[dict[str, Any]],
+    *,
+    mode: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]] | None]:
+    if mode == ROUTING_BUILD_MODE_DISABLED:
+        return _disabled_hook_result("route_docs"), None
+
+    route_docs = build_route_docs_for_routing_nodes(routing_nodes)
+    if mode == ROUTING_BUILD_MODE_DRY_RUN:
+        return (
+            {
+                "stage": "route_docs",
+                "mode": mode,
+                "status": "dry_run",
+                "readiness": ROUTING_ASSET_DEFERRED,
+                "execution": "sync_parse_job_dry_run",
+                "asset_count": 0,
+                "candidate_count": len(route_docs),
+                "sample_route_doc": route_docs[0] if route_docs else None,
+            },
+            None,
+        )
+
+    return (
+        {
+            "stage": "route_docs",
+            "mode": mode,
+            "status": "ready",
+            "readiness": ROUTING_ASSET_READY,
+            "execution": "sync_parse_job",
+            "asset_count": len(route_docs),
+        },
+        route_docs,
+    )
+
+
+def _build_stub_hook_result(stage: str, *, mode: str, node_count: int) -> dict[str, Any]:
+    if mode == ROUTING_BUILD_MODE_DISABLED:
+        return _disabled_hook_result(stage)
+    if mode == ROUTING_BUILD_MODE_DRY_RUN:
+        return {
+            "stage": stage,
+            "mode": mode,
+            "status": "dry_run",
+            "readiness": ROUTING_ASSET_DEFERRED,
+            "execution": "sync_parse_job_dry_run",
+            "asset_count": 0,
+            "candidate_count": 0,
+            "eligible_node_count": node_count,
+        }
+    return {
+        "stage": stage,
+        "mode": mode,
+        "status": "pending_backfill",
+        "readiness": ROUTING_ASSET_PENDING,
+        "execution": "async_backfill",
+        "asset_count": 0,
+        "eligible_node_count": node_count,
+    }
+
+
+def _routing_build_metadata(
+    routing_nodes: list[dict[str, Any]],
+    *,
+    build_options: RoutingBuildOptions,
+) -> tuple[dict[str, Any], dict[str, str], dict[str, Any]]:
+    summary_coverage = compute_summary_coverage(routing_nodes)
+    route_docs_result, route_docs = _build_route_docs_hook_result(
+        routing_nodes,
+        mode=build_options.route_docs_mode,
+    )
+    synthetic_queries_result = _build_stub_hook_result(
+        "synthetic_queries",
+        mode=build_options.synthetic_queries_mode,
+        node_count=len(routing_nodes),
+    )
+    embeddings_result = _build_stub_hook_result(
+        "embeddings",
+        mode=build_options.embeddings_mode,
+        node_count=len(routing_nodes),
+    )
+
+    readiness = routing_asset_readiness_defaults(base_nodes_state=ROUTING_ASSET_READY)
+    readiness["route_docs"] = route_docs_result["readiness"]
+    readiness["synthetic_queries"] = synthetic_queries_result["readiness"]
+    readiness["embeddings"] = embeddings_result["readiness"]
+
+    metadata = {
+        "schema_version": "routing_build_metadata_v1",
+        "summary_coverage": summary_coverage,
+        "hook_results": {
+            "route_docs": route_docs_result,
+            "synthetic_queries": synthetic_queries_result,
+            "embeddings": embeddings_result,
+        },
+        "execution_plan": {
+            "sync_parse_job_steps": list(ROUTING_SYNC_PARSE_JOB_STEPS),
+            "async_backfill_steps": list(ROUTING_ASYNC_BACKFILL_STEPS),
+        },
+    }
+    extra_payload: dict[str, Any] = {}
+    if route_docs is not None:
+        extra_payload["route_docs"] = route_docs
+    return metadata, readiness, extra_payload
+
+
+def build_routing_index_payload(
+    structure: list[dict] | dict,
+    *,
+    document_label: str,
+    document_id: str,
+    version_id: str,
+    source_doc_name: str | None = None,
+    routing_index_version: str = ROUTING_ASSET_SCHEMA_VERSION,
+    build_options: RoutingBuildOptions | None = None,
+) -> dict[str, Any]:
+    effective_build_options = normalize_routing_build_options(build_options)
+    normalized_label = _normalize_routing_text(document_label) or _normalize_routing_text(source_doc_name)
+    routing_nodes = _collect_routing_index_nodes(
+        structure,
+        document_label=normalized_label,
+    )
+    build_metadata, readiness, extra_payload = _routing_build_metadata(
+        routing_nodes,
+        build_options=effective_build_options,
+    )
+    payload = {
+        "schema_version": routing_index_version or ROUTING_ASSET_SCHEMA_VERSION,
+        "routing_index_version": routing_index_version or ROUTING_ASSET_SCHEMA_VERSION,
+        "document_label": normalized_label,
+        "source_doc_name": _normalize_routing_text(source_doc_name),
+        "document_id": document_id,
+        "version_id": version_id,
+        "node_count": len(routing_nodes),
+        "readiness": readiness,
+        "build_metadata": build_metadata,
+        "nodes": routing_nodes,
+    }
+    payload.update(extra_payload)
+    return normalize_routing_index_payload(payload)
+
+
+def build_outline_prompt(structure: list[dict], question: str, *, top_k: int | None = None) -> str:
     lines = []
     for node in structure_to_list(structure):
         lines.append(
             f"{node.get('node_id', '')} | {node.get('start_index')}-{node.get('end_index')} | {node.get('title', '')}"
         )
     outline_text = "\n".join(lines)
+    selection_limit = max(1, int(top_k or 5))
     return f"""
 You are selecting the most relevant sections of a PDF outline for answering a user question.
 
@@ -60,7 +433,7 @@ Return JSON only in this format:
 }}
 
 Rules:
-- Select 1 to 5 node_ids.
+- Select between 1 and {selection_limit} node_ids.
 - Prefer the most specific nodes over broad parent nodes.
 - Only use node_ids that appear in the outline list.
 """
@@ -161,14 +534,21 @@ def choose_relevant_nodes(
     diagnostics: dict | None = None,
 ) -> list[dict]:
     flat_nodes = {node["node_id"]: node for node in structure_to_list(structure) if node.get("node_id")}
+    if diagnostics is not None:
+        diagnostics["requested_top_k"] = top_k
+        diagnostics["available_node_count"] = len(flat_nodes)
     if selection_mode == "lexical_fallback":
         if diagnostics is not None:
             diagnostics["outline_selection_strategy"] = "lexical_fallback"
-        return choose_relevant_nodes_lexical(structure, question, top_k)
+        selected = choose_relevant_nodes_lexical(structure, question, top_k)
+        if diagnostics is not None:
+            diagnostics["selected_count"] = len(selected)
+            diagnostics["selected_node_ids"] = [node.get("node_id") for node in selected if node.get("node_id")]
+        return selected
     try:
         response = llm_completion(
             model=model,
-            prompt=build_outline_prompt(structure, question),
+            prompt=build_outline_prompt(structure, question, top_k=top_k),
             raise_on_error=True,
             request_options=request_options,
             trace_hook=trace_hook,
@@ -181,7 +561,11 @@ def choose_relevant_nodes(
         _record_diagnostic(diagnostics, "大纲选段模型调用失败，已自动回退到关键词选段。")
         if diagnostics is not None:
             diagnostics["outline_selection_strategy"] = "lexical_fallback_after_llm_error"
-        return choose_relevant_nodes_lexical(structure, question, top_k)
+        selected = choose_relevant_nodes_lexical(structure, question, top_k)
+        if diagnostics is not None:
+            diagnostics["selected_count"] = len(selected)
+            diagnostics["selected_node_ids"] = [node.get("node_id") for node in selected if node.get("node_id")]
+        return selected
     payload, repair_meta = extract_json_with_repair(
         raw_response=response,
         model=model,
@@ -196,6 +580,9 @@ def choose_relevant_nodes(
         _record_diagnostic(diagnostics, "大纲选段返回的 JSON 不规范，系统已自动修复后继续运行。")
     elif repair_meta.get("repair_applied"):
         _record_diagnostic(diagnostics, "大纲选段返回的 JSON 无法修复，系统已自动回退到关键词选段。")
+    if diagnostics is not None:
+        diagnostics["json_repair_applied"] = bool(repair_meta.get("repair_applied"))
+        diagnostics["json_repair_succeeded"] = bool(repair_meta.get("repair_succeeded"))
     node_ids = payload.get("node_ids", []) if isinstance(payload, dict) else []
     selected = [flat_nodes[node_id] for node_id in node_ids if node_id in flat_nodes][:top_k]
 
@@ -210,6 +597,9 @@ def choose_relevant_nodes(
     if not selected:
         selected = list(flat_nodes.values())[:top_k]
 
+    if diagnostics is not None:
+        diagnostics["selected_count"] = len(selected)
+        diagnostics["selected_node_ids"] = [node.get("node_id") for node in selected if node.get("node_id")]
     return selected
 
 
@@ -246,6 +636,50 @@ def retrieve_candidate_nodes_for_manual(
         }
         for node in selected
     ]
+
+
+def snapshot_outline_diagnostics(
+    manual: dict[str, Any],
+    diagnostics: dict[str, Any] | None,
+    *,
+    candidate_count: int,
+) -> dict[str, Any]:
+    warnings: list[str] = []
+    if diagnostics is not None:
+        for warning in diagnostics.get("warnings") or []:
+            warning_text = str(warning).strip()
+            if warning_text and warning_text not in warnings:
+                warnings.append(warning_text)
+    return {
+        "document_id": manual.get("document_id"),
+        "version_id": manual.get("version_id"),
+        "document_label": manual.get("document_label"),
+        "version_label": manual.get("version_label"),
+        "candidate_count": candidate_count,
+        "requested_top_k": diagnostics.get("requested_top_k") if diagnostics else None,
+        "available_node_count": diagnostics.get("available_node_count") if diagnostics else None,
+        "selected_count": diagnostics.get("selected_count") if diagnostics else None,
+        "selected_node_ids": list(diagnostics.get("selected_node_ids") or []) if diagnostics else [],
+        "selection_strategy": diagnostics.get("outline_selection_strategy") if diagnostics else None,
+        "json_repair_applied": bool(diagnostics.get("json_repair_applied")) if diagnostics else False,
+        "json_repair_succeeded": bool(diagnostics.get("json_repair_succeeded")) if diagnostics else False,
+        "warnings": warnings,
+    }
+
+
+def merge_candidates_round_robin(per_manual_candidates: list[list[dict]], top_k: int) -> list[dict]:
+    if top_k <= 0:
+        return []
+    merged: list[dict] = []
+    max_candidate_count = max((len(candidates) for candidates in per_manual_candidates), default=0)
+    for offset in range(max_candidate_count):
+        for candidates in per_manual_candidates:
+            if offset >= len(candidates):
+                continue
+            merged.append(candidates[offset])
+            if len(merged) >= top_k:
+                return merged
+    return merged
 
 
 async def retrieve_candidates_for_manual_async(
@@ -579,10 +1013,10 @@ def build_answer_context(
         page_count = int(end_index) - int(start_index) + 1
         if max_context_pages is not None and total_pages + page_count > max_context_pages:
             break
-        section_text = get_text_of_pdf_pages_with_labels(pdf_pages, start_index, end_index)
         section_tokens = sum(pdf_pages[page_num][1] for page_num in range(start_index - 1, end_index))
-        if max_context_tokens is not None and chunks and total_tokens + section_tokens > max_context_tokens:
-            break
+        if max_context_tokens is not None and total_tokens + section_tokens > max_context_tokens:
+            continue
+        section_text = get_text_of_pdf_pages_with_labels(pdf_pages, start_index, end_index)
         chunks.append(f"## Section: {node.get('title')} (pages {start_index}-{end_index})\n{section_text}")
         total_pages += page_count
         total_tokens += section_tokens
@@ -725,6 +1159,8 @@ async def build_context_from_citations_async(
     max_context_pages: int | None,
     max_context_tokens: int | None,
 ) -> list[str]:
+    ensure_run_reuse_cache()
+
     async def build_one(citation: dict[str, Any]) -> str:
         return await asyncio.to_thread(
             _build_context_block_for_citation,
@@ -931,6 +1367,8 @@ async def answer_question_against_structure_async(
     history_messages: list[dict] | None = None,
     trace_hook=None,
 ) -> tuple[str, list[dict], dict, dict]:
+    ensure_run_reuse_cache()
+
     return await asyncio.to_thread(
         answer_question_against_structure,
         pdf_path=pdf_path,
@@ -948,5 +1386,6 @@ async def answer_question_against_structure_async(
 
 
 def load_structure_file(path: str) -> list[dict]:
+    ensure_run_reuse_cache()
     data = read_json_artifact(path)
     return data["structure"] if isinstance(data, dict) and "structure" in data else data

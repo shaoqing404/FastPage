@@ -4,6 +4,8 @@ from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
+from .routing_asset_contract import ROUTING_ASSET_SCHEMA_VERSION, routing_asset_readiness_for_version
+from .document_routing_node import DocumentRoutingNode  # noqa: F401
 
 
 class Document(Base):
@@ -35,6 +37,28 @@ class DocumentVersion(Base):
     parse_status: Mapped[str] = mapped_column(String(32), default="uploaded", nullable=False, index=True)
     parsed_structure_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     parse_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Routing asset lifecycle is tracked separately from parse/query eligibility.
+    routing_index_status: Mapped[str] = mapped_column(String(32), default="uploaded", nullable=False, index=True)
+    routing_index_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    routing_index_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Contract/schema version for routing_index.json. Missing legacy assets should be treated as v1.
+    routing_index_version: Mapped[str] = mapped_column(String(32), default="v1", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     document = relationship("Document", back_populates="versions", foreign_keys=[document_id])
+
+    @property
+    def routing_asset_schema_version(self) -> str:
+        version = str(self.routing_index_version or "").strip()
+        return version or ROUTING_ASSET_SCHEMA_VERSION
+
+    @property
+    def routing_asset_is_ready(self) -> bool:
+        return self.routing_index_status == "index_ready" and bool(self.routing_index_path)
+
+    @property
+    def routing_asset_readiness(self) -> dict[str, str]:
+        return routing_asset_readiness_for_version(
+            routing_index_status=self.routing_index_status,
+            routing_index_path=self.routing_index_path,
+        )

@@ -4,7 +4,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-RunKind = Literal["chat", "compliance"]
+RunKind = Literal["chat", "compliance", "parse_job"]
 
 
 class RunObservationEventOut(BaseModel):

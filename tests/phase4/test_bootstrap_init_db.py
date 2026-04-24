@@ -1,15 +1,18 @@
 import os
+import sys
 import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from unittest.mock import MagicMock
 
-from sqlalchemy import create_engine, func, select, text
+from sqlalchemy import create_engine, func, inspect, select, text
 from sqlalchemy.orm import Session
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+sys.modules.setdefault("jwt", MagicMock())
 
 from app.core import bootstrap
 from app.core.auth import resolve_auth_context
@@ -18,7 +21,7 @@ from app.core.db import Base
 from app.models import ModelProvider, Tenant, TenantMembership, User, Workspace, WorkspaceMembership
 
 
-CURRENT_MIGRATION_HEAD = "20260416_0010"
+CURRENT_MIGRATION_HEAD = "20260423_0013"
 
 
 def _engine_for_url(database_url: str):
@@ -102,6 +105,7 @@ class TestBootstrapInitDb(unittest.TestCase):
                 self.assertEqual(tenant_membership.status, "active")
                 self.assertEqual(workspace_membership.role, "founder")
                 self.assertEqual(workspace_membership.status, "active")
+                self.assertTrue(inspect(engine).has_table("document_routing_nodes"))
 
                 context = resolve_auth_context(db, user)
                 self.assertEqual(context.tenant_id, "tenant_default")
@@ -162,6 +166,7 @@ class TestBootstrapInitDb(unittest.TestCase):
                 assert workspace is not None
                 assert tenant_membership is not None
                 assert workspace_membership is not None
+                self.assertTrue(inspect(engine).has_table("document_routing_nodes"))
 
                 context = resolve_auth_context(db, user)
                 self.assertEqual(context.workspace.id, workspace.id)
@@ -237,6 +242,7 @@ class TestBootstrapInitDb(unittest.TestCase):
                 assert workspace is not None
                 assert system_provider is not None
                 assert custom_provider is not None
+                self.assertTrue(inspect(engine).has_table("document_routing_nodes"))
 
                 self.assertTrue(system_provider.managed_by_system)
                 self.assertIsNone(system_provider.workspace_id)

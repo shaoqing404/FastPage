@@ -18,18 +18,22 @@ Current active entries:
 
 - [`phase4_access_and_admin_control_plane/README.md`](phase4_access_and_admin_control_plane/README.md)
 - [`phase4_access_and_admin_control_plane/phase4_closeout_status.md`](phase4_access_and_admin_control_plane/phase4_closeout_status.md)
+- [`phase4_access_and_admin_control_plane/phase4_10_routing_speed_and_structure_foundation.md`](phase4_access_and_admin_control_plane/phase4_10_routing_speed_and_structure_foundation.md)
+- [`phase4_access_and_admin_control_plane/phase4_10_execution_prompts.md`](phase4_access_and_admin_control_plane/phase4_10_execution_prompts.md)
 - [`phase5_maintenance_and_audit_governance/README.md`](phase5_maintenance_and_audit_governance/README.md)
 
 Historical phase0-phase3 and shared planning docs remain available in git history and can be restored if the closeout work needs them again.
 
 ## Current Phase Gate
 
-As of `2026-04-21`, the parent-stage recommendation is:
+As of `2026-04-23`, the parent-stage recommendation is:
 
 - `Phase 4.5`: `Conditional GO`
 - `Phase 4.6`: `GO`
-- `Phase 4.7`: historical `GO`, but post-`4.8` runtime rerun still pending
-- `Phase 4.8`: `NO-GO`
+- `Phase 4.7`: `GO` after the current-tree runtime rerun passed and was finalized as `results/phase4_7_backend_validation_passed_20260423T100430Z.json`
+- `Phase 4.8`: `GO`
+- `Phase 4.9`: `Conditional GO`
+- `Phase 4.10`: `Conditional GO`
 - `Phase 4`: `NO-GO`
 - `Phase 5`: `NO-GO`
 

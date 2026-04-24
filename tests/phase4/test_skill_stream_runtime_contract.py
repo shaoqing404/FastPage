@@ -21,7 +21,7 @@ sys.modules.setdefault("yaml", MagicMock())
 sys.modules.setdefault("redis", MagicMock())
 
 from app.core.principal import Principal
-from app.services.chat_service import stream_skill_run_events
+from app.services.chat_service import _build_execution_context, stream_skill_run_events
 
 
 CHAT_ROUTER_MODULE_NAME = "phase48_chat_router_under_test"
@@ -121,6 +121,50 @@ class TestSkillStreamRuntimeContract(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("event: error", body)
         self.assertIn("boom-before-run", body)
+
+    def test_build_execution_context_preserves_retrieval_diagnostics(self):
+        execution_context = _build_execution_context(
+            provider_config={
+                "provider_id": "provider_1",
+                "name": "Provider",
+                "provider_type": "openai",
+                "scope": "workspace",
+                "resolution_source": "workspace",
+            },
+            resolved_model="openai/test-model",
+            conversation_config={},
+            history_info={
+                "used": False,
+                "history_messages_used": 0,
+                "history_turns_used": 0,
+                "history_token_estimate": 0,
+            },
+            retrieval_info={
+                "diagnostics": {
+                    "outline": {
+                        "manuals": [
+                            {
+                                "document_id": "doc_1",
+                                "selected_node_ids": ["0001"],
+                            }
+                        ],
+                    },
+                    "rerank": {
+                        "meta": {"applied": False, "mode": "round_robin_manual_merge"},
+                        "repair": {},
+                    },
+                },
+                "outline_selection_strategy": "outline_llm",
+                "documents_considered": 1,
+            },
+            generation_info={"temperature": 0},
+        )
+
+        self.assertEqual(
+            execution_context["retrieval"]["diagnostics"]["outline"]["manuals"][0]["selected_node_ids"],
+            ["0001"],
+        )
+        self.assertFalse(execution_context["retrieval"]["diagnostics"]["rerank"]["meta"]["applied"])
 
 
 if __name__ == "__main__":

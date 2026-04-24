@@ -9,7 +9,7 @@ from app.api.deps import get_current_principal
 from app.core.db import get_db
 from app.core.principal import Principal
 from app.schemas.runtime_observations import RunObservationSnapshotOut
-from app.services.runtime_observation_service import get_runtime_observation_snapshot
+from app.services.runtime_observation_service import get_routing_asset_debug_snapshot, get_runtime_observation_snapshot
 from app.services.task_queue_service import open_runtime_observation_subscription
 
 
@@ -18,6 +18,21 @@ router = APIRouter(prefix="/api/v1/runtime-observations", tags=["runtime-observa
 
 def _sse(event: str, data) -> str:
     return f"event: {event}\ndata: {json.dumps(jsonable_encoder(data), ensure_ascii=False)}\n\n"
+
+
+@router.get("/debug/routing-assets")
+def get_routing_asset_debug_snapshot_endpoint(
+    backfill: bool = False,
+    sample_limit: int = 20,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_current_principal),
+):
+    return get_routing_asset_debug_snapshot(
+        db,
+        principal,
+        backfill=backfill,
+        sample_limit=sample_limit,
+    )
 
 
 @router.get("/{run_kind}/{run_id}", response_model=RunObservationSnapshotOut)

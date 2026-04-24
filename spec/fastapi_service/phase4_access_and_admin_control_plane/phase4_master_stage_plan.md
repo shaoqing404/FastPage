@@ -11,6 +11,8 @@ The reason is simple:
 - `Phase 4.6` must make tenant/workspace/user access portraits explicit
 - `Phase 4.7` must harden and standardize closeout before `Phase 5`
 - `Phase 4.8` must validate real operator usage and absorb narrow frontend/supporting fixes before `Phase 5`
+- `Phase 4.9` must productize the shared multi-manual runtime and observability surface
+- `Phase 4.10` must harden routing speed and indexing structure without yet reopening evidence-layer or product strategy
 
 This avoids mixing:
 
@@ -280,12 +282,12 @@ Current `2026-04-21` implementation state:
   - KB upload drag/drop is now real rather than promised-only
   - clipboard copy now uses a shared fallback-aware helper
 - streaming runtime root-cause remains intentionally deferred
-- repository-wide frontend `build` is still failing on the current tree
-- full post-`4.8` real-runtime closeout rerun is still pending
+- repository-wide frontend `build` now passes on the current tree
+- follow-on runtime closeout work is now carried by `Phase 4.9` and `Phase 4.10`
 
-Current stage gate (`2026-04-21`):
+Current stage gate (`2026-04-23`):
 
-- `Phase 4.8`: `NO-GO`
+- `Phase 4.8`: `GO`
 - `Phase 4`: `NO-GO`
 
 Allowed work:
@@ -326,8 +328,56 @@ Acceptance direction:
 
 Current blocking gate for that acceptance direction:
 
-- fix the remaining frontend build errors
-- rerun the `Phase 4.7` real-runtime closeout chain on the current tree
+- rerun the broader `Phase 4.7` / `Phase 4.9` / `Phase 4.10` real-runtime closeout chain on the current tree
+
+### 4.6 `Phase 4.9`
+
+Theme:
+
+- multi-manual runtime and observability closeout
+
+Main goals:
+
+- unify worker/runtime behavior across `skills chat`, `skills run`, and `compliance`
+- make multi-manual retrieval a real runtime capability instead of an accidental single-manual shortcut
+- make rerank and runtime observations first-class runtime surfaces
+
+Current stage note (`2026-04-22`):
+
+- runtime foundation is materially landed
+- final rerun-based hard closeout still remains desirable
+- canonical closeout note now lives in:
+  - `phase4_9_multi_manual_runtime_and_observability_closeout.md`
+
+### 4.7 `Phase 4.10`
+
+Theme:
+
+- routing speed and structure foundation
+
+Main goals:
+
+- fix confirmed retrieval/context hot-path correctness bugs
+- remove narrow same-run structure/PDF reuse waste
+- add persisted routing-index foundation for later router work
+- keep SQLite + MySQL compatibility explicit
+
+Current stage note (`2026-04-23`):
+
+- approved `code strategy 1` and `code strategy 2` work are now materially landed in code
+- targeted backend coverage now exists for:
+  - retrieval correctness / observability hardening
+  - same-run structure/PDF reuse
+  - routing-index schema/bootstrap
+  - parse success/failure and same-version reparse rebuild
+- product strategy and live router redesign remain deferred
+- canonical phase spec now lives in:
+  - `phase4_10_routing_speed_and_structure_foundation.md`
+- execution prompts for implementation agents now live in:
+  - `phase4_10_execution_prompts.md`
+- current gate recommendation for the phase itself is:
+  - `Conditional GO`
+- remaining blocker is the broader `Phase 4.7` / `Phase 4.9` / `Phase 4.10` real-runtime rerun on the current tree
 
 ## 5. Phase 4.x Closeout Test Chain
 

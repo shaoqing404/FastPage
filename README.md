@@ -78,6 +78,19 @@ SYSTEM_RERANK_PROVIDER_TYPE=openai_compatible
 SYSTEM_RERANK_BASE_URL=https://api.your-rerank-provider.com/v1
 SYSTEM_RERANK_API_KEY=sk-your-rerank-key
 SYSTEM_RERANK_MODEL=bge-reranker-v2-m3
+
+# Embedding Configuration (deferred, disabled by default)
+SYSTEM_EMBEDDING_ENABLED=false
+SYSTEM_EMBEDDING_PROVIDER_TYPE=openai_compatible
+SYSTEM_EMBEDDING_BASE_URL=https://api.your-embedding-provider.com/v1
+SYSTEM_EMBEDDING_API_KEY=sk-your-embedding-key
+SYSTEM_EMBEDDING_MODEL=text-embedding-3-large
+
+# Routing asset build hooks (deferred, disabled by default)
+# Canonical values: disabled, dry_run, enabled
+ROUTING_ROUTE_DOCS_BUILD_MODE=disabled
+ROUTING_SYNTHETIC_QUERIES_BUILD_MODE=disabled
+ROUTING_EMBEDDINGS_BUILD_MODE=disabled
 ```
 
 #### 2. Install Host Dependencies (uv)
@@ -174,6 +187,14 @@ LLM/provider:
 - `LLM_BASE_URL`
 - `LLM_API_KEY`
 - `PROVIDER_URL_ALLOW_PRIVATE_NETS`
+- `SYSTEM_EMBEDDING_ENABLED`
+- `SYSTEM_EMBEDDING_BASE_URL`
+- `SYSTEM_EMBEDDING_API_KEY`
+- `SYSTEM_EMBEDDING_MODEL`
+- `SYSTEM_EMBEDDING_PROVIDER_TYPE`
+- `ROUTING_ROUTE_DOCS_BUILD_MODE` with canonical values `disabled`, `dry_run`, or `enabled`
+- `ROUTING_SYNTHETIC_QUERIES_BUILD_MODE` with canonical values `disabled`, `dry_run`, or `enabled`
+- `ROUTING_EMBEDDINGS_BUILD_MODE` with canonical values `disabled`, `dry_run`, or `enabled`
 
 Chat runtime:
 

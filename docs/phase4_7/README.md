@@ -36,3 +36,9 @@
 - 这里只标准化项目自有的 MySQL 表、MinIO 前缀、repo 本地运行数据。
 - 不授权清理共享基础设施中的未知数据。
 - 不扩展到 `app/api/routers/*`、产品流、前端或 `Phase 5`。
+
+当前证据：
+
+- 当前树通过的 closeout 证据已落盘到 `results/phase4_7_backend_validation_passed_20260423T100430Z.json`
+- 本次运行完成了 cleanup，且没有触发 password reset 流
+- 如果仓库状态变化，需要先重新生成 `results/phase4_7_backend_validation_latest.json`，再用 `validation_artifacts.py finalize` 归档

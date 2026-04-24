@@ -10,10 +10,9 @@ Use this skill only for `/Users/shaoqing/workspace/PageIndex`.
 ## Workflow
 
 1. Read the current hardening assets:
-   - `/Users/shaoqing/workspace/PageIndex/spec/fastapi_service/phase4_access_and_admin_control_plane/phase4_7_reset_runbook.md`
-   - `/Users/shaoqing/workspace/PageIndex/spec/fastapi_service/phase4_access_and_admin_control_plane/phase4_7_runtime_validation_checklist.md`
-   - `/Users/shaoqing/workspace/PageIndex/spec/fastapi_service/phase4_access_and_admin_control_plane/phase4_7_verification_artifact_retention_rule.md`
+   - `/Users/shaoqing/workspace/PageIndex/docs/phase4_7/README.md`
    - `/Users/shaoqing/workspace/PageIndex/spec/fastapi_service/phase4_access_and_admin_control_plane/phase4_7_closeout_report.md`
+   Use `/Users/shaoqing/workspace/PageIndex/docs/phase4_7/README.md` as the canonical operator-doc entrypoint for reset, rebuild, runtime validation, and artifact handling. Do not treat the older `spec/.../phase4_7_*.md` operator notes as the active runbook source.
 2. Run the local contract baseline before live validation:
    - `cd /Users/shaoqing/workspace/PageIndex`
    - `uv run python -m unittest discover -s tests/phase4 -p 'test_*.py'`

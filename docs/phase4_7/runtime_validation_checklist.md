@@ -41,6 +41,11 @@ uv run python spec/fastapi_service/phase4_access_and_admin_control_plane/phase4_
   --output results/phase4_7_backend_validation_latest.json
 ```
 
+说明：
+
+- 前两个命令是当前树上相对稳定的门禁
+- 最后一个 blanket `discover` 目前已知存在顺序敏感性；不要把它当作单独的通过条件
+
 ## 2. 覆盖矩阵
 
 本地聚合验证 `tests.phase4.test_phase47_api_verification` 必须显式证明：
@@ -90,6 +95,12 @@ uv run python spec/fastapi_service/phase4_access_and_admin_control_plane/phase4_
 - portrait 结果含 explainability payload
 - workspace isolation 负路径证据明确，而不是只看 happy path
 - 若触发 reset-password，只记录操作事实，不落明文密码
+
+当前树证据：
+
+- `results/phase4_7_backend_validation_passed_20260423T100430Z.json`
+- cleanup 已完成
+- `password_reset_flow.performed` 为 `false`
 
 ## 5. 仍然属于运行面的问题
 

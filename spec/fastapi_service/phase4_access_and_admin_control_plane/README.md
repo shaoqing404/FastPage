@@ -21,6 +21,8 @@ This parent stage should be managed as:
 - `Phase 4.6 Tenant Directory and Access Portrait`
 - `Phase 4.7 Pre-Phase5 Release Hardening`
 - `Phase 4.8 Test-Led Experience Stabilization`
+- `Phase 4.9 Multi-Manual Runtime And Observability Closeout`
+- `Phase 4.10 Routing Speed And Structure Foundation`
 
 `Phase 5` remains reserved for:
 
@@ -76,15 +78,19 @@ The current codebase now materially includes:
 
 - `Phase 4.5` operational control-plane closure
 - `Phase 4.6` tenant/workspace/user portrait surfaces
-- `Phase 4.7` reset / hardening / validation assets
+- `Phase 4.7` reset / hardening / validation assets and refreshed current-tree runtime evidence
 - `Phase 4.8` provider/workspace uplift and follow-up frontend usability fixes
+- `Phase 4.9` multi-manual runtime and observability closure
+- `Phase 4.10` routing speed and structure foundation
 
-Current parent-stage blocker summary (`2026-04-21`):
+Current parent-stage blocker summary (`2026-04-23`):
 
 - the phase4 spec/validation surface has been restored and re-aligned to the current chat-session contract
-- local `Phase 4.7` harness contract checks pass again
-- full frontend `build` still fails on the current tree
-- the post-`4.8` real-runtime closeout rerun is still pending
+- local `Phase 4.7` harness contract checks pass again, and the current-tree runtime validation artifact is finalized
+- the current frontend tree now passes `build`
+- `Phase 4.9` runtime foundation is materially landed, but still awaiting final rerun-based hard closeout
+- `Phase 4.10` routing speed / structure foundation is now materially landed at the code-and-targeted-test level
+- the remaining parent-stage blocker is the broader current-tree rerun / artifact refresh for `4.9`, plus validation-suite stabilization, not an open `4.10` implementation batch
 
 That means:
 
@@ -98,6 +104,9 @@ That means:
 - [phase4_master_stage_plan.md](phase4_master_stage_plan.md)
 - [phase4_7_closeout_report.md](phase4_7_closeout_report.md)
 - [phase4_8_test_led_experience_stabilization.md](phase4_8_test_led_experience_stabilization.md)
+- [phase4_9_multi_manual_runtime_and_observability_closeout.md](phase4_9_multi_manual_runtime_and_observability_closeout.md)
+- [phase4_10_routing_speed_and_structure_foundation.md](phase4_10_routing_speed_and_structure_foundation.md)
+- [phase4_10_execution_prompts.md](phase4_10_execution_prompts.md)
 - [phase4_closeout_status.md](phase4_closeout_status.md)
 
 Historical design notes and earlier batch docs remain available in git history and can be restored if the closeout work needs them again.
@@ -118,9 +127,11 @@ The `spec/` tree remains the parent-stage design and gate record.
 
 1. Keep `Phase 4.5` at `Conditional GO`.
 2. Keep `Phase 4.6` at `GO`.
-3. Rerun `Phase 4.7` hardening validation on the current post-`4.8` tree.
-4. Clear remaining `Phase 4.8` frontend build blockers and finish closeout revalidation.
-5. Only then open `Phase 5`.
+3. Treat `Phase 4.7` as already `GO` on the current tree.
+4. Keep `Phase 4.9` at `Conditional GO` until its final rerun artifact is refreshed.
+5. Treat `Phase 4.10` as `Conditional GO` pending the broader parent-stage rerun.
+6. Rerun the `Phase 4.9` / `Phase 4.10` real-runtime validation chain on the current tree.
+7. Only then open `Phase 5`.
 
 ## Parent-stage Closeout Rule
 

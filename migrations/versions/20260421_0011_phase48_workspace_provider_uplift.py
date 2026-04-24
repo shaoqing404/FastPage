@@ -33,13 +33,17 @@ def upgrade() -> None:
 
         foreign_keys = {foreign_key["constrained_columns"][0] for foreign_key in inspector.get_foreign_keys("model_providers") if foreign_key["constrained_columns"]}
         if "source_provider_id" not in foreign_keys:
-            op.create_foreign_key(
-                "fk_model_providers_source_provider_id_model_providers",
-                "model_providers",
-                "model_providers",
-                ["source_provider_id"],
-                ["id"],
-            )
+            # SQLite cannot add a self-referential FK with ALTER TABLE, so keep the
+            # migration portable by only creating the constraint on databases that
+            # support it in-place.
+            if bind.dialect.name != "sqlite":
+                op.create_foreign_key(
+                    "fk_model_providers_source_provider_id_model_providers",
+                    "model_providers",
+                    "model_providers",
+                    ["source_provider_id"],
+                    ["id"],
+                )
 
         op.execute(
             sa.text(
@@ -52,7 +56,8 @@ def upgrade() -> None:
                 """
             )
         )
-        op.alter_column("model_providers", "share_mode", server_default=None)
+        if bind.dialect.name != "sqlite":
+            op.alter_column("model_providers", "share_mode", server_default=None)
 
     inspector = sa.inspect(bind)
     if not inspector.has_table("provider_workspace_shares"):
@@ -88,7 +93,8 @@ def downgrade() -> None:
     if inspector.has_table("model_providers"):
         foreign_key_names = {foreign_key["name"] for foreign_key in inspector.get_foreign_keys("model_providers")}
         if "fk_model_providers_source_provider_id_model_providers" in foreign_key_names:
-            op.drop_constraint("fk_model_providers_source_provider_id_model_providers", "model_providers", type_="foreignkey")
+            if bind.dialect.name != "sqlite":
+                op.drop_constraint("fk_model_providers_source_provider_id_model_providers", "model_providers", type_="foreignkey")
 
         index_names = {index["name"] for index in inspector.get_indexes("model_providers")}
         if "ix_model_providers_source_provider_id" in index_names:

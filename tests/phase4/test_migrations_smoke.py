@@ -1,17 +1,22 @@
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import sqlalchemy as sa
 
 from scripts.phase47.runtime_reset import REPO_OWNED_SCHEMA_TABLES
 
+sys.modules.setdefault("dotenv", MagicMock())
+
 
 PHASE3_COMPLIANCE_REVISION = "20260407_0005"
 PHASE4_BACKFILL_REVISION = "20260410_0007"
 PHASE45_INVARIANT_REVISION = "20260415_0008"
-CURRENT_MIGRATION_HEAD = "20260422_0012"
+CURRENT_MIGRATION_HEAD = "20260423_0013"
+EXPECTED_SCHEMA_TABLES = set(REPO_OWNED_SCHEMA_TABLES)
 
 
 class TestPhase4MigrationsSmoke(unittest.TestCase):
@@ -67,15 +72,46 @@ class TestPhase4MigrationsSmoke(unittest.TestCase):
         engine = sa.create_engine(self.db_url, future=True)
         self.addCleanup(engine.dispose)
         inspector = sa.inspect(engine)
-        self.assertEqual(set(inspector.get_table_names()), set(REPO_OWNED_SCHEMA_TABLES))
+        self.assertEqual(set(inspector.get_table_names()), EXPECTED_SCHEMA_TABLES)
         self.assertIn("active_founder_workspace_id", {col["name"] for col in inspector.get_columns("workspace_memberships")})
         self.assertIn("pending_normalized_email", {col["name"] for col in inspector.get_columns("workspace_invites")})
         self.assertIn("must_change_password", {col["name"] for col in inspector.get_columns("users")})
         self.assertIn("uploaded_via_kb_id", {col["name"] for col in inspector.get_columns("documents")})
+        for column_name in (
+            "routing_index_status",
+            "routing_index_path",
+            "routing_index_error",
+            "routing_index_version",
+        ):
+            self.assertIn(column_name, {col["name"] for col in inspector.get_columns("document_versions")})
+        for column_name in (
+            "document_id",
+            "version_id",
+            "node_id",
+            "parent_node_id",
+            "depth",
+            "title",
+            "breadcrumb",
+            "page_start",
+            "page_end",
+            "route_summary",
+            "contrastive_summary",
+            "aliases_json",
+            "keywords_json",
+            "manual_profile_text",
+            "created_at",
+            "updated_at",
+        ):
+            self.assertIn(column_name, {col["name"] for col in inspector.get_columns("document_routing_nodes")})
         self.assertTrue(any(index["name"] == "uq_workspace_memberships_active_founder_workspace_id" for index in inspector.get_indexes("workspace_memberships")))
         self.assertTrue(any(index["name"] == "uq_workspace_invites_workspace_pending_normalized_email" for index in inspector.get_indexes("workspace_invites")))
         self.assertTrue(any(index["name"] == "ix_users_email" and index.get("unique", False) for index in inspector.get_indexes("users")))
         self.assertTrue(any(index["name"] == "ix_documents_uploaded_via_kb_id" for index in inspector.get_indexes("documents")))
+        self.assertTrue(any(index["name"] == "ix_document_versions_routing_index_status" for index in inspector.get_indexes("document_versions")))
+        self.assertTrue(any(constraint["name"] == "uq_document_routing_nodes_version_node" for constraint in inspector.get_unique_constraints("document_routing_nodes")))
+        self.assertTrue(any(index["name"] == "ix_document_routing_nodes_document_version" for index in inspector.get_indexes("document_routing_nodes")))
+        self.assertTrue(any(index["name"] == "ix_document_routing_nodes_version_parent_node" for index in inspector.get_indexes("document_routing_nodes")))
+        self.assertTrue(any(index["name"] == "ix_document_routing_nodes_version_depth" for index in inspector.get_indexes("document_routing_nodes")))
 
         self.assertTrue(True, "Migration smoke test completed successfully.")
 

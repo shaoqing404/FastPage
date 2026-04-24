@@ -1,3 +1,4 @@
+import copy
 import json
 import shutil
 import tempfile
@@ -9,6 +10,8 @@ from urllib.parse import urlparse
 from fastapi import UploadFile
 
 from app.core.config import get_settings
+from app.models.routing_asset_contract import normalize_routing_index_payload
+from pageindex.utils import ensure_run_reuse_cache
 
 
 settings = get_settings()
@@ -173,6 +176,24 @@ class MinioArtifactStorage(BaseArtifactStorage):
 
     @contextmanager
     def local_path(self, uri: str) -> Iterator[Path]:
+        cache = ensure_run_reuse_cache()
+        if cache is not None:
+            def load_temp_path() -> Path:
+                bucket, key = self._parse_uri(uri)
+                suffix = Path(key).suffix
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp:
+                    temp_path = Path(temp.name)
+                try:
+                    self.client.fget_object(bucket, key, str(temp_path))
+                except Exception:
+                    temp_path.unlink(missing_ok=True)
+                    raise
+                cache.register_temp_path(temp_path)
+                return temp_path
+
+            yield cache.load_once("minio_local_path", uri, load_temp_path)
+            return
+
         bucket, key = self._parse_uri(uri)
         suffix = Path(key).suffix
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp:
@@ -219,6 +240,15 @@ def write_document_structure(*, tenant_id: str, document_id: str, version_id: st
     )
 
 
+def write_document_routing_index(*, tenant_id: str, document_id: str, version_id: str, data: Any) -> str:
+    normalized = normalize_routing_index_payload(data)
+    return _get_storage_backend().write_json(
+        normalized,
+        tenant_id=tenant_id,
+        object_path=f"documents/{document_id}/versions/{version_id}/routing_index.json",
+    )
+
+
 def write_skill_trace(*, tenant_id: str, skill_id: str, run_id: str, data: Any) -> str:
     return _get_storage_backend().write_json(
         data,
@@ -236,7 +266,19 @@ def get_trace_uri_for_run(tenant_id: str, skill_id: str, run_id: str) -> str:
 
 
 def read_json_artifact(uri: str) -> Any:
-    return _get_storage_backend().read_json(uri)
+    cache = ensure_run_reuse_cache()
+    if cache is None:
+        return _get_storage_backend().read_json(uri)
+
+    def load_json() -> Any:
+        return _get_storage_backend().read_json(uri)
+
+    data = cache.load_once("json_artifact", uri, load_json)
+    return copy.deepcopy(data)
+
+
+def read_document_routing_index(uri: str) -> dict[str, Any]:
+    return normalize_routing_index_payload(read_json_artifact(uri))
 
 
 def artifact_exists(uri: str) -> bool:

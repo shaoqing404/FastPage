@@ -25,11 +25,13 @@ from app.services.pageindex_service import (
     build_query_rewrite_prompt,
     extract_json_with_repair,
     format_history_context,
+    merge_candidates_round_robin,
     load_structure_file,
     rerank_candidates_async,
     retrieve_candidates_for_manual_async,
+    snapshot_outline_diagnostics,
 )
-from app.services.provider_service import resolve_provider_config, resolve_rerank_config, validate_provider_model_selection
+from app.services.provider_service import resolve_embedding_config, resolve_provider_config, resolve_rerank_config, validate_provider_model_selection
 from app.services.runtime_observation_service import record_run_observation_event
 from app.services.session_service import _is_default_workspace, append_message, get_session_or_404, list_session_messages
 from app.services.skill_trace_service import SkillTraceRecorder
@@ -38,6 +40,12 @@ from app.services.task_queue_service import (
     enqueue_chat_run,
     open_chat_event_subscription,
     publish_chat_event,
+)
+from app.services.telemetry_service import (
+    embedding_provider_telemetry,
+    routing_asset_build_telemetry,
+    routing_asset_item,
+    telemetry_payload,
 )
 from app.services.workspace_access_service import can_read_skill
 from pageindex.utils import count_tokens, is_fatal_llm_model_error, llm_completion
@@ -255,6 +263,16 @@ def _build_execution_context(
         "retrieval": retrieval_info,
         "generation": generation_info,
     }
+
+
+def _routing_asset_item_for_version(document_id: str, version: DocumentVersion) -> dict[str, Any]:
+    return routing_asset_item(
+        document_id=document_id,
+        version_id=version.id,
+        routing_index_status=getattr(version, "routing_index_status", None),
+        routing_index_path=getattr(version, "routing_index_path", None),
+        routing_index_version=getattr(version, "routing_asset_schema_version", None),
+    )
 
 
 def _accumulate_usage_totals(usage_totals: dict, usage: dict | None) -> None:
@@ -1181,6 +1199,15 @@ async def run_chat_run(run_id: str) -> None:
             model=run.model,
             subject="Chat run model",
         )
+        embedding_mode = retrieval_config.get("embedding_mode")
+        embedding_config = resolve_embedding_config(
+            provider_config=provider_config,
+            embedding_mode=embedding_mode,
+        )
+        embedding_telemetry = embedding_provider_telemetry(
+            requested_mode=embedding_mode,
+            embedding_config=embedding_config,
+        )
         _log_chat_run_stage(
             run,
             "provider_resolved",
@@ -1188,6 +1215,8 @@ async def run_chat_run(run_id: str) -> None:
             provider_type=provider_config.get("provider_type"),
             provider_name=provider_config.get("name"),
             resolved_model=resolved_model,
+            embedding_resolved_mode=embedding_telemetry.get("resolved_mode"),
+            embedding_provider_source=embedding_telemetry.get("provider_source"),
         )
         await _record_chat_observation(
             run,
@@ -1197,6 +1226,7 @@ async def run_chat_run(run_id: str) -> None:
                 "provider_id": provider_config.get("provider_id"),
                 "provider_name": provider_config.get("name"),
                 "resolved_model": resolved_model,
+                "telemetry": telemetry_payload(embedding_provider=embedding_telemetry),
             },
         )
 
@@ -1318,7 +1348,12 @@ async def run_chat_run(run_id: str) -> None:
         rewrite_applied = False
         retrieval_warnings: list[str] = []
         rewrite_strategy = "not_used"
-        outline_diagnostics: dict[str, object] = {}
+        outline_diagnostics: dict[str, object] = {
+            "requested_top_k": candidate_top_k,
+            "selection_mode": selection_mode,
+            "manuals": [],
+            "warnings": [],
+        }
         if conversation_config.get("query_rewrite_with_history", True) and history_context:
             try:
                 rewrite_response = llm_completion(
@@ -1380,18 +1415,27 @@ async def run_chat_run(run_id: str) -> None:
                     "version_label": manual_target.get("version_label") or f"v{target_version.version_no}",
                     "storage_path": manual_target.get("storage_path") or target_version.storage_path,
                     "parsed_structure_path": manual_target.get("parsed_structure_path") or target_version.parsed_structure_path,
+                    "routing_asset": _routing_asset_item_for_version(target_document.id, target_version),
                 }
             )
         if not resolved_manuals:
             raise RuntimeError("Skill has no target document")
         if len(resolved_manuals) > settings.run_max_manuals:
             raise RuntimeError(f"Skill resolved too many manuals ({len(resolved_manuals)}). Maximum allowed is {settings.run_max_manuals}.")
+        routing_asset_telemetry = routing_asset_build_telemetry(
+            items=[manual["routing_asset"] for manual in resolved_manuals],
+            mode="live_retrieval_diagnostic",
+            dry_run=False,
+            backfill=False,
+            attempted=False,
+        )
         await _record_chat_step_completed(
             run,
             "resolve_manuals",
             {
                 "manual_count": len(resolved_manuals),
                 "knowledge_base_id": knowledge_base_id,
+                "telemetry": telemetry_payload(routing_asset_build=routing_asset_telemetry),
             },
         )
 
@@ -1438,6 +1482,16 @@ async def run_chat_run(run_id: str) -> None:
                 for warning in diagnostics.get("warnings", [])
                 if isinstance(warning, str) and warning not in retrieval_warnings
             )
+            outline_diagnostics["manuals"].append(
+                snapshot_outline_diagnostics(
+                    manual,
+                    diagnostics,
+                    candidate_count=len(candidates),
+                )
+            )
+            for warning in diagnostics.get("warnings", []):
+                if isinstance(warning, str) and warning not in outline_diagnostics["warnings"]:
+                    outline_diagnostics["warnings"].append(warning)
             return [
                 {
                     "candidate_id": f"{manual['document_id']}:{manual['version_id']}:{index}",
@@ -1458,6 +1512,20 @@ async def run_chat_run(run_id: str) -> None:
         per_manual_candidates = await asyncio.gather(*(retrieve_manual_candidates(manual) for manual in loaded_manuals))
         candidate_sections = [candidate for candidates in per_manual_candidates for candidate in candidates]
         documents_with_hits = sum(1 for candidates in per_manual_candidates if candidates)
+        outline_diagnostics["manual_count"] = len(loaded_manuals)
+        outline_diagnostics["documents_considered"] = len(loaded_manuals)
+        outline_diagnostics["documents_with_hits"] = documents_with_hits
+        outline_diagnostics["selection_strategy"] = (
+            outline_diagnostics["manuals"][0].get("selection_strategy")
+            if outline_diagnostics["manuals"]
+            else None
+        )
+        outline_diagnostics["json_repair_applied"] = any(
+            bool(entry.get("json_repair_applied")) for entry in outline_diagnostics["manuals"]
+        )
+        outline_diagnostics["json_repair_succeeded"] = any(
+            bool(entry.get("json_repair_succeeded")) for entry in outline_diagnostics["manuals"]
+        )
         await _record_chat_step_completed(
             run,
             "retrieve_candidates",
@@ -1465,15 +1533,17 @@ async def run_chat_run(run_id: str) -> None:
                 "candidate_count": len(candidate_sections),
                 "documents_considered": len(loaded_manuals),
                 "documents_with_hits": documents_with_hits,
+                "outline_diagnostics": outline_diagnostics,
             },
         )
 
         rerank_config = resolve_rerank_config(provider_config=provider_config, rerank_mode=rerank_mode)
-        rerank_diagnostics: dict[str, object] = {}
-        reranked_candidates = candidate_sections[:top_k]
+        rerank_repair_diagnostics: dict[str, object] = {}
+        manual_merged_candidates = merge_candidates_round_robin(per_manual_candidates, top_k)
+        reranked_candidates = manual_merged_candidates
         rerank_meta = {
             "applied": False,
-            "mode": "disabled",
+            "mode": "round_robin_manual_merge",
             "candidate_count": len(candidate_sections),
             "selected_count": len(reranked_candidates),
         }
@@ -1502,7 +1572,7 @@ async def run_chat_run(run_id: str) -> None:
                     trace_hook=run_trace_hook,
                     stats_hook=stats_hook,
                     top_k=top_k,
-                    diagnostics=rerank_diagnostics,
+                    diagnostics=rerank_repair_diagnostics,
                 )
 
             try:
@@ -1514,23 +1584,15 @@ async def run_chat_run(run_id: str) -> None:
                     run=run,
                 )
             except Exception as exc:
-                reranked_candidates = candidate_sections[:top_k]
+                reranked_candidates = manual_merged_candidates
                 rerank_meta = {
                     "applied": False,
-                    "mode": "fallback_original_order_after_error",
+                    "mode": "fallback_round_robin_manual_merge_after_error",
                     "candidate_count": len(candidate_sections),
                     "selected_count": len(reranked_candidates),
                 }
-                rerank_warning = f"Rerank failed and fell back to original retrieval order: {exc}"
+                rerank_warning = f"Rerank failed and fell back to round-robin manual merge: {exc}"
                 retrieval_warnings.append(rerank_warning)
-        elif len(candidate_sections) > top_k:
-            reranked_candidates = candidate_sections[:top_k]
-            rerank_meta = {
-                "applied": False,
-                "mode": "original_order_truncate",
-                "candidate_count": len(candidate_sections),
-                "selected_count": len(reranked_candidates),
-            }
         citations_with_internal = [
             _citation_from_candidate(candidate, knowledge_base_id=knowledge_base_id, index=index)
             for index, candidate in enumerate(reranked_candidates, start=1)
@@ -1547,6 +1609,10 @@ async def run_chat_run(run_id: str) -> None:
                 "rerank_model": rerank_config.get("model"),
                 "rerank_provider_source": rerank_config.get("provider_source"),
                 "rerank_warning": rerank_warning,
+                "rerank_diagnostics": {
+                    "meta": rerank_meta,
+                    "repair": rerank_repair_diagnostics,
+                },
             },
         )
 
@@ -1572,7 +1638,7 @@ async def run_chat_run(run_id: str) -> None:
             retrieval_query=retrieval_query,
             rewrite_applied=rewrite_applied,
             rewrite_strategy=rewrite_strategy,
-            outline_selection_strategy=outline_diagnostics.get("outline_selection_strategy"),
+            outline_selection_strategy=outline_diagnostics.get("selection_strategy"),
             selected_section_count=len(citations_with_internal),
             context_chars=len(context),
             warnings=retrieval_warnings,
@@ -1585,7 +1651,7 @@ async def run_chat_run(run_id: str) -> None:
             "candidate_top_k": candidate_top_k,
             "selection_mode": selection_mode,
             "query_rewrite_strategy": rewrite_strategy,
-            "outline_selection_strategy": outline_diagnostics.get("outline_selection_strategy"),
+            "outline_selection_strategy": outline_diagnostics.get("selection_strategy"),
             "max_context_pages": int(max_context_pages) if max_context_pages is not None else None,
             "max_context_tokens": int(max_context_tokens) if max_context_tokens is not None else None,
             "warnings": retrieval_warnings,
@@ -1597,6 +1663,13 @@ async def run_chat_run(run_id: str) -> None:
             "rerank_model": rerank_config.get("model"),
             "rerank_provider_source": rerank_config.get("provider_source"),
             "rerank_warning": rerank_warning,
+            "diagnostics": {
+                "outline": outline_diagnostics,
+                "rerank": {
+                    "meta": rerank_meta,
+                    "repair": rerank_repair_diagnostics,
+                },
+            },
         }
         generation_info = {
             "temperature": generation_options.get("temperature"),
@@ -1608,6 +1681,10 @@ async def run_chat_run(run_id: str) -> None:
             history_info=history_info,
             retrieval_info=retrieval_info,
             generation_info=generation_info,
+        )
+        execution_context["telemetry"] = telemetry_payload(
+            embedding_provider=embedding_telemetry,
+            routing_asset_build=routing_asset_telemetry,
         )
         execution_context["target"] = {
             "requested_mode": "knowledge_base" if knowledge_base_id else "single_document",
@@ -1624,9 +1701,10 @@ async def run_chat_run(run_id: str) -> None:
             for manual in loaded_manuals
         ]
         execution_context["merge"] = {
-            "strategy": "rerank_merge" if rerank_meta.get("applied") else "sequential_kb_merge",
+            "strategy": "rerank_merge" if rerank_meta.get("applied") else "round_robin_manual_merge",
             "candidate_count": len(candidate_sections),
             "selected_citation_count": len(citations_with_internal),
+            "fallback_mode": None if rerank_meta.get("applied") else rerank_meta.get("mode"),
         }
         run.execution_context_json = json.dumps(execution_context, ensure_ascii=False)
         run.status = "answering"

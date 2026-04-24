@@ -7,3 +7,9 @@ __pycache__
 logs/
 data/
 !docker/.env.example
+
+# Generated routing asset maintenance reports. Keep validation evidence out of
+# normal commits unless a PR intentionally attaches a reviewed report.
+results/routing_asset_scan*.json
+results/routing_asset_sample_dry_run*.json
+results/routing_asset_backfill_rollback*.json

@@ -1,19 +1,26 @@
-import litellm
+import asyncio
+import copy
+import json
 import logging
 import os
 import textwrap
-from datetime import datetime
+import threading
 import time
-import json
-import copy
-import asyncio
+from collections.abc import Callable, Iterator
+from concurrent.futures import Future
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
+from datetime import datetime
 from io import BytesIO
-from dotenv import load_dotenv
-load_dotenv()
-import logging
-import yaml
 from pathlib import Path
 from types import SimpleNamespace as config
+from typing import Any, TypeVar
+
+import litellm
+from dotenv import load_dotenv
+load_dotenv()
+import yaml
 
 try:
     import PyPDF2
@@ -30,6 +37,113 @@ if not os.getenv("OPENAI_API_KEY") and os.getenv("CHATGPT_API_KEY"):
     os.environ["OPENAI_API_KEY"] = os.getenv("CHATGPT_API_KEY")
 
 litellm.drop_params = True
+
+T = TypeVar("T")
+
+
+@dataclass
+class RunReuseCache:
+    values: dict[tuple[str, Any], Any] = field(default_factory=dict)
+    inflight: dict[tuple[str, Any], Future[Any]] = field(default_factory=dict)
+    temp_paths: set[Path] = field(default_factory=set)
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    closed: bool = False
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        with self.lock:
+            temp_paths = list(self.temp_paths)
+            self.temp_paths.clear()
+            self.values.clear()
+            self.inflight.clear()
+        for path in temp_paths:
+            try:
+                path.unlink(missing_ok=True)
+            except Exception:
+                logging.debug("Failed to clean cached temp artifact path %s", path, exc_info=True)
+
+    def register_temp_path(self, path: Path) -> None:
+        if self.closed:
+            try:
+                path.unlink(missing_ok=True)
+            except Exception:
+                logging.debug("Failed to clean temp artifact path %s after cache close", path, exc_info=True)
+            return
+        with self.lock:
+            self.temp_paths.add(path)
+
+    def load_once(self, namespace: str, key: Any, loader: Callable[[], T]) -> T:
+        cache_key = (namespace, key)
+        with self.lock:
+            closed = self.closed
+        if closed:
+            return loader()
+        with self.lock:
+            if cache_key in self.values:
+                return self.values[cache_key]
+            future = self.inflight.get(cache_key)
+            if future is None:
+                future = Future()
+                self.inflight[cache_key] = future
+                creator = True
+            else:
+                creator = False
+        if not creator:
+            return future.result()
+        try:
+            value = loader()
+        except Exception as exc:
+            future.set_exception(exc)
+            with self.lock:
+                self.inflight.pop(cache_key, None)
+            raise
+        with self.lock:
+            self.values[cache_key] = value
+            self.inflight.pop(cache_key, None)
+        future.set_result(value)
+        return value
+
+
+_run_reuse_cache_var: ContextVar[RunReuseCache | None] = ContextVar("run_reuse_cache", default=None)
+
+
+def get_run_reuse_cache() -> RunReuseCache | None:
+    cache = _run_reuse_cache_var.get()
+    if cache is None or cache.closed:
+        return None
+    return cache
+
+
+def ensure_run_reuse_cache() -> RunReuseCache | None:
+    cache = get_run_reuse_cache()
+    if cache is not None:
+        return cache
+    try:
+        asyncio.current_task()
+    except RuntimeError:
+        return None
+    cache = RunReuseCache()
+    _run_reuse_cache_var.set(cache)
+    try:
+        task = asyncio.current_task()
+    except RuntimeError:
+        task = None
+    if task is not None:
+        task.add_done_callback(lambda _task, cache=cache: cache.close())
+    return cache
+
+
+@contextmanager
+def run_reuse_scope() -> Iterator[RunReuseCache]:
+    cache = RunReuseCache()
+    token = _run_reuse_cache_var.set(cache)
+    try:
+        yield cache
+    finally:
+        cache.close()
+        _run_reuse_cache_var.reset(token)
 
 _FATAL_LLM_MODEL_ERROR_PATTERNS = (
     "model_not_found",
@@ -534,29 +648,36 @@ def add_preface_if_needed(data):
 
 
 def get_page_tokens(pdf_path, model=None, pdf_parser="PyPDF2"):
-    if pdf_parser == "PyPDF2":
-        pdf_reader = PyPDF2.PdfReader(pdf_path)
-        page_list = []
-        for page_num in range(len(pdf_reader.pages)):
-            page = pdf_reader.pages[page_num]
-            page_text = page.extract_text()
-            token_length = litellm.token_counter(model=model, text=page_text)
-            page_list.append((page_text, token_length))
-        return page_list
-    elif pdf_parser == "PyMuPDF":
-        if isinstance(pdf_path, BytesIO):
-            pdf_stream = pdf_path
-            doc = pymupdf.open(stream=pdf_stream, filetype="pdf")
-        elif isinstance(pdf_path, str) and os.path.isfile(pdf_path) and pdf_path.lower().endswith(".pdf"):
-            doc = pymupdf.open(pdf_path)
-        page_list = []
-        for page in doc:
-            page_text = page.get_text()
-            token_length = litellm.token_counter(model=model, text=page_text)
-            page_list.append((page_text, token_length))
-        return page_list
-    else:
+    cache = ensure_run_reuse_cache()
+    cache_key = _normalize_page_token_cache_key(pdf_path, model, pdf_parser)
+
+    def load_pages():
+        if pdf_parser == "PyPDF2":
+            pdf_reader = PyPDF2.PdfReader(pdf_path)
+            page_list = []
+            for page_num in range(len(pdf_reader.pages)):
+                page = pdf_reader.pages[page_num]
+                page_text = page.extract_text()
+                token_length = litellm.token_counter(model=model, text=page_text)
+                page_list.append((page_text, token_length))
+            return tuple(page_list)
+        if pdf_parser == "PyMuPDF":
+            if isinstance(pdf_path, BytesIO):
+                pdf_stream = pdf_path
+                doc = pymupdf.open(stream=pdf_stream, filetype="pdf")
+            elif isinstance(pdf_path, str) and os.path.isfile(pdf_path) and pdf_path.lower().endswith(".pdf"):
+                doc = pymupdf.open(pdf_path)
+            page_list = []
+            for page in doc:
+                page_text = page.get_text()
+                token_length = litellm.token_counter(model=model, text=page_text)
+                page_list.append((page_text, token_length))
+            return tuple(page_list)
         raise ValueError(f"Unsupported PDF parser: {pdf_parser}")
+
+    if cache is not None and cache_key is not None:
+        return list(cache.load_once("page_tokens", cache_key, load_pages))
+    return list(load_pages())
 
         
 
@@ -571,6 +692,12 @@ def get_text_of_pdf_pages_with_labels(pdf_pages, start_page, end_page):
     for page_num in range(start_page-1, end_page):
         text += f"<physical_index_{page_num+1}>\n{pdf_pages[page_num][0]}\n<physical_index_{page_num+1}>\n"
     return text
+
+
+def _normalize_page_token_cache_key(pdf_path, model, pdf_parser):
+    if isinstance(pdf_path, (str, os.PathLike)):
+        return (os.fspath(pdf_path), model, pdf_parser)
+    return None
 
 def get_number_of_pages(pdf_path):
     pdf_reader = PyPDF2.PdfReader(pdf_path)
