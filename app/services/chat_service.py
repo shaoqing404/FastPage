@@ -93,9 +93,9 @@ CHAT_MANUAL_GATE_LIVE_DEFERRED_REASON = "chat_live_disabled"
 CHAT_RETRIEVAL_MODE_DEEP_RESEARCH = "deep_research"
 CHAT_RETRIEVAL_MODE_FAST = "fast"
 CHAT_RETRIEVAL_MODES = {CHAT_RETRIEVAL_MODE_DEEP_RESEARCH, CHAT_RETRIEVAL_MODE_FAST}
-FAST_NODE_TOP_K_DEFAULT = 10
-FAST_NODE_TOP_K_MIN = 5
-FAST_NODE_TOP_K_MAX = 20
+FAST_NODE_TOP_K_DEFAULT = 3
+FAST_NODE_TOP_K_MIN = 1
+FAST_NODE_TOP_K_MAX = 10
 
 
 def _chat_manual_gate_allow_live() -> bool:
@@ -255,6 +255,7 @@ def _load_session_history(
         workspace_id=workspace_id,
         session_id=session_id,
     )
+    all_messages = [message for message in all_messages if message.role in {"user", "assistant"}]
     include_assistant = bool(conversation_config.get("include_assistant_messages", True))
     if not include_assistant:
         all_messages = [message for message in all_messages if message.role != "assistant"]
@@ -1840,6 +1841,7 @@ async def run_chat_run(run_id: str) -> None:
             finish_reason = None
             streamed_usage = None
             answer_started = time.perf_counter()
+            ttft_ms: int | None = None
             while True:
                 answer_attempt += 1
                 answer_request_event = {
@@ -1873,6 +1875,8 @@ async def run_chat_run(run_id: str) -> None:
                             delta = choice.delta.content or ""
                         if not delta:
                             continue
+                        if ttft_ms is None:
+                            ttft_ms = int((time.perf_counter() - answer_started) * 1000)
                         answer_parts.append(delta)
                         seq += 1
                         await _publish_chat_event(run.id, "answer_delta", {"delta": delta, "seq": seq})
@@ -1935,6 +1939,7 @@ async def run_chat_run(run_id: str) -> None:
                 "queue_ms": queue_ms,
                 "retrieve_ms": retrieve_ms,
                 "answer_ms": answer_ms,
+                "ttft_ms": ttft_ms,
                 "total_ms": retrieve_ms + answer_ms,
                 "wall_clock_ms": queue_ms + retrieve_ms + answer_ms,
                 "input_tokens": usage_totals["input_tokens"],
@@ -1998,7 +2003,11 @@ async def run_chat_run(run_id: str) -> None:
                     execution_context=execution_context,
                 )
             _log_chat_run_stage(run, "completed", metrics=metrics)
-            await _record_chat_step_completed(run, "final_answer", {"answer_ms": answer_ms, "answer_chars": len(answer_text)})
+            await _record_chat_step_completed(
+                run,
+                "final_answer",
+                {"answer_ms": answer_ms, "ttft_ms": ttft_ms, "answer_chars": len(answer_text)},
+            )
             await _record_chat_step_started(run, "persist_result")
             await _record_chat_step_completed(run, "persist_result", {"citations_count": len(citations)})
             return run

@@ -1172,8 +1172,19 @@ def _build_context_block_from_section_text(
         if int(page_end) - int(page_start) + 1 > max_context_pages:
             return ""
     excerpt = f"## Section: {citation.get('title') or record.title or 'untitled'} (pages {page_start}-{page_end})\n{text}"
+    truncated = False
     if max_context_tokens is not None and count_tokens(excerpt, model=model) > max_context_tokens:
-        return ""
+        text = _truncate_to_token_budget(
+            text,
+            model=model,
+            max_tokens=max(1, max_context_tokens - 128),
+        )
+        truncated = True
+        excerpt = f"## Section: {citation.get('title') or record.title or 'untitled'} (pages {page_start}-{page_end})\n{text}"
+        if count_tokens(excerpt, model=model) > max_context_tokens:
+            return ""
+    if truncated:
+        excerpt = f"{excerpt}\n...[section_text truncated to context token budget]"
     return "\n".join(
         [
             f"[{citation.get('citation_id') or citation.get('candidate_id')}]",
@@ -1183,6 +1194,48 @@ def _build_context_block_from_section_text(
             excerpt,
         ]
     )
+
+
+def _truncate_to_token_budget(text: str, *, model: str, max_tokens: int) -> str:
+    if max_tokens <= 0 or not text:
+        return ""
+    if count_tokens(text, model=model) <= max_tokens:
+        return text
+    low = 0
+    high = len(text)
+    best = ""
+    while low <= high:
+        mid = (low + high) // 2
+        candidate = text[:mid].rstrip()
+        if count_tokens(candidate, model=model) <= max_tokens:
+            best = candidate
+            low = mid + 1
+        else:
+            high = mid - 1
+    return best
+
+
+def _apply_total_context_token_budget(blocks: list[str], *, model: str, max_context_tokens: int | None) -> list[str]:
+    if max_context_tokens is None:
+        return blocks
+    selected: list[str] = []
+    total_tokens = 0
+    for block in blocks:
+        block_tokens = count_tokens(block, model=model)
+        if selected and total_tokens + block_tokens > max_context_tokens:
+            continue
+        if not selected and block_tokens > max_context_tokens:
+            truncated = _truncate_to_token_budget(
+                block,
+                model=model,
+                max_tokens=max_context_tokens,
+            )
+            if truncated.strip():
+                selected.append(f"{truncated}\n...[context block truncated to total token budget]")
+            break
+        selected.append(block)
+        total_tokens += block_tokens
+    return selected
 
 
 async def build_context_from_citations_async(
@@ -1222,7 +1275,12 @@ async def build_context_from_citations_async(
         )
 
     blocks = await asyncio.gather(*(build_one(citation, record) for citation, record in zip(citations, section_records, strict=False)))
-    return [block for block in blocks if block.strip()]
+    non_empty_blocks = [block for block in blocks if block.strip()]
+    return _apply_total_context_token_budget(
+        non_empty_blocks,
+        model=model,
+        max_context_tokens=max_context_tokens,
+    )
 
 
 def build_answer_with_marker(answer_text: str, citations: list[dict]) -> str:

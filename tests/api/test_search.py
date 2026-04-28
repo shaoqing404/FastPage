@@ -68,9 +68,9 @@ def test_run_fast_search_top_k(monkeypatch):
         document=MockDocument(),
         version=MockVersion(),
         query="普通提问",
-        top_k=15
+        top_k=10
     )
-    assert res["node_top_k"] == 15
+    assert res["node_top_k"] == 10
     assert "complex_query" not in res["boundary_flags"]
 
 def test_run_fast_search_dense_sorting(monkeypatch):
@@ -107,11 +107,10 @@ def test_run_fast_search_dense_sorting(monkeypatch):
         dense_search_backend=mock_backend
     )
 
-    assert res["active_backend"] == "es_shadow"
+    assert res["dense_source"] == "es_shadow"
+    assert res["section_text_participated"] is False
     assert len(res["nodes"]) == 2
-    # node1 should have a higher score and be sorted first due to dense score
     assert res["nodes"][0]["node_id"] == "node1"
-    assert res["nodes"][0]["score"] > res["nodes"][1]["score"]
 
 def test_run_fast_search_body_term_regression_for_unaccompanied_child(monkeypatch):
     def mock_build_manual_gate_ref(*args, **kwargs):

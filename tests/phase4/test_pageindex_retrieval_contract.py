@@ -387,6 +387,73 @@ class TestPageIndexRetrievalContract(unittest.TestCase):
         self.assertEqual(stale.source, "stale")
         self.assertEqual(stale.degraded_reason, "routing_index_version_mismatch")
 
+    @patch(
+        "app.services.section_text_provider.resolve_embedding_config",
+        return_value={"enabled": True, "provider_type": "test", "model": "system-embedding"},
+    )
+    def test_section_text_provider_uses_system_embedding_config_when_runtime_config_is_disabled(self, _mock_resolve_embedding):
+        class FakeIndices:
+            def exists(self, index):
+                return True
+
+        class FakeEs:
+            indices = FakeIndices()
+
+            def __init__(self):
+                self.indices_seen: list[str] = []
+
+            def search(self, index, body):
+                self.indices_seen.append(index)
+                return {
+                    "hits": {
+                        "hits": [
+                            {
+                                "_id": "doc_1:ver_1:n1",
+                                "_source": {
+                                    "document_id": "doc_1",
+                                    "version_id": "ver_1",
+                                    "node_id": "n1",
+                                    "node_key": "doc_1:ver_1:n1",
+                                    "title": "11.2 旅客运输标准和要求",
+                                    "page_start": 933,
+                                    "page_end": 950,
+                                    "section_text": "无成人陪伴儿童：10个；其中5（含）-10岁不得超过5个。",
+                                    "routing_index_version": "v1-r2",
+                                },
+                            }
+                        ]
+                    }
+                }
+
+        settings = MagicMock()
+        settings.routing_node_es_enabled = True
+        settings.routing_node_es_index_prefix = "pageindex-node-embeddings"
+        fake_es = FakeEs()
+        provider = SectionTextProvider(
+            settings_obj=settings,
+            embedding_config={"enabled": False, "resolved_mode": "off"},
+            es_client=fake_es,
+        )
+
+        result = provider.get_for_citations(
+            [
+                {
+                    "document_id": "doc_1",
+                    "version_id": "ver_1",
+                    "node_id": "n1",
+                    "node_key": "doc_1:ver_1:n1",
+                    "routing_index_version": "v1-r2",
+                    "page_start": 933,
+                    "page_end": 950,
+                }
+            ]
+        )[0]
+
+        self.assertEqual(result.status, "ready")
+        self.assertIn("无成人陪伴儿童", result.text)
+        self.assertTrue(fake_es.indices_seen)
+        self.assertIn("v1-r2", fake_es.indices_seen[0])
+
     @patch("pageindex.utils.litellm.token_counter", side_effect=lambda model, text: len(text.split()))
     @patch("pageindex.utils.PyPDF2.PdfReader")
     def test_build_context_from_citations_debug_pdf_fallback_reuses_shared_storage_path(self, mock_pdf_reader, _mock_token_counter):

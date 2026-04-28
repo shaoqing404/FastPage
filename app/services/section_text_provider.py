@@ -83,10 +83,15 @@ class SectionTextProvider:
         es_client: Any | None = None,
     ) -> None:
         self.settings = settings_obj or get_settings()
-        self.embedding_config = dict(
+        resolved_embedding_config = dict(
             embedding_config
             or resolve_embedding_config(provider_config={}, embedding_mode="system")
         )
+        if not resolved_embedding_config.get("enabled"):
+            system_embedding_config = dict(resolve_embedding_config(provider_config={}, embedding_mode="system"))
+            if system_embedding_config.get("enabled"):
+                resolved_embedding_config = system_embedding_config
+        self.embedding_config = resolved_embedding_config
         self.es_client = es_client
 
     def _client(self) -> tuple[Any | None, str | None]:

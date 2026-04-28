@@ -5,7 +5,7 @@ class FastSearchRequest(BaseModel):
     document_id: str = Field(..., description="The ID of the document to search within")
     version_id: str = Field(..., description="The version ID of the document")
     query: str = Field(..., description="The search query")
-    node_top_k: int = Field(10, ge=5, le=20, description="Number of top nodes to retrieve")
+    node_top_k: int = Field(3, ge=1, le=10, description="Number of top nodes to retrieve")
     include_snippets: bool = Field(True, description="Whether to include snippets in the response")
     allow_runtime_pdf_fallback: bool = Field(
         False,

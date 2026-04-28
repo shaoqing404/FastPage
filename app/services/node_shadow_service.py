@@ -1218,7 +1218,7 @@ def run_fast_search(
     document,
     version,
     query: str,
-    top_k: int = 10,
+    top_k: int = 3,
     include_snippets: bool = True,
     dense_search_backend = None,
     settings_obj = None,
@@ -1226,6 +1226,7 @@ def run_fast_search(
 ) -> dict:
     from app.services.routing_consumer_service import build_manual_gate_ref
     started = time.perf_counter()
+    top_k = max(1, min(int(top_k or 3), 10))
 
     # 1. Complex Query Detection
     is_complex = bool(COMPLEX_QUERY_PATTERN.search(query))
