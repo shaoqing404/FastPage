@@ -41,8 +41,6 @@ class FastSearchResponse(BaseModel):
     dense_source: Optional[str] = Field(None, description="The actual dense source used")
     query_embedding_computed: bool = Field(False, description="Whether query embedding was computed")
     query_embedding_dimensions: Optional[int] = Field(None, description="Query embedding vector dimensions")
-    artifact_count: Optional[int] = Field(None, description="Legacy diagnostic count of embedding artifacts considered")
-    artifact_exact_scan_executed: bool = Field(False, description="Legacy diagnostic; artifact exact scan is not a production runtime backend")
     es_executed: bool = Field(False, description="Whether ES search executed")
     section_text_participated: bool = Field(False, description="Whether section text participated in scoring")
     section_text_node_count: int = Field(0, description="Number of nodes with section text available")

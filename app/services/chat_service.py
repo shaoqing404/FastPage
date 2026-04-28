@@ -701,9 +701,7 @@ def _fast_active_backend(mode: str, dense_info: dict[str, Any]) -> str:
     if mode == "hybrid":
         if dense_info.get("es", {}).get("used") or dense_info.get("dense_source") == "es_shadow":
             return "es_shadow"
-        if dense_info.get("dense_source") == "artifact_exact_scan":
-            return "lexical_fallback"
-        return str(dense_info.get("dense_source") or "lexical_fallback")
+        return "lexical_fallback"
     return "lexical_fallback"
 
 

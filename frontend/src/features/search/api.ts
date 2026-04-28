@@ -39,8 +39,6 @@ export interface FastSearchResponse {
   dense_source?: string | null;
   query_embedding_computed?: boolean;
   query_embedding_dimensions?: number | null;
-  artifact_count?: number | null;
-  artifact_exact_scan_executed?: boolean;
   es_executed?: boolean;
   section_text_participated?: boolean;
   section_text_node_count?: number;

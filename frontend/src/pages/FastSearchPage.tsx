@@ -177,10 +177,8 @@ export const FastSearchPage: React.FC = () => {
               <KeyMetric label="实际 dense source" value={formatSource(searchResult?.dense_source)} />
               <KeyMetric label="TopK" value={searchResult?.node_top_k ?? topK} />
               <KeyMetric label="Query embedding" value={searchResult?.query_embedding_computed ? `${searchResult.query_embedding_dimensions ?? 'N/A'} 维` : '未计算'} />
-              <KeyMetric label="Artifact scan" value={searchResult?.artifact_exact_scan_executed ? '已执行' : '未执行'} />
               <KeyMetric label="ES 查询" value={searchResult?.es_executed ? '已执行' : '未执行'} />
               <KeyMetric label="正文检索面" value={searchResult?.section_text_participated ? `${searchResult.section_text_node_count ?? 0} nodes` : '未参与'} />
-              <KeyMetric label="Artifact 数" value={searchResult?.artifact_count ?? 0} />
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
               {searchResult?.boundary_flags?.length ? (

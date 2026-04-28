@@ -7,7 +7,7 @@ import os
 import re
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol
 from urllib import error, request
@@ -637,6 +637,13 @@ class OpenAICompatibleEmbeddingClient:
 
 
 class NodeEmbeddingArtifactStore:
+    """Build-time embedding bundle store.
+
+    In B4.2, ES is the runtime search contract. Bundles written by this store are
+    build audit / migration staging artifacts that may seed ES; production
+    runtime must not exact-scan them as a serving backend.
+    """
+
     def __init__(
         self,
         *,
@@ -1063,6 +1070,13 @@ class NodeDenseSearchBackend:
 
 
 class ExactScanNodeDenseSearchBackend(NodeDenseSearchBackend):
+    """Legacy diagnostics-only dense backend.
+
+    B4.2 production runtime search requires ES. This exact-scan backend is kept
+    for migration validation and historical shadow-eval scripts only; it must
+    not be wired as a production runtime fallback.
+    """
+
     dense_source = NODE_EMBEDDING_DENSE_SOURCE_ARTIFACT_EXACT
 
     def __init__(
@@ -1652,9 +1666,13 @@ class EsNodeDenseSearchBackend(NodeDenseSearchBackend):
         self,
         *,
         exact_backend: ExactScanNodeDenseSearchBackend | None = None,
+        embedding_client: NodeEmbeddingClient | None = None,
         es_client: Any | None = None,
     ) -> None:
-        self.exact_backend = exact_backend or ExactScanNodeDenseSearchBackend()
+        # exact_backend is accepted only for legacy tests/diagnostics that inject
+        # a fake embedding client. Production runtime never exact-scans artifacts.
+        self.exact_backend = exact_backend
+        self.embedding_client = embedding_client
         self.es_client = es_client
 
     def _client(self, settings: Any) -> tuple[Any | None, str | None]:
@@ -1671,34 +1689,6 @@ class EsNodeDenseSearchBackend(NodeDenseSearchBackend):
             return Elasticsearch(url), None
         except Exception as exc:
             return None, f"es_client_unavailable:{type(exc).__name__}"
-
-    @staticmethod
-    def _node_keys_for_artifact(artifact_result: NodeEmbeddingArtifactResult) -> list[str]:
-        bundle = artifact_result.bundle if artifact_result.available else None
-        if not isinstance(bundle, Mapping):
-            return []
-        keys: list[str] = []
-        for node in bundle.get("nodes") or []:
-            if isinstance(node, Mapping) and (node_key := _normalize_text(node.get("node_key"))):
-                keys.append(node_key)
-        return keys
-
-    def _fallback_exact(
-        self,
-        prepared: PreparedDenseSearch,
-        *,
-        es_fallback_reason: str,
-    ) -> NodeDenseSearchResult:
-        exact = self.exact_backend._search_prepared(
-            prepared,
-            requested_dense_source=self.dense_source,
-            es={"enabled": False, "fallback_reason": es_fallback_reason},
-        )
-        return replace(
-            exact,
-            fallback_reason=exact.fallback_reason or es_fallback_reason,
-            es={"enabled": False, "fallback_reason": es_fallback_reason},
-        )
 
     def _unavailable_result(
         self,
@@ -1750,8 +1740,9 @@ class EsNodeDenseSearchBackend(NodeDenseSearchBackend):
             return self._unavailable_result(fallback_reason=f"embedding_unavailable:{fallback_reason}")
 
         embedding_client = (
-            self.exact_backend.embedding_client
-            or self.exact_backend.artifact_store.embedding_client
+            self.embedding_client
+            or (self.exact_backend.embedding_client if self.exact_backend is not None else None)
+            or (self.exact_backend.artifact_store.embedding_client if self.exact_backend is not None else None)
             or OpenAICompatibleEmbeddingClient.from_embedding_config(resolved_config)
         )
         if embedding_client is None:

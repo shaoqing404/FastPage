@@ -63,8 +63,6 @@ async def fast_search(
         dense_source=result.get("dense_source"),
         query_embedding_computed=bool(result.get("query_embedding_computed")),
         query_embedding_dimensions=result.get("query_embedding_dimensions"),
-        artifact_count=result.get("artifact_count"),
-        artifact_exact_scan_executed=bool(result.get("artifact_exact_scan_executed")),
         es_executed=bool(result.get("es_executed")),
         section_text_participated=bool(result.get("section_text_participated")),
         section_text_node_count=int(result.get("section_text_node_count") or 0),

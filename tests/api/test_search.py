@@ -188,42 +188,6 @@ def test_run_fast_search_body_term_regression_for_unaccompanied_child(monkeypatc
     assert target["page_start"] == 933
     assert target["page_end"] == 950
 
-def test_artifact_exact_metadata_is_not_product_backend(monkeypatch):
-    mock_backend = MockDenseBackend(
-        mode="hybrid",
-        scores={"test_doc:node1": 0.5},
-        metadata={"dense_source": "artifact_exact_scan", "resolved_mode": "hybrid"}
-    )
-
-    def mock_build_manual_gate_ref(*args, **kwargs):
-        return {"manual_key": "test_doc", "index_version": "v1"}
-    monkeypatch.setattr("app.services.routing_consumer_service.build_manual_gate_ref", mock_build_manual_gate_ref)
-
-    def mock_build_node_corpora(db, manual_refs):
-        return [{
-            "manual_key": "test_doc",
-            "corpus_source": "document_routing_nodes",
-            "nodes": [
-                {"node_id": "node1", "node_key": "test_doc:node1", "manual_key": "test_doc", "title": "Node 1", "route_summary": "Summary 1", "page_start": 1, "page_end": 1}
-            ]
-        }]
-
-    monkeypatch.setattr("app.services.node_shadow_service.build_node_corpora", mock_build_node_corpora)
-
-    res = run_fast_search(
-        db=None,
-        principal=None,
-        document=MockDocument(),
-        version=MockVersion(),
-        query="普通提问",
-        top_k=5,
-        dense_search_backend=mock_backend
-    )
-
-    assert res["active_backend"] == "lexical_fallback"
-    assert res["artifact_exact_scan_executed"] is False
-
-
 def test_fast_search_missing_es_section_text_does_not_extract_pdf(monkeypatch):
     def mock_build_manual_gate_ref(*args, **kwargs):
         return {

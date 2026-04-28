@@ -1350,10 +1350,8 @@ def run_fast_search(
     if mode == "hybrid":
         if dense_info.get("es", {}).get("used") or dense_info.get("dense_source") == "es_shadow":
             active_backend = "es_shadow"
-        elif dense_info.get("dense_source") == "artifact_exact_scan":
-            active_backend = "lexical_fallback"
         else:
-            active_backend = dense_info.get("dense_source", "lexical_fallback")
+            active_backend = "lexical_fallback"
     total_latency_ms = int((time.perf_counter() - started) * 1000)
 
     return {
@@ -1375,8 +1373,6 @@ def run_fast_search(
         "dense_source": dense_info.get("dense_source"),
         "query_embedding_computed": bool(dense_info.get("query_embedding_dimensions")),
         "query_embedding_dimensions": dense_info.get("query_embedding_dimensions"),
-        "artifact_count": dense_info.get("artifact_count"),
-        "artifact_exact_scan_executed": False,
         "es_executed": bool(es_metadata.get("searched_indices") or es_metadata.get("used")),
         "section_text_participated": section_text_node_count > 0,
         "section_text_node_count": section_text_node_count,

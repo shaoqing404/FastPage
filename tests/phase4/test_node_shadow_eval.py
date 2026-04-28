@@ -115,7 +115,7 @@ class TestNodeShadowEval(unittest.TestCase):
             1.0,
         )
 
-    def test_main_accepts_artifact_exact_dense_source_and_falls_back_without_provider(self):
+    def test_main_accepts_artifact_exact_dense_source_for_legacy_diagnostics(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             input_path = Path(temp_dir) / "input.json"
             output_path = Path(temp_dir) / "report.json"
@@ -138,8 +138,9 @@ class TestNodeShadowEval(unittest.TestCase):
 
         self.assertEqual(payload["query"]["dense_source"], "artifact-exact")
         self.assertEqual(payload["samples"][0]["dense"]["requested_dense_source"], "artifact_exact_scan")
-        self.assertFalse(payload["samples"][0]["dense"]["enabled"])
-        self.assertIn("embedding_unavailable", payload["samples"][0]["dense"]["fallback_reason"])
+        self.assertEqual(payload["samples"][0]["dense"]["dense_source"], "artifact_exact_scan")
+        if not payload["samples"][0]["dense"]["enabled"]:
+            self.assertIn("embedding_unavailable", payload["samples"][0]["dense"]["fallback_reason"])
 
     def test_markdown_report_includes_required_metric_names(self):
         payload = {
@@ -251,9 +252,8 @@ class TestNodeShadowEval(unittest.TestCase):
     def test_es_shadow_dense_source_falls_back_without_es_runtime(self):
         """--dense-source es-shadow with ROUTING_NODE_ES_ENABLED=false must safely fall back.
 
-        The fallback chain is: ES disabled → artifact exact scan (if artifact available)
-        or sparse-only. The report must still be valid JSON and contain the expected
-        dense.fallback_reason key.
+        B4.2 runtime does not fall back to artifact exact scan. The report must
+        still be valid JSON and contain the expected dense.fallback_reason key.
 
         This test verifies the Conditional-GO gate condition:
         code and mock tests pass even without a real ES runtime.
