@@ -1,4 +1,5 @@
 import json
+import logging
 import uuid
 from datetime import datetime
 from typing import Any
@@ -6,6 +7,7 @@ from typing import Any
 from fastapi.encoders import jsonable_encoder
 from fastapi import HTTPException, status
 from sqlalchemy import func, inspect, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -23,8 +25,10 @@ from app.services.workspace_scope_service import get_workspace_visibility_filter
 
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 OBSERVATION_TERMINAL_EVENT_TYPES = {"run_completed", "run_failed"}
+OBSERVATION_PAYLOAD_JSON_MAX_BYTES = 60_000
 _EPHEMERAL_OBSERVATION_SEQUENCES: dict[tuple[str, str], int] = {}
 
 
@@ -78,6 +82,25 @@ def sanitize_observation_payload(payload: dict[str, Any] | None) -> dict[str, An
     return raw
 
 
+def serialize_observation_payload_for_storage(payload: dict[str, Any] | None) -> str:
+    sanitized = sanitize_observation_payload(payload)
+    payload_json = json.dumps(sanitized, ensure_ascii=False)
+    payload_bytes = len(payload_json.encode("utf-8"))
+    if payload_bytes <= OBSERVATION_PAYLOAD_JSON_MAX_BYTES:
+        return payload_json
+    preview_text = payload_json[:10_000].rstrip()
+    compacted = {
+        "payload_truncated": True,
+        "payload_original_bytes": payload_bytes,
+        "payload_preview": {
+            "text": preview_text + "\n...[truncated]",
+            "text_length": len(payload_json),
+            "text_truncated": True,
+        },
+    }
+    return json.dumps(compacted, ensure_ascii=False)
+
+
 def _build_ephemeral_run_observation_event(
     *,
     run_kind: str,
@@ -112,6 +135,8 @@ async def record_run_observation_event(
     payload: dict[str, Any] | None = None,
 ):
     db = SessionLocal()
+    payload_json = serialize_observation_payload_for_storage(payload)
+    serialized: dict[str, Any] | None = None
     try:
         if not _run_observation_table_exists(db):
             serialized = _build_ephemeral_run_observation_event(
@@ -120,7 +145,7 @@ async def record_run_observation_event(
                 event_type=event_type,
                 step=step,
                 status_value=status_value,
-                payload=payload,
+                payload=_json_loads(payload_json, {}),
             )
             await publish_runtime_observation(run_kind, run_id, {"event": "observation", "data": serialized})
             if run_kind == "chat":
@@ -145,15 +170,45 @@ async def record_run_observation_event(
             event_type=event_type,
             step=step,
             status=status_value,
-            payload_json=json.dumps(sanitize_observation_payload(payload), ensure_ascii=False),
+            payload_json=payload_json,
             created_at=datetime.utcnow(),
         )
         db.add(event)
         db.commit()
         db.refresh(event)
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.warning(
+            "Failed to persist runtime observation event %s for %s %s: %s",
+            event_type,
+            run_kind,
+            run_id,
+            exc,
+        )
+        fallback_payload = _json_loads(payload_json, {})
+        if isinstance(fallback_payload, dict):
+            fallback_payload = {
+                **fallback_payload,
+                "observation_persistence": {
+                    "persisted": False,
+                    "fallback": "ephemeral",
+                    "error_type": type(exc).__name__,
+                },
+            }
+        else:
+            fallback_payload = {}
+        serialized = _build_ephemeral_run_observation_event(
+            run_kind=run_kind,
+            run_id=run_id,
+            event_type=event_type,
+            step=step,
+            status_value=status_value,
+            payload=fallback_payload,
+        )
     finally:
         db.close()
-    serialized = serialize_run_observation_event(event)
+    if serialized is None:
+        serialized = serialize_run_observation_event(event)
     await publish_runtime_observation(run_kind, run_id, {"event": "observation", "data": serialized})
     if run_kind == "chat":
         await publish_chat_event(run_id, {"event": "observation", "data": serialized})
@@ -194,6 +249,21 @@ def _load_chat_run_snapshot(run: ChatRun, events: list[RunObservationEvent]) -> 
             "total_ms": metrics.get("total_ms"),
             "wall_clock_ms": metrics.get("wall_clock_ms"),
             "ttft_ms": metrics.get("ttft_ms"),
+            "answer_pre_provider_ms": metrics.get("answer_pre_provider_ms"),
+            "provider_stream_open_ms": metrics.get("provider_stream_open_ms"),
+            "provider_first_chunk_ms": metrics.get("provider_first_chunk_ms"),
+            "provider_ttft_ms": metrics.get("provider_ttft_ms"),
+            "provider_first_delta_after_first_chunk_ms": metrics.get("provider_first_delta_after_first_chunk_ms"),
+            "provider_stream_ms": metrics.get("provider_stream_ms"),
+            "first_delta_to_stream_end_ms": metrics.get("first_delta_to_stream_end_ms"),
+            "heartbeat_drain_ms": metrics.get("heartbeat_drain_ms"),
+        },
+        "streaming": {
+            "heartbeat_count": metrics.get("heartbeat_count"),
+            "cancel_check_count": metrics.get("cancel_check_count"),
+            "answer_delta_observation_count": metrics.get("answer_delta_observation_count"),
+            "streamed_delta_count": metrics.get("streamed_delta_count"),
+            "output_chars": metrics.get("output_chars"),
         },
         "execution_context": _json_loads(run.execution_context_json, {}),
         "partial_answer": run.answer_text or run.answer,

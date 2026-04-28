@@ -26,6 +26,9 @@ class BaseArtifactStorage:
     def save_upload(self, file: UploadFile, *, tenant_id: str, document_id: str, version_id: str, filename: str) -> str:
         raise NotImplementedError
 
+    def save_file_path(self, source_path: Path, *, tenant_id: str, document_id: str, version_id: str, filename: str) -> str:
+        raise NotImplementedError
+
     def write_json(self, data: Any, *, tenant_id: str, object_path: str) -> str:
         raise NotImplementedError
 
@@ -72,6 +75,12 @@ class LocalArtifactStorage(BaseArtifactStorage):
         target_path.parent.mkdir(parents=True, exist_ok=True)
         with target_path.open("wb") as out:
             shutil.copyfileobj(file.file, out)
+        return str(target_path)
+
+    def save_file_path(self, source_path: Path, *, tenant_id: str, document_id: str, version_id: str, filename: str) -> str:
+        target_path = self.version_dir(tenant_id, document_id, version_id) / filename
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source_path, target_path)
         return str(target_path)
 
     def write_json(self, data: Any, *, tenant_id: str, object_path: str) -> str:
@@ -135,6 +144,12 @@ class MinioArtifactStorage(BaseArtifactStorage):
             self.client.fput_object(self.bucket, key, str(temp_path))
         finally:
             temp_path.unlink(missing_ok=True)
+        return f"minio://{self.bucket}/{key}"
+
+    def save_file_path(self, source_path: Path, *, tenant_id: str, document_id: str, version_id: str, filename: str) -> str:
+        object_path = f"documents/{document_id}/versions/{version_id}/{filename}"
+        key = self._key(tenant_id, object_path)
+        self.client.fput_object(self.bucket, key, str(source_path))
         return f"minio://{self.bucket}/{key}"
 
     def write_json(self, data: Any, *, tenant_id: str, object_path: str) -> str:
@@ -230,6 +245,18 @@ def save_uploaded_pdf(file: UploadFile, *, tenant_id: str, document_id: str, ver
         version_id=version_id,
         filename="source.pdf",
     )
+
+
+def copy_source_pdf_to_version(*, source_uri: str, tenant_id: str, document_id: str, version_id: str) -> str:
+    backend = _get_storage_backend()
+    with backend.local_path(source_uri) as source_path:
+        return backend.save_file_path(
+            source_path,
+            tenant_id=tenant_id,
+            document_id=document_id,
+            version_id=version_id,
+            filename="source.pdf",
+        )
 
 
 def write_document_structure(*, tenant_id: str, document_id: str, version_id: str, data: Any) -> str:

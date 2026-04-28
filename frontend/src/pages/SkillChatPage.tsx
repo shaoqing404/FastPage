@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
@@ -94,6 +94,7 @@ const DEFAULT_CONVERSATION_CONFIG = {
 const FAST_SEARCH_TOP_K_RECOMMENDED = 3;
 const FAST_SEARCH_TOP_K_MAX = 10;
 const RECOMMENDED_CONTEXT_TOKEN_BUDGET = 131072;
+const STREAMING_ANSWER_FLUSH_INTERVAL_MS = 75;
 
 const SELECTION_MODE_OPTIONS = [
   { value: 'outline_llm', label: '模型引导大纲选择' },
@@ -122,7 +123,14 @@ const formatResolutionSource = (source: string | null | undefined) => {
 const formatMillisecondsAsSeconds = (value: unknown) => {
   const milliseconds = Number(value);
   if (!Number.isFinite(milliseconds)) return 'N/A';
-  return `${(milliseconds / 1000).toFixed(5)} s`;
+  return `${(milliseconds / 1000).toFixed(2)} s`;
+};
+
+const formatTokenBreakdown = (metrics: ChatRun['metrics'] | undefined) => {
+  if (!metrics) return undefined;
+  const input = metrics.input_tokens ?? 'N/A';
+  const output = metrics.output_tokens ?? 'N/A';
+  return `输入 ${input} · 输出 ${output}；输出可能包含 Provider 统计的隐藏推理/内部 token。`;
 };
 
 const normalizeFastSearchTopK = (value: unknown) => {
@@ -184,6 +192,8 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   const queryClient = useQueryClient();
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamAbortRef = useRef<AbortController | null>(null);
+  const streamingAnswerBufferRef = useRef('');
+  const streamingAnswerFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [layoutState, setLayoutState] = useState<SkillConsoleLayoutState>(() => readSkillConsoleLayoutState(skillId));
   const [isCompactLayout, setIsCompactLayout] = useState(() => (
@@ -228,6 +238,39 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   const [fastSearchTopK, setFastSearchTopK] = useState('');
 
   const storedWorkspace = resolveStoredWorkspace();
+
+  const clearStreamingAnswerFlushTimer = useCallback(() => {
+    if (streamingAnswerFlushTimerRef.current === null) return;
+    clearTimeout(streamingAnswerFlushTimerRef.current);
+    streamingAnswerFlushTimerRef.current = null;
+  }, []);
+
+  const flushStreamingAnswerBuffer = useCallback(() => {
+    clearStreamingAnswerFlushTimer();
+    const bufferedDelta = streamingAnswerBufferRef.current;
+    if (!bufferedDelta) return;
+    streamingAnswerBufferRef.current = '';
+    setStreamingAnswer((current) => `${current}${bufferedDelta}`);
+  }, [clearStreamingAnswerFlushTimer]);
+
+  const scheduleStreamingAnswerFlush = useCallback(() => {
+    if (streamingAnswerFlushTimerRef.current !== null) return;
+    streamingAnswerFlushTimerRef.current = setTimeout(() => {
+      streamingAnswerFlushTimerRef.current = null;
+      flushStreamingAnswerBuffer();
+    }, STREAMING_ANSWER_FLUSH_INTERVAL_MS);
+  }, [flushStreamingAnswerBuffer]);
+
+  const enqueueStreamingAnswerDelta = useCallback((delta: string) => {
+    if (!delta) return;
+    streamingAnswerBufferRef.current += delta;
+    scheduleStreamingAnswerFlush();
+  }, [scheduleStreamingAnswerFlush]);
+
+  const resetStreamingAnswerBuffer = useCallback(() => {
+    clearStreamingAnswerFlushTimer();
+    streamingAnswerBufferRef.current = '';
+  }, [clearStreamingAnswerFlushTimer]);
 
   const updateLayoutState = (nextValue: Partial<SkillConsoleLayoutState>) => {
     setLayoutState((current) => ({ ...current, ...nextValue }));
@@ -297,9 +340,10 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
 
   useEffect(
     () => () => {
+      flushStreamingAnswerBuffer();
       streamAbortRef.current?.abort();
     },
-    [],
+    [flushStreamingAnswerBuffer],
   );
 
   useEffect(() => {
@@ -468,6 +512,17 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     enabled: Boolean(skillId && effectiveSessionId),
   });
 
+  useEffect(() => {
+    if (!completedStreamRun || isStreaming) return;
+    const hasPersistedAssistantMessage = sessionMessages.some((message) => (
+      message.role === 'assistant' &&
+      (message.run_id === completedStreamRun.id || message.content === completedStreamRun.answer)
+    ));
+    if (!hasPersistedAssistantMessage) return;
+    setPendingQuestion(null);
+    if (streamingAnswer) setStreamingAnswer('');
+  }, [completedStreamRun, isStreaming, sessionMessages, streamingAnswer]);
+
   const history = useMemo<HistoryItem[]>(() => {
     const runsById = new Map(filteredRuns.map((run) => [run.id, run]));
     const base = sessionMessages.map((message: ChatMessage) => ({
@@ -513,6 +568,72 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       events: streamingObservations,
     };
   }, [activeExecutionContext, activeObservationRunId, activeStatus, observationSnapshotData, streamingAnswer, streamingObservations]);
+
+  const conversationHistoryContent = useMemo(() => (
+    <>
+      {history.length === 0 ? (
+        <div className="empty-state min-h-[420px]">
+          <TextQuote size={22} className="text-blue-600" />
+          <p className="text-base font-medium text-slate-900">开始对话</p>
+          <p className="text-sm text-slate-500">先从历史栏创建会话，再基于此 Skill 保存的知识上下文提问。</p>
+        </div>
+      ) : (
+        history.map((message, index) => (
+          <div
+            key={`${message.role}-${index}`}
+            className={`rounded-[28px] border px-5 py-4 ${message.role === 'assistant' ? 'border-white/85 bg-white/82' : 'border-white/70 bg-white/56'}`}
+          >
+            <div className="mb-3 flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/82 text-blue-600">
+                {message.role === 'assistant' ? <Bot size={18} /> : <User size={18} />}
+              </div>
+              <div>
+                <p className="text-sm font-medium text-slate-900">{message.role === 'assistant' ? '助手' : '用户'}</p>
+                {resolveHistoryItemTimestamp(message) && <p className="text-sm text-slate-500">{formatDateTime(resolveHistoryItemTimestamp(message))}</p>}
+              </div>
+            </div>
+            {message.role === 'assistant' ? (
+              <AnswerContent content={message.content} />
+            ) : (
+              <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">{message.content}</div>
+            )}
+            {message.role === 'assistant' && message.run?.answer_with_marker && (
+              <details className="mt-4 rounded-[20px] border border-white/70 bg-white/60 p-4">
+                <summary className="cursor-pointer text-sm font-medium text-slate-700">带引用标记的原始回答</summary>
+                <pre className="mt-3 overflow-auto whitespace-pre-wrap text-xs leading-6 text-slate-600">{message.run.answer_with_marker}</pre>
+              </details>
+            )}
+          </div>
+        ))
+      )}
+
+      {isStreaming && !streamingAnswer && (
+        <div className="rounded-[28px] border border-white/80 bg-white/80 px-5 py-4">
+          <div className="mb-3 flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-blue-600">
+              <Bot size={18} />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-slate-900">助手</p>
+              <p className="text-sm text-slate-500">
+                {streamingStatus === 'retrieving'
+                  ? '正在从知识库检索…'
+                  : streamingStatus === 'answering'
+                    ? '正在生成回答…'
+                    : streamingStatus === 'queued'
+                      ? '已排队，等待执行资源…'
+                      : '运行中…'}
+              </p>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="h-3 w-3/4 rounded-full bg-slate-200" />
+            <div className="h-3 w-2/3 rounded-full bg-slate-200" />
+          </div>
+        </div>
+      )}
+    </>
+  ), [history, isStreaming, streamingAnswer, streamingStatus]);
 
   const createSessionMutation = useMutation({
     mutationFn: (title: string) => chatApi.createSkillSession(skillId, { title }),
@@ -646,12 +767,13 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
             ));
           },
           onAnswerDelta: ({ delta }) => {
-            setStreamingAnswer((current) => `${current}${delta}`);
+            enqueueStreamingAnswerDelta(delta);
           },
         },
       );
     },
     onMutate: ({ q }) => {
+      resetStreamingAnswerBuffer();
       setLastQuestion(q);
       setPendingQuestion(q);
       setIsStreaming(true);
@@ -664,9 +786,9 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       setStreamingObservations([]);
     },
     onSuccess: (run) => {
+      flushStreamingAnswerBuffer();
       streamAbortRef.current = null;
       setCompletedStreamRun(run);
-      setPendingQuestion(null);
       setIsStreaming(false);
       setQuestion('');
       setChatAlert(null);
@@ -678,7 +800,6 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
         }, { replace: true });
       }
       setNewSessionTitle('');
-      setStreamingAnswer('');
       setStreamingRunId(null);
       setStreamingStatus(null);
       setStreamingExecutionContext(run.execution_context || null);
@@ -689,16 +810,18 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       queryClient.invalidateQueries({ queryKey: ['skill-chat-sessions', skillId] });
     },
     onError: (error: unknown, { q }) => {
+      flushStreamingAnswerBuffer();
+      const isAbortError = error instanceof DOMException && error.name === 'AbortError';
       streamAbortRef.current = null;
       setPendingQuestion(null);
       setIsStreaming(false);
       setQuestion(q);
-      setStreamingAnswer('');
+      if (isAbortError) setStreamingAnswer('');
       setStreamingRunId(null);
       setStreamingStatus(null);
       setStreamingExecutionContext(null);
       setStreamingObservations([]);
-      if (error instanceof DOMException && error.name === 'AbortError') {
+      if (isAbortError) {
         setChatAlert(null);
       } else {
         setChatAlert({
@@ -1098,11 +1221,33 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       {(displayRun || activeStatus || activeExecutionContext.retrieval?.query || activeExecutionContext.model?.resolved_model) ? (
         <>
           <div className="grid grid-cols-2 gap-3">
-            <KeyMetric label="耗时" value={formatMillisecondsAsSeconds(displayRun?.metrics.total_ms)} />
-            <KeyMetric label="首 Token" value={formatMillisecondsAsSeconds(displayRun?.metrics.ttft_ms)} />
+            <KeyMetric
+              label="总耗时"
+              value={formatMillisecondsAsSeconds(displayRun?.metrics.total_ms)}
+              hint="后端口径：检索耗时 + 回答生成阶段，不含排队。"
+            />
+            <KeyMetric
+              label="首 token 等待"
+              value={formatMillisecondsAsSeconds(displayRun?.metrics.ttft_ms)}
+              hint="从进入回答生成阶段到收到首个可见 token；不是从 run 开始计时。"
+            />
             <KeyMetric label="检索耗时" value={formatMillisecondsAsSeconds(displayRun?.metrics.retrieve_ms)} />
-            <KeyMetric label="生成耗时" value={formatMillisecondsAsSeconds(displayRun?.metrics.answer_ms)} />
-            <KeyMetric label="Token" value={displayRun?.metrics.total_tokens ?? 'N/A'} />
+            <KeyMetric
+              label="生成阶段耗时"
+              value={formatMillisecondsAsSeconds(displayRun?.metrics.answer_ms)}
+              hint="从进入回答阶段到流式回答结束；首 token 等待包含在这里。"
+            />
+            <KeyMetric
+              label="Provider 首 token"
+              value={formatMillisecondsAsSeconds(displayRun?.metrics.provider_ttft_ms)}
+              hint="从实际发起 Provider stream 请求到首个可见 token。"
+            />
+            <KeyMetric
+              label="调用前开销"
+              value={formatMillisecondsAsSeconds(displayRun?.metrics.answer_pre_provider_ms)}
+              hint="进入回答阶段后、本地构造并发起 Provider 请求前的开销。"
+            />
+            <KeyMetric label="Token 用量" value={displayRun?.metrics.total_tokens ?? 'N/A'} hint={formatTokenBreakdown(displayRun?.metrics)} />
             <KeyMetric label="已选段落" value={displayRun ? (displayRun.metrics.selected_section_count ?? displayRun.selected_sections.length) : '等待中'} />
             <KeyMetric label="使用历史" value={activeExecutionContext.conversation?.history_used ? '是' : '否'} />
           </div>
@@ -1305,67 +1450,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
               )}
 
               <div ref={scrollRef} className="scroll-area max-h-[620px] space-y-4 overflow-auto pr-1">
-                {history.length === 0 ? (
-                  <div className="empty-state min-h-[420px]">
-                    <TextQuote size={22} className="text-blue-600" />
-                    <p className="text-base font-medium text-slate-900">开始对话</p>
-                    <p className="text-sm text-slate-500">先从历史栏创建会话，再基于此 Skill 保存的知识上下文提问。</p>
-                  </div>
-                ) : (
-                  history.map((message, index) => (
-                    <div
-                      key={`${message.role}-${index}`}
-                      className={`rounded-[28px] border px-5 py-4 ${message.role === 'assistant' ? 'border-white/85 bg-white/82' : 'border-white/70 bg-white/56'}`}
-                    >
-                      <div className="mb-3 flex items-center gap-3">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/82 text-blue-600">
-                          {message.role === 'assistant' ? <Bot size={18} /> : <User size={18} />}
-                        </div>
-                        <div>
-                          <p className="text-sm font-medium text-slate-900">{message.role === 'assistant' ? '助手' : '用户'}</p>
-                          {resolveHistoryItemTimestamp(message) && <p className="text-sm text-slate-500">{formatDateTime(resolveHistoryItemTimestamp(message))}</p>}
-                        </div>
-                      </div>
-                      {message.role === 'assistant' ? (
-                        <AnswerContent content={message.content} />
-                      ) : (
-                        <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">{message.content}</div>
-                      )}
-                      {message.role === 'assistant' && message.run?.answer_with_marker && (
-                        <details className="mt-4 rounded-[20px] border border-white/70 bg-white/60 p-4">
-                          <summary className="cursor-pointer text-sm font-medium text-slate-700">带引用标记的原始回答</summary>
-                          <pre className="mt-3 overflow-auto whitespace-pre-wrap text-xs leading-6 text-slate-600">{message.run.answer_with_marker}</pre>
-                        </details>
-                      )}
-                    </div>
-                  ))
-                )}
-
-                {isStreaming && !streamingAnswer && (
-                  <div className="rounded-[28px] border border-white/80 bg-white/80 px-5 py-4">
-                    <div className="mb-3 flex items-center gap-3">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-blue-600">
-                        <Bot size={18} />
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-slate-900">助手</p>
-                        <p className="text-sm text-slate-500">
-                          {streamingStatus === 'retrieving'
-                            ? '正在从知识库检索…'
-                            : streamingStatus === 'answering'
-                              ? '正在生成回答…'
-                              : streamingStatus === 'queued'
-                                ? '已排队，等待执行资源…'
-                                : '运行中…'}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <div className="h-3 w-3/4 rounded-full bg-slate-200" />
-                      <div className="h-3 w-2/3 rounded-full bg-slate-200" />
-                    </div>
-                  </div>
-                )}
+                {conversationHistoryContent}
               </div>
 
               <form

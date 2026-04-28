@@ -15,6 +15,7 @@ from app.schemas.jobs import ParseJobOut
 from app.services.audit_service import audit_from_principal
 from app.services.document_service import (
     create_or_append_document,
+    create_rebuild_version,
     delete_document,
     get_document_or_404,
     restore_document_version,
@@ -156,6 +157,14 @@ async def parse_document(document_id: str, payload: ParseRequest, db: Session = 
 @router.post("/{document_id}/reparse", response_model=ParseJobOut)
 async def reparse_document(document_id: str, payload: ParseRequest, db: Session = Depends(get_db), principal: Principal = Depends(get_current_principal)):
     document, version = _resolve_version(db, principal, document_id, payload.version_id)
+    job = _create_parse_job(db, principal, document, version, payload.model)
+    schedule_parse_job(job.id)
+    return job
+
+
+@router.post("/{document_id}/rebuild", response_model=ParseJobOut)
+async def rebuild_document(document_id: str, payload: ParseRequest, db: Session = Depends(get_db), principal: Principal = Depends(get_current_principal)):
+    document, version = create_rebuild_version(db, principal, document_id, payload.version_id)
     job = _create_parse_job(db, principal, document, version, payload.model)
     schedule_parse_job(job.id)
     return job

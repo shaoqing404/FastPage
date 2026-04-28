@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   Sparkles,
   Users2,
+  FileSearch,
 } from 'lucide-react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 
@@ -36,6 +37,7 @@ const BASE_NAV_ITEMS = [
   { to: '/knowledge-bases', label: 'Knowledge Base', icon: Layers3 },
   { to: '/compliance-checks', label: 'Compliance', icon: ShieldCheck },
   { to: '/documents', label: 'Documents', icon: BookCopy },
+  { to: '/search', label: 'Fast Search', icon: FileSearch },
   { to: '/skills', label: 'Skills', icon: Settings2 },
   { to: '/runs', label: 'Runs', icon: Activity },
   { to: '/providers', label: 'Providers', icon: KeyRound },

@@ -157,3 +157,54 @@ def routing_asset_build_telemetry(
     if error:
         payload["error"] = error
     return payload
+
+
+def manual_gate_telemetry(
+    *,
+    gate_result: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(gate_result, Mapping):
+        return None
+    diagnostics = gate_result.get("diagnostics")
+    if not isinstance(diagnostics, Mapping):
+        return None
+    shadow_eval = diagnostics.get("shadow_eval")
+    payload: dict[str, Any] = {
+        "requested_mode": _normalize_text(diagnostics.get("requested_mode")),
+        "effective_mode": _normalize_text(diagnostics.get("effective_mode")),
+        "decision": _normalize_text(diagnostics.get("decision")),
+        "fallback_reason": _normalize_text(diagnostics.get("fallback_reason")),
+        "mode_fallback_reason": _normalize_text(diagnostics.get("mode_fallback_reason")),
+        "decision_fallback_reason": _normalize_text(diagnostics.get("decision_fallback_reason")),
+        "manual_count_resolved": int(diagnostics.get("manual_count_resolved") or 0),
+        "predicted_selected_count": int(diagnostics.get("predicted_selected_count") or 0),
+        "applied_selected_count": int(diagnostics.get("applied_selected_count") or 0),
+        "selected_manuals": list(diagnostics.get("selected_manuals") or []),
+        "applied_manuals": list(diagnostics.get("applied_manuals") or []),
+        "selected_manual_ids": list(diagnostics.get("predicted_selected_manual_ids") or []),
+        "applied_manual_ids": list(diagnostics.get("applied_selected_manual_ids") or []),
+        "applied_selection": _normalize_text(diagnostics.get("applied_selection")),
+        "runtime_fallback_reason": _normalize_text(diagnostics.get("runtime_fallback_reason")),
+        "full_retry": dict(diagnostics.get("full_retry") or {}),
+        "zero_hit_retry": dict(diagnostics.get("zero_hit_retry") or {}),
+        "score_version": _normalize_text(diagnostics.get("score_version")),
+        "inventory_source_mix": dict(diagnostics.get("inventory_source_mix") or {}),
+        "latency_ms": int(diagnostics.get("latency_ms") or 0),
+        "timings_ms": dict(diagnostics.get("timings_ms") or {}),
+    }
+    if isinstance(shadow_eval, Mapping):
+        payload["shadow_eval"] = {
+            "top1_hit_final_citation_manuals": bool(shadow_eval.get("top1_hit_final_citation_manuals")),
+            "top2_full_coverage_of_final_citation_manuals": bool(
+                shadow_eval.get("top2_full_coverage_of_final_citation_manuals")
+            ),
+            "citation_recall_at_top1": float(shadow_eval.get("citation_recall_at_top1") or 0.0),
+            "citation_recall_at_top2": float(shadow_eval.get("citation_recall_at_top2") or 0.0),
+            "would_reduce_manuals_from": int(shadow_eval.get("would_reduce_manuals_from") or 0),
+            "would_reduce_manuals_to": int(shadow_eval.get("would_reduce_manuals_to") or 0),
+            "would_fallback_full": bool(shadow_eval.get("would_fallback_full")),
+            "final_citation_manual_count": int(shadow_eval.get("final_citation_manual_count") or 0),
+            "final_citation_count": int(shadow_eval.get("final_citation_count") or 0),
+            "manual_gate_latency_ms": int(shadow_eval.get("manual_gate_latency_ms") or 0),
+        }
+    return payload

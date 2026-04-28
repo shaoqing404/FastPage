@@ -989,6 +989,19 @@ def _observation_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
         "total_ms",
         "wall_clock_ms",
         "ttft_ms",
+        "answer_pre_provider_ms",
+        "provider_stream_open_ms",
+        "provider_first_chunk_ms",
+        "provider_ttft_ms",
+        "provider_first_delta_after_first_chunk_ms",
+        "provider_stream_ms",
+        "first_delta_to_stream_end_ms",
+        "heartbeat_drain_ms",
+        "output_chars",
+        "heartbeat_count",
+        "cancel_check_count",
+        "answer_delta_observation_count",
+        "streamed_delta_count",
         "input_tokens",
         "output_tokens",
         "total_tokens",
@@ -1440,6 +1453,121 @@ def _raise_if_cancel_requested(db: Session, run: ChatRun) -> ChatRun:
     raise ChatRunCancelled(reason, terminal_status=terminal_status)
 
 
+def _chat_stream_interval_seconds(setting_name: str, default: float, *, minimum: float) -> float:
+    try:
+        value = float(getattr(settings, setting_name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(value, minimum)
+
+
+def _touch_run_heartbeat_by_id(run_id: str, tenant_id: str) -> None:
+    db = SessionLocal()
+    try:
+        db.execute(
+            update(ChatRun)
+            .where(ChatRun.id == run_id, ChatRun.tenant_id == tenant_id)
+            .values(heartbeat_at=datetime.utcnow())
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _load_run_cancel_state(run_id: str, tenant_id: str) -> tuple[bool, str | None]:
+    db = SessionLocal()
+    try:
+        row = db.execute(
+            select(ChatRun.cancel_requested, ChatRun.cancel_reason).where(
+                ChatRun.id == run_id,
+                ChatRun.tenant_id == tenant_id,
+            )
+        ).first()
+        if row is None:
+            return False, None
+        return bool(row[0]), row[1]
+    finally:
+        db.close()
+
+
+class _FinalAnswerStreamHotPathState:
+    def __init__(self, run: ChatRun) -> None:
+        self.run_id = run.id
+        self.tenant_id = run.tenant_id
+        self.heartbeat_interval_seconds = _chat_stream_interval_seconds(
+            "chat_final_answer_heartbeat_interval_seconds",
+            5.0,
+            minimum=0.1,
+        )
+        self.cancel_check_interval_seconds = _chat_stream_interval_seconds(
+            "chat_final_answer_cancel_check_interval_seconds",
+            1.0,
+            minimum=0.05,
+        )
+        now = time.perf_counter()
+        self._next_heartbeat_at = now + self.heartbeat_interval_seconds
+        self._next_cancel_check_at = now
+        self._heartbeat_tasks: set[asyncio.Task] = set()
+        self.heartbeat_count = 0
+        self.cancel_check_count = 0
+        self.answer_delta_observation_count = 0
+        self.streamed_delta_count = 0
+
+    def maybe_schedule_heartbeat(self) -> None:
+        now = time.perf_counter()
+        if now < self._next_heartbeat_at:
+            return
+        self._next_heartbeat_at = now + self.heartbeat_interval_seconds
+        if self._heartbeat_tasks:
+            return
+        task = asyncio.create_task(asyncio.to_thread(_touch_run_heartbeat_by_id, self.run_id, self.tenant_id))
+        self.heartbeat_count += 1
+        self._heartbeat_tasks.add(task)
+        task.add_done_callback(self._complete_heartbeat_task)
+
+    def _complete_heartbeat_task(self, task: asyncio.Task) -> None:
+        self._heartbeat_tasks.discard(task)
+        try:
+            task.result()
+        except Exception as exc:
+            logger.warning("Failed to update final answer heartbeat for run %s: %s", self.run_id, exc)
+
+    async def maybe_raise_if_cancel_requested(self) -> None:
+        now = time.perf_counter()
+        if now < self._next_cancel_check_at:
+            return
+        self._next_cancel_check_at = now + self.cancel_check_interval_seconds
+        self.cancel_check_count += 1
+        cancel_requested, cancel_reason = await asyncio.to_thread(_load_run_cancel_state, self.run_id, self.tenant_id)
+        if not cancel_requested:
+            return
+        reason = cancel_reason or "cancel requested"
+        terminal_status = "failed" if reason == "client aborted stream" else "cancelled"
+        raise ChatRunCancelled(reason, terminal_status=terminal_status)
+
+    def record_streamed_delta(self) -> None:
+        self.streamed_delta_count += 1
+
+    def record_answer_delta_observation(self) -> None:
+        self.answer_delta_observation_count += 1
+
+    async def drain_heartbeats(self) -> None:
+        if not self._heartbeat_tasks:
+            return
+        await asyncio.gather(*list(self._heartbeat_tasks), return_exceptions=True)
+
+    def summary(self) -> dict[str, int]:
+        return {
+            "heartbeat_count": self.heartbeat_count,
+            "cancel_check_count": self.cancel_check_count,
+            "answer_delta_observation_count": self.answer_delta_observation_count,
+            "streamed_delta_count": self.streamed_delta_count,
+        }
+
+
 async def request_run_cancel(
     db: Session,
     *,
@@ -1840,79 +1968,120 @@ async def run_chat_run(run_id: str) -> None:
             streamed_usage = None
             answer_started = time.perf_counter()
             ttft_ms: int | None = None
-            while True:
-                answer_attempt += 1
-                answer_request_event = {
-                    "type": "llm_completion",
-                    "label": "final_answer_stream",
-                    "attempt": answer_attempt,
-                    "phase": "request",
-                    "request": {
-                        "model": completion_kwargs["model"],
-                        "messages": completion_kwargs["messages"],
-                        "temperature": completion_kwargs.get("temperature"),
-                        "stream": True,
-                    },
-                }
-                _log_chat_run_llm_event(run, answer_request_event)
-                try:
-                    response = litellm.completion(**completion_kwargs)
-                    for chunk in response:
-                        run = _touch_run_heartbeat(db, run)
-                        run = _raise_if_cancel_requested(db, run)
-                        chunk_usage = _extract_usage_from_stream_chunk(chunk)
-                        if chunk_usage:
-                            streamed_usage = chunk_usage
-                        choices = getattr(chunk, "choices", None)
-                        if not choices:
-                            continue
-                        choice = choices[0]
-                        finish_reason = getattr(choice, "finish_reason", None) or finish_reason
-                        delta = ""
-                        if getattr(choice, "delta", None) is not None:
-                            delta = choice.delta.content or ""
-                        if not delta:
-                            continue
-                        if ttft_ms is None:
-                            ttft_ms = int((time.perf_counter() - answer_started) * 1000)
-                        answer_parts.append(delta)
-                        seq += 1
-                        await _publish_chat_event(run.id, "answer_delta", {"delta": delta, "seq": seq})
-                        await _record_chat_observation(
-                            run,
-                            event_type="answer_delta",
-                            step="final_answer",
-                            status_value=run.status,
-                            payload={"seq": seq, "delta": delta},
-                        )
-                    break
-                except Exception as exc:
-                    answer_error_event = {
+            provider_request_started: float | None = None
+            provider_response_created: float | None = None
+            provider_first_chunk_at: float | None = None
+            provider_first_delta_at: float | None = None
+            provider_stream_completed_at: float | None = None
+            heartbeat_drain_ms: int | None = None
+            hot_path_state = _FinalAnswerStreamHotPathState(run)
+            try:
+                while True:
+                    answer_attempt += 1
+                    answer_request_event = {
                         "type": "llm_completion",
                         "label": "final_answer_stream",
                         "attempt": answer_attempt,
-                        "phase": "error",
-                        "ok": False,
-                        "duration_ms": int((time.perf_counter() - answer_started) * 1000),
-                        "request": answer_request_event["request"],
-                        "error": str(exc),
+                        "phase": "request",
+                        "request": {
+                            "model": completion_kwargs["model"],
+                            "messages": completion_kwargs["messages"],
+                            "temperature": completion_kwargs.get("temperature"),
+                            "stream": True,
+                        },
                     }
-                    if trace_recorder:
-                        trace_recorder.append_llm_call(answer_error_event)
-                    _log_chat_run_llm_event(run, answer_error_event)
-                    if answer_parts or answer_attempt >= 2:
+                    _log_chat_run_llm_event(run, answer_request_event)
+                    try:
+                        provider_request_started = time.perf_counter()
+                        response = litellm.completion(**completion_kwargs)
+                        provider_response_created = time.perf_counter()
+                        for chunk in response:
+                            if provider_first_chunk_at is None:
+                                provider_first_chunk_at = time.perf_counter()
+                            hot_path_state.maybe_schedule_heartbeat()
+                            await hot_path_state.maybe_raise_if_cancel_requested()
+                            chunk_usage = _extract_usage_from_stream_chunk(chunk)
+                            if chunk_usage:
+                                streamed_usage = chunk_usage
+                            choices = getattr(chunk, "choices", None)
+                            if not choices:
+                                continue
+                            choice = choices[0]
+                            finish_reason = getattr(choice, "finish_reason", None) or finish_reason
+                            delta = ""
+                            if getattr(choice, "delta", None) is not None:
+                                delta = choice.delta.content or ""
+                            if not delta:
+                                continue
+                            if ttft_ms is None:
+                                provider_first_delta_at = time.perf_counter()
+                                ttft_ms = int((provider_first_delta_at - answer_started) * 1000)
+                            answer_parts.append(delta)
+                            seq += 1
+                            hot_path_state.record_streamed_delta()
+                            await _publish_chat_event(run.id, "answer_delta", {"delta": delta, "seq": seq})
+                            if seq == 1:
+                                await _record_chat_observation(
+                                    run,
+                                    event_type="answer_delta",
+                                    step="final_answer",
+                                    status_value=run.status,
+                                    payload={"seq": seq, "delta": delta, "first_delta": True, "ttft_ms": ttft_ms},
+                                )
+                                hot_path_state.record_answer_delta_observation()
+                        provider_stream_completed_at = time.perf_counter()
+                        break
+                    except ChatRunCancelled:
                         raise
-                    await _record_chat_observation(
-                        run,
-                        event_type="step_failed",
-                        step="final_answer",
-                        status_value=run.status,
-                        payload={"attempt": answer_attempt, "retrying": True, "error": str(exc)},
-                    )
-                    await asyncio.sleep(settings.run_step_retry_base_ms / 1000)
+                    except Exception as exc:
+                        answer_error_event = {
+                            "type": "llm_completion",
+                            "label": "final_answer_stream",
+                            "attempt": answer_attempt,
+                            "phase": "error",
+                            "ok": False,
+                            "duration_ms": int((time.perf_counter() - answer_started) * 1000),
+                            "request": answer_request_event["request"],
+                            "error": str(exc),
+                        }
+                        if trace_recorder:
+                            trace_recorder.append_llm_call(answer_error_event)
+                        _log_chat_run_llm_event(run, answer_error_event)
+                        if answer_parts or answer_attempt >= 2:
+                            raise
+                        await _record_chat_observation(
+                            run,
+                            event_type="step_failed",
+                            step="final_answer",
+                            status_value=run.status,
+                            payload={"attempt": answer_attempt, "retrying": True, "error": str(exc)},
+                        )
+                        await asyncio.sleep(settings.run_step_retry_base_ms / 1000)
+            finally:
+                heartbeat_drain_started = time.perf_counter()
+                await hot_path_state.drain_heartbeats()
+                heartbeat_drain_ms = int((time.perf_counter() - heartbeat_drain_started) * 1000)
+                _log_chat_run_stage(run, "final_answer_stream_hot_path", **hot_path_state.summary())
 
             answer_text = "".join(answer_parts).strip()
             answer_ms = int((time.perf_counter() - answer_started) * 1000)
+            provider_timing_metrics: dict[str, int] = {}
+            if provider_request_started is not None:
+                provider_timing_metrics["answer_pre_provider_ms"] = int((provider_request_started - answer_started) * 1000)
+            if provider_request_started is not None and provider_response_created is not None:
+                provider_timing_metrics["provider_stream_open_ms"] = int((provider_response_created - provider_request_started) * 1000)
+            if provider_request_started is not None and provider_first_chunk_at is not None:
+                provider_timing_metrics["provider_first_chunk_ms"] = int((provider_first_chunk_at - provider_request_started) * 1000)
+            if provider_request_started is not None and provider_first_delta_at is not None:
+                provider_timing_metrics["provider_ttft_ms"] = int((provider_first_delta_at - provider_request_started) * 1000)
+            if provider_first_chunk_at is not None and provider_first_delta_at is not None:
+                provider_timing_metrics["provider_first_delta_after_first_chunk_ms"] = int((provider_first_delta_at - provider_first_chunk_at) * 1000)
+            if provider_request_started is not None and provider_stream_completed_at is not None:
+                provider_timing_metrics["provider_stream_ms"] = int((provider_stream_completed_at - provider_request_started) * 1000)
+            if provider_first_delta_at is not None and provider_stream_completed_at is not None:
+                provider_timing_metrics["first_delta_to_stream_end_ms"] = int((provider_stream_completed_at - provider_first_delta_at) * 1000)
+            if heartbeat_drain_ms is not None:
+                provider_timing_metrics["heartbeat_drain_ms"] = heartbeat_drain_ms
             citations = [
                 {key: value for key, value in citation.items() if not key.startswith("_")}
                 for citation in citations_with_internal
@@ -1950,6 +2119,9 @@ async def run_chat_run(run_id: str) -> None:
                 "stream_usage_source": stream_usage_source,
                 "documents_considered": documents_considered,
                 "documents_with_hits": documents_with_hits,
+                "output_chars": len(answer_text),
+                **provider_timing_metrics,
+                **hot_path_state.summary(),
             }
             if metrics_extra:
                 metrics.update(metrics_extra)
@@ -2004,7 +2176,15 @@ async def run_chat_run(run_id: str) -> None:
             await _record_chat_step_completed(
                 run,
                 "final_answer",
-                {"answer_ms": answer_ms, "ttft_ms": ttft_ms, "answer_chars": len(answer_text)},
+                {
+                    "answer_ms": answer_ms,
+                    "ttft_ms": ttft_ms,
+                    "answer_chars": len(answer_text),
+                    "delta_count": seq,
+                    "output_chars": len(answer_text),
+                    **provider_timing_metrics,
+                    **hot_path_state.summary(),
+                },
             )
             await _record_chat_step_started(run, "persist_result")
             await _record_chat_step_completed(run, "persist_result", {"citations_count": len(citations)})

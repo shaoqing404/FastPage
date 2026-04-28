@@ -77,7 +77,7 @@ export const FastSearchPage: React.FC = () => {
     <div className="space-y-8">
       <SectionToolbar
         title="Fast Search"
-        description="Low-latency explicit fact search surface, bypassing DeepResearch LLM pipelines."
+        description="Low-latency node search over one selected workspace document. It does not search a whole Knowledge Base unless you choose a document that belongs to one."
         actions={
           <div className="flex items-center gap-2 text-sm text-slate-500 font-medium">
             <Zap size={16} className="text-yellow-500" />
@@ -107,9 +107,14 @@ export const FastSearchPage: React.FC = () => {
                 >
                   <option value="" disabled>Select a ready document...</option>
                   {readyDocuments.map(doc => (
-                    <option key={doc.id} value={doc.id}>{doc.display_name}</option>
+                    <option key={doc.id} value={doc.id}>
+                      {doc.display_name}{doc.uploaded_via_kb_id ? ' · KB document' : ' · workspace document'}
+                    </option>
                   ))}
                 </select>
+                <p className="mt-1 text-xs text-slate-500">
+                  来源是当前 workspace 可见的 Documents。通过 Knowledge Base 上传的文档会标记为 KB document，但此页面每次只搜索一个 document/version。
+                </p>
               </div>
 
               <div>

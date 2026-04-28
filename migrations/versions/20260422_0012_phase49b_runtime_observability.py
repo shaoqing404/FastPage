@@ -7,6 +7,7 @@ Create Date: 2026-04-22
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import mysql
 
 
 revision = "20260422_0012"
@@ -67,7 +68,7 @@ def upgrade() -> None:
             sa.Column("event_type", sa.String(length=64), nullable=False),
             sa.Column("step", sa.String(length=64), nullable=True),
             sa.Column("status", sa.String(length=32), nullable=True),
-            sa.Column("payload_json", sa.Text(), nullable=False),
+            sa.Column("payload_json", sa.Text().with_variant(mysql.LONGTEXT(), "mysql"), nullable=False),
             sa.Column("created_at", sa.DateTime(), nullable=False),
             sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"]),
             sa.ForeignKeyConstraint(["workspace_id"], ["workspaces.id"]),
