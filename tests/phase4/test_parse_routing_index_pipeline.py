@@ -55,6 +55,13 @@ class TestParseRoutingIndexPipeline(unittest.TestCase):
         )
         self.parse_observation_patcher.start()
         self.addCleanup(self.parse_observation_patcher.stop)
+        self.embedding_build_mode_patcher = patch.object(
+            parse_service.settings,
+            "routing_embeddings_build_mode",
+            "disabled",
+        )
+        self.embedding_build_mode_patcher.start()
+        self.addCleanup(self.embedding_build_mode_patcher.stop)
 
         self.pdf_path = Path(self.temp_dir.name) / "source.pdf"
         self.pdf_path.write_bytes(b"%PDF-1.4\n% PageIndex test pdf\n")
@@ -525,7 +532,7 @@ class TestParseRoutingIndexPipeline(unittest.TestCase):
         assert first_job is not None
         assert second_job is not None
 
-        self.assertEqual(version.routing_asset_schema_version, ROUTING_ASSET_SCHEMA_VERSION)
+        self.assertEqual(version.routing_asset_schema_version, "v1-r2")
         self.assertTrue(version.routing_asset_is_ready)
         self.assertEqual(version.parse_status, "index_ready")
         self.assertEqual(version.routing_index_status, "index_ready")
@@ -540,6 +547,7 @@ class TestParseRoutingIndexPipeline(unittest.TestCase):
         self.assertEqual(routing_nodes[0].breadcrumb, "Manual Label / Root")
 
         second_payload = mock_routing.call_args_list[1].kwargs["data"]
+        self.assertEqual(second_payload["routing_index_version"], "v1-r2")
         self.assertEqual(second_payload["node_count"], 1)
         self.assertEqual(second_payload["build_metadata"]["summary_coverage"]["coverage_state"], "complete")
         self.assertEqual(second_payload["build_metadata"]["summary_coverage"]["missing_summary_count"], 0)

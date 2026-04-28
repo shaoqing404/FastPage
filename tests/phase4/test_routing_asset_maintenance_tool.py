@@ -238,6 +238,7 @@ class TestRoutingAssetMaintenanceTool(unittest.TestCase):
         assert version is not None
         self.assertEqual(version.routing_index_status, "index_ready")
         self.assertEqual(version.routing_index_path, "/tmp/routing_index.json")
+        self.assertEqual(version.routing_index_version, "v1-r2")
         self.assertEqual(len(nodes), 1)
         self.assertEqual(nodes[0].route_summary, "Root summary")
 

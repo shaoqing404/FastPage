@@ -10,7 +10,11 @@ from unittest.mock import MagicMock, patch
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 sys.modules.setdefault("jwt", MagicMock())
 sys.modules.setdefault("litellm", MagicMock())
-sys.modules.setdefault("PyPDF2", MagicMock())
+_pypdf2_mock = sys.modules.get("PyPDF2")
+if _pypdf2_mock is None or not hasattr(_pypdf2_mock, "PdfReader"):
+    _pypdf2_mock = MagicMock()
+    _pypdf2_mock.PdfReader = MagicMock()
+    sys.modules["PyPDF2"] = _pypdf2_mock
 sys.modules.setdefault("pymupdf", MagicMock())
 sys.modules.setdefault("dotenv", MagicMock())
 sys.modules.setdefault("yaml", MagicMock())
@@ -24,7 +28,12 @@ from app.services.pageindex_service import (
     merge_candidates_round_robin,
     snapshot_outline_diagnostics,
 )
+from app.services.section_text_provider import SectionTextProvider, SectionTextResult
 from pageindex.utils import run_reuse_scope
+import pageindex.utils as pageindex_utils
+
+if pageindex_utils.PyPDF2 is None or not hasattr(pageindex_utils.PyPDF2, "PdfReader"):
+    pageindex_utils.PyPDF2 = _pypdf2_mock
 
 
 class _RecordingArtifactBackend:
@@ -201,7 +210,186 @@ class TestPageIndexRetrievalContract(unittest.TestCase):
 
     @patch("pageindex.utils.litellm.token_counter", side_effect=lambda model, text: len(text.split()))
     @patch("pageindex.utils.PyPDF2.PdfReader")
-    def test_build_context_from_citations_reuses_shared_storage_path_within_run(self, mock_pdf_reader, _mock_token_counter):
+    def test_build_context_from_citations_uses_section_text_provider_without_pdf(self, mock_pdf_reader, _mock_token_counter):
+        class FakeProvider:
+            def get_for_citations(self, citations):
+                return [
+                    SectionTextResult(
+                        text="alpha section",
+                        source="es_shadow",
+                        status="ready",
+                        node_id=citation.get("node_id"),
+                        page_start=citation.get("page_start"),
+                        page_end=citation.get("page_end"),
+                        title=citation.get("title"),
+                    )
+                    for citation in citations
+                ]
+
+        blocks = asyncio.run(
+            build_context_from_citations_async(
+                [
+                    {
+                        "citation_id": "cit_1",
+                        "document_id": "doc_1",
+                        "version_id": "ver_1",
+                        "node_id": "n1",
+                        "document_label": "manual-a.pdf",
+                        "page_start": 1,
+                        "page_end": 1,
+                        "title": "Intro",
+                    }
+                ],
+                model="openai/test-model",
+                max_context_pages=None,
+                max_context_tokens=None,
+                section_text_provider=FakeProvider(),
+            )
+        )
+
+        self.assertEqual(mock_pdf_reader.call_count, 0)
+        self.assertEqual(len(blocks), 1)
+        self.assertIn("alpha section", blocks[0])
+
+    @patch("app.services.pageindex_service.get_page_tokens", side_effect=AssertionError("runtime PDF extraction should not run"))
+    def test_build_context_from_citations_missing_text_default_does_not_extract_pdf(self, _mock_get_page_tokens):
+        class FakeProvider:
+            def get_for_citations(self, citations):
+                return [
+                    SectionTextResult(
+                        text=None,
+                        source="missing",
+                        status="missing",
+                        degraded_reason="es_index_missing",
+                    )
+                    for _citation in citations
+                ]
+
+        blocks = asyncio.run(
+            build_context_from_citations_async(
+                [
+                    {
+                        "citation_id": "cit_1",
+                        "document_id": "doc_1",
+                        "version_id": "ver_1",
+                        "node_id": "n1",
+                        "page_start": 1,
+                        "page_end": 1,
+                        "_storage_path": "/tmp/source.pdf",
+                    }
+                ],
+                model="openai/test-model",
+                max_context_pages=None,
+                max_context_tokens=None,
+                section_text_provider=FakeProvider(),
+            )
+        )
+
+        self.assertEqual(blocks, [])
+
+    @patch("app.services.pageindex_service.get_page_tokens", side_effect=AssertionError("runtime PDF extraction should not run"))
+    def test_build_context_from_citations_stale_text_is_not_used(self, _mock_get_page_tokens):
+        class FakeProvider:
+            def get_for_citations(self, citations):
+                return [
+                    SectionTextResult(
+                        text="stale section",
+                        source="stale",
+                        status="stale",
+                        stale=True,
+                        degraded_reason="routing_index_version_mismatch",
+                    )
+                    for _citation in citations
+                ]
+
+        blocks = asyncio.run(
+            build_context_from_citations_async(
+                [
+                    {
+                        "citation_id": "cit_1",
+                        "document_id": "doc_1",
+                        "version_id": "ver_1",
+                        "node_id": "n1",
+                        "page_start": 1,
+                        "page_end": 1,
+                        "_storage_path": "/tmp/source.pdf",
+                    }
+                ],
+                model="openai/test-model",
+                max_context_pages=None,
+                max_context_tokens=None,
+                section_text_provider=FakeProvider(),
+            )
+        )
+
+        self.assertEqual(blocks, [])
+
+    def test_section_text_provider_reads_page_span_from_es_and_marks_stale(self):
+        class FakeIndices:
+            def exists(self, index):
+                return True
+
+        class FakeEs:
+            indices = FakeIndices()
+
+            def search(self, index, body):
+                return {
+                    "hits": {
+                        "hits": [
+                            {
+                                "_id": "doc_1:ver_1:n1",
+                                "_source": {
+                                    "document_id": "doc_1",
+                                    "version_id": "ver_1",
+                                    "node_id": "n1",
+                                    "node_key": "doc_1:ver_1:n1",
+                                    "title": "Intro",
+                                    "page_start": 1,
+                                    "page_end": 2,
+                                    "section_text": "ES section text",
+                                    "section_text_checksum": "checksum-1",
+                                    "routing_index_version": "v1",
+                                },
+                            }
+                        ]
+                    }
+                }
+
+        settings = MagicMock()
+        settings.routing_node_es_enabled = True
+        settings.routing_node_es_index_prefix = "pageindex-node-embeddings"
+        provider = SectionTextProvider(
+            settings_obj=settings,
+            embedding_config={"enabled": True, "provider_type": "test", "model": "m"},
+            es_client=FakeEs(),
+        )
+
+        ready = provider.get_by_page_span(
+            document_id="doc_1",
+            version_id="ver_1",
+            page_start=1,
+            page_end=2,
+            routing_index_version="v1",
+        )
+        stale = provider.get_by_page_span(
+            document_id="doc_1",
+            version_id="ver_1",
+            page_start=1,
+            page_end=2,
+            routing_index_version="v2",
+        )
+
+        self.assertEqual(ready.status, "ready")
+        self.assertEqual(ready.text, "ES section text")
+        self.assertEqual(ready.source, "es_shadow")
+        self.assertTrue(stale.stale)
+        self.assertEqual(stale.status, "stale")
+        self.assertEqual(stale.source, "stale")
+        self.assertEqual(stale.degraded_reason, "routing_index_version_mismatch")
+
+    @patch("pageindex.utils.litellm.token_counter", side_effect=lambda model, text: len(text.split()))
+    @patch("pageindex.utils.PyPDF2.PdfReader")
+    def test_build_context_from_citations_debug_pdf_fallback_reuses_shared_storage_path(self, mock_pdf_reader, _mock_token_counter):
         class FakePage:
             def __init__(self, text: str) -> None:
                 self._text = text
@@ -263,6 +451,7 @@ class TestPageIndexRetrievalContract(unittest.TestCase):
                         model="openai/test-model",
                         max_context_pages=None,
                         max_context_tokens=None,
+                        allow_runtime_pdf_fallback=True,
                     )
                 )
 

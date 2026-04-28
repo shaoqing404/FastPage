@@ -18,6 +18,8 @@ from app.core.principal import Principal
 from app.models import ChatRun, ChatSession, ChatSkill, Document, DocumentVersion, User
 from app.services.document_service import get_document_or_404
 from app.services.knowledge_base_service import resolve_ready_knowledge_base_manuals
+from app.services.node_embedding_service import EsNodeDenseSearchBackend
+from app.services.node_shadow_service import COMPLEX_QUERY_PATTERN, build_node_corpora, enrich_node_corpora_with_content, score_node_corpora
 from app.services.pageindex_service import (
     build_answer_with_marker,
     build_context_from_citations_async,
@@ -32,6 +34,13 @@ from app.services.pageindex_service import (
     snapshot_outline_diagnostics,
 )
 from app.services.provider_service import resolve_embedding_config, resolve_provider_config, resolve_rerank_config, validate_provider_model_selection
+from app.services.routing_consumer_service import (
+    apply_manual_gate_full_retry,
+    build_manual_gate_ref,
+    finalize_manual_gate_shadow_eval,
+    manual_gate_error_result,
+    run_manual_gate,
+)
 from app.services.runtime_observation_service import record_run_observation_event
 from app.services.session_service import _is_default_workspace, append_message, get_session_or_404, list_session_messages
 from app.services.skill_trace_service import SkillTraceRecorder
@@ -43,6 +52,7 @@ from app.services.task_queue_service import (
 )
 from app.services.telemetry_service import (
     embedding_provider_telemetry,
+    manual_gate_telemetry,
     routing_asset_build_telemetry,
     routing_asset_item,
     telemetry_payload,
@@ -72,12 +82,50 @@ OPTION_LABELS = {
     "history_token_budget": "history token budget",
     "top_k": "sections to retrieve",
     "selection_mode": "section selection method",
+    "node_top_k": "fast nodes to retrieve",
     "max_context_pages": "max context pages",
     "max_context_tokens": "max context tokens",
     "temperature": "answer temperature",
 }
 
 RUN_LOG_PROMPT_PREVIEW_CHARS = 4000
+CHAT_MANUAL_GATE_LIVE_DEFERRED_REASON = "chat_live_disabled"
+CHAT_RETRIEVAL_MODE_DEEP_RESEARCH = "deep_research"
+CHAT_RETRIEVAL_MODE_FAST = "fast"
+CHAT_RETRIEVAL_MODES = {CHAT_RETRIEVAL_MODE_DEEP_RESEARCH, CHAT_RETRIEVAL_MODE_FAST}
+FAST_NODE_TOP_K_DEFAULT = 10
+FAST_NODE_TOP_K_MIN = 5
+FAST_NODE_TOP_K_MAX = 20
+
+
+def _chat_manual_gate_allow_live() -> bool:
+    return bool(getattr(settings, "retrieval_manual_gate_chat_live_enabled", False))
+
+
+def _manual_gate_live_pruned(gate_result: dict[str, Any], resolved_manuals: list[dict]) -> bool:
+    diagnostics = gate_result.get("diagnostics")
+    applied_selection = diagnostics.get("applied_selection") if isinstance(diagnostics, dict) else None
+    return (
+        gate_result.get("effective_mode") == "live"
+        and applied_selection in {"select_top1", "select_top2"}
+        and len(gate_result.get("applied_manuals") or []) < len(resolved_manuals)
+    )
+
+
+def _manual_gate_full_retry_reason(
+    gate_result: dict[str, Any],
+    resolved_manuals: list[dict],
+    *,
+    candidate_count: int,
+    context_blocks: list[str] | None,
+) -> tuple[str | None, str | None]:
+    if not _manual_gate_live_pruned(gate_result, resolved_manuals):
+        return None, None
+    if candidate_count <= 0:
+        return "zero_hit_full_retry", "zero_candidates"
+    if not context_blocks or not "\n\n".join(str(block or "") for block in context_blocks).strip():
+        return "empty_context_full_retry", "empty_context"
+    return None, None
 
 
 class ChatRunCancelled(Exception):
@@ -133,6 +181,23 @@ def _validate_execution_options(
         conversation["history_token_budget"] = _coerce_positive_int("history_token_budget", conversation["history_token_budget"])
     if "top_k" in retrieval:
         retrieval["top_k"] = _coerce_positive_int("top_k", retrieval["top_k"])
+    retrieval_mode = str(retrieval.get("retrieval_mode") or CHAT_RETRIEVAL_MODE_DEEP_RESEARCH).strip().lower()
+    if retrieval_mode not in CHAT_RETRIEVAL_MODES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="retrieval mode must be one of: deep_research, fast",
+        )
+    retrieval["retrieval_mode"] = retrieval_mode
+    if "node_top_k" in retrieval and retrieval["node_top_k"] not in (None, ""):
+        node_top_k = _coerce_positive_int("node_top_k", retrieval["node_top_k"])
+        if node_top_k < FAST_NODE_TOP_K_MIN or node_top_k > FAST_NODE_TOP_K_MAX:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"fast nodes to retrieve must be between {FAST_NODE_TOP_K_MIN} and {FAST_NODE_TOP_K_MAX}",
+            )
+        retrieval["node_top_k"] = node_top_k
+    elif retrieval_mode == CHAT_RETRIEVAL_MODE_FAST:
+        retrieval["node_top_k"] = FAST_NODE_TOP_K_DEFAULT
     if "max_context_pages" in retrieval and retrieval["max_context_pages"] not in (None, ""):
         retrieval["max_context_pages"] = _coerce_positive_int("max_context_pages", retrieval["max_context_pages"])
     if "max_context_tokens" in retrieval and retrieval["max_context_tokens"] not in (None, ""):
@@ -515,16 +580,24 @@ async def _record_chat_observation(
     status_value: str | None = None,
     payload: dict | None = None,
 ) -> None:
-    await record_run_observation_event(
-        run_kind="chat",
-        run_id=run.id,
-        tenant_id=run.tenant_id,
-        workspace_id=run.workspace_id,
-        event_type=event_type,
-        step=step,
-        status_value=status_value,
-        payload=payload,
-    )
+    try:
+        await record_run_observation_event(
+            run_kind="chat",
+            run_id=run.id,
+            tenant_id=run.tenant_id,
+            workspace_id=run.workspace_id,
+            event_type=event_type,
+            step=step,
+            status_value=status_value,
+            payload=payload,
+        )
+    except Exception as exc:  # Runtime telemetry must not change the chat run lifecycle.
+        logger.warning(
+            "Failed to record chat observation %s for run %s: %s",
+            event_type,
+            run.id,
+            exc,
+        )
 
 
 async def _record_chat_step_started(run: ChatRun, step: str, payload: dict | None = None) -> None:
@@ -609,6 +682,8 @@ def _citation_from_candidate(candidate: dict, *, knowledge_base_id: str | None, 
         "document_id": candidate.get("document_id"),
         "version_id": candidate.get("version_id"),
         "node_id": candidate.get("node_id"),
+        "node_key": candidate.get("node_key"),
+        "routing_index_version": candidate.get("routing_index_version"),
         "title": candidate.get("title"),
         "page_start": candidate.get("page_start"),
         "page_end": candidate.get("page_end"),
@@ -618,6 +693,171 @@ def _citation_from_candidate(candidate: dict, *, knowledge_base_id: str | None, 
         "rerank_score": candidate.get("rerank_score"),
         "_node": candidate.get("_node"),
         "_storage_path": candidate.get("_storage_path"),
+    }
+
+
+def _fast_active_backend(mode: str, dense_info: dict[str, Any]) -> str:
+    if mode == "hybrid":
+        if dense_info.get("es", {}).get("used") or dense_info.get("dense_source") == "es_shadow":
+            return "es_shadow"
+        if dense_info.get("dense_source") == "artifact_exact_scan":
+            return "lexical_fallback"
+        return str(dense_info.get("dense_source") or "lexical_fallback")
+    return "lexical_fallback"
+
+
+def _fast_boundary_flags(query: str) -> list[str]:
+    return ["complex_query"] if COMPLEX_QUERY_PATTERN.search(query or "") else []
+
+
+def _fast_fallback_recommendation(boundary_flags: list[str], fallback_reason: str | None) -> str | None:
+    if "complex_query" in boundary_flags:
+        return "建议使用 DeepResearch"
+    if fallback_reason:
+        return f"Fallback to lexical search: {fallback_reason}"
+    return None
+
+
+def _manual_lookup_by_identity(manuals: list[dict]) -> dict[tuple[str | None, str | None], dict]:
+    return {
+        (manual.get("document_id"), manual.get("version_id")): manual
+        for manual in manuals
+    }
+
+
+def _citation_from_fast_node(
+    node: dict,
+    *,
+    knowledge_base_id: str | None,
+    index: int,
+    manual_lookup: dict[tuple[str | None, str | None], dict],
+) -> dict:
+    manual = manual_lookup.get((node.get("document_id"), node.get("version_id"))) or {}
+    page_start = node.get("page_start")
+    page_end = node.get("page_end")
+    return {
+        "citation_id": f"cit_{index}",
+        "knowledge_base_id": knowledge_base_id,
+        "document_id": node.get("document_id"),
+        "version_id": node.get("version_id"),
+        "node_id": node.get("node_id"),
+        "node_key": node.get("node_key"),
+        "routing_index_version": node.get("routing_index_version") or manual.get("routing_index_version"),
+        "title": node.get("title"),
+        "page_start": page_start,
+        "page_end": page_end,
+        "source": node.get("corpus_source") or node.get("inventory_source"),
+        "snippet_id": f"{node.get('document_id')}:{node.get('version_id')}:{node.get('node_id')}",
+        "document_label": node.get("document_label") or manual.get("document_label"),
+        "version_label": node.get("version_label") or manual.get("version_label"),
+        "score": node.get("hybrid_score"),
+        "lexical_score": node.get("lexical_score"),
+        "dense_score": node.get("dense_score"),
+        "route_summary": node.get("route_summary"),
+        "_node": {
+            "node_id": node.get("node_id"),
+            "title": node.get("title"),
+            "start_index": page_start,
+            "end_index": page_end,
+        },
+        "_storage_path": node.get("_storage_path") or manual.get("storage_path"),
+    }
+
+
+def _run_fast_node_retrieval(
+    db: Session,
+    *,
+    query: str,
+    resolved_manuals: list[dict],
+    knowledge_base_id: str | None,
+    node_top_k: int,
+    embedding_mode: str | None,
+    provider_config: dict,
+    embedding_config: dict,
+    settings_obj,
+) -> dict[str, Any]:
+    started = time.perf_counter()
+    boundary_flags = _fast_boundary_flags(query)
+    node_corpora = enrich_node_corpora_with_content(
+        build_node_corpora(db, resolved_manuals),
+        embedding_config=embedding_config,
+        settings_obj=settings_obj,
+        allow_runtime_pdf_fallback=False,
+    )
+
+    dense_scores = None
+    dense_search_metadata = None
+    try:
+        dense_result = EsNodeDenseSearchBackend().search(
+            query=query,
+            node_corpora=node_corpora,
+            embedding_mode=embedding_mode,
+            provider_config=provider_config,
+            embedding_config=embedding_config,
+            settings_obj=settings_obj,
+        )
+        dense_scores = dense_result.dense_scores or None
+        dense_search_metadata = dense_result.metadata()
+    except Exception as exc:
+        dense_search_metadata = {
+            "requested_dense_source": "es_shadow",
+            "dense_source": "sparse",
+            "fallback_reason": f"dense_search_error:{type(exc).__name__}",
+            "es": {"used": False, "fallback_reason": f"dense_search_error:{type(exc).__name__}"},
+        }
+
+    score_result = score_node_corpora(
+        question=query,
+        node_corpora=node_corpora,
+        top_k=node_top_k,
+        candidate_top_k=node_top_k * 2,
+        embedding_mode=embedding_mode,
+        provider_config=provider_config,
+        embedding_config=embedding_config,
+        dense_scores=dense_scores,
+        dense_search_metadata=dense_search_metadata,
+        settings_obj=settings_obj,
+    )
+    dense_info = dict(score_result.get("dense") or {})
+    mode = str(dense_info.get("resolved_mode") or "sparse_only")
+    fallback_reason = dense_info.get("fallback_reason")
+    selected_nodes = [dict(node) for node in score_result.get("shortlist") or []]
+    corpus_summary = dict(score_result.get("corpus_summary") or {})
+    manual_lookup = _manual_lookup_by_identity(resolved_manuals)
+    citations_with_internal = [
+        _citation_from_fast_node(
+            node,
+            knowledge_base_id=knowledge_base_id,
+            index=index,
+            manual_lookup=manual_lookup,
+        )
+        for index, node in enumerate(selected_nodes, start=1)
+    ]
+    hit_documents = {
+        (node.get("document_id"), node.get("version_id"))
+        for node in selected_nodes
+        if node.get("document_id") and node.get("version_id")
+    }
+    node_search_latency_ms = int((time.perf_counter() - started) * 1000)
+    return {
+        "mode": mode,
+        "node_top_k": node_top_k,
+        "node_search_latency_ms": node_search_latency_ms,
+        "node_shadow_latency_ms": int(score_result.get("node_shadow_latency_ms") or 0),
+        "selected_nodes": selected_nodes,
+        "selected_node_count": len(citations_with_internal),
+        "citations_with_internal": citations_with_internal,
+        "boundary_flags": boundary_flags,
+        "fallback_recommendation": _fast_fallback_recommendation(boundary_flags, fallback_reason),
+        "active_backend": _fast_active_backend(mode, dense_info),
+        "fallback_reason": fallback_reason,
+        "requested_dense_source": dense_info.get("requested_dense_source"),
+        "dense_source": dense_info.get("dense_source"),
+        "dense": dense_info,
+        "corpus_summary": corpus_summary,
+        "content_backed_node_count": int(corpus_summary.get("section_text_node_count") or 0),
+        "documents_considered": len(resolved_manuals),
+        "documents_with_hits": len(hit_documents),
     }
 
 
@@ -684,6 +924,198 @@ def serialize_run(run: ChatRun) -> dict:
         "citations": _json_loads(run.citations_json, []),
         "metrics": _json_loads(run.metrics_json, {}),
         "last_error": exposed_error,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+    }
+
+
+def _observation_text_summary(text: str | None, *, max_chars: int = 2000) -> dict[str, Any]:
+    value = str(text or "")
+    truncated = len(value) > max_chars
+    return {
+        "text": value[:max_chars].rstrip() + ("\n...[truncated]" if truncated else ""),
+        "text_length": len(value),
+        "text_truncated": truncated,
+    }
+
+
+def _observation_node_identity(record: dict[str, Any]) -> dict[str, Any]:
+    identity_keys = (
+        "citation_id",
+        "snippet_id",
+        "document_id",
+        "version_id",
+        "document_label",
+        "version_label",
+        "title",
+        "node_id",
+        "page_start",
+        "page_end",
+        "source",
+        "score",
+        "lexical_score",
+        "dense_score",
+        "hybrid_score",
+    )
+    return {key: record.get(key) for key in identity_keys if record.get(key) is not None}
+
+
+def _observation_records_preview(records: list[dict[str, Any]], *, limit: int = 10) -> dict[str, Any]:
+    return {
+        "count": len(records),
+        "items": [_observation_node_identity(record) for record in records[:limit] if isinstance(record, dict)],
+        "preview_limit": limit,
+        "truncated": len(records) > limit,
+    }
+
+
+def _observation_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "retrieval_mode",
+        "node_top_k",
+        "selected_node_count",
+        "selected_section_count",
+        "citation_count",
+        "documents_considered",
+        "documents_with_hits",
+        "active_backend",
+        "requested_dense_source",
+        "dense_source",
+        "fallback_reason",
+        "queue_ms",
+        "retrieve_ms",
+        "node_search_latency_ms",
+        "answer_ms",
+        "total_ms",
+        "wall_clock_ms",
+        "ttft_ms",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+    )
+    return {key: metrics.get(key) for key in keys if metrics.get(key) is not None}
+
+
+def _observation_retrieval_summary(run: ChatRun, metrics: dict[str, Any]) -> dict[str, Any]:
+    context = _json_loads(run.execution_context_json, {})
+    if not isinstance(context, dict):
+        context = {}
+    retrieval = context.get("retrieval")
+    summary: dict[str, Any] = {}
+    if isinstance(retrieval, dict):
+        for key in (
+            "retrieval_mode",
+            "query",
+            "rewritten_query",
+            "rewrite_applied",
+            "node_top_k",
+            "selected_node_count",
+            "active_backend",
+            "requested_dense_source",
+            "dense_source",
+            "fallback_reason",
+            "boundary_flags",
+            "documents_considered",
+            "documents_with_hits",
+        ):
+            if retrieval.get(key) is not None:
+                summary[key] = retrieval.get(key)
+    for key in (
+        "retrieval_mode",
+        "node_top_k",
+        "selected_node_count",
+        "active_backend",
+        "requested_dense_source",
+        "dense_source",
+        "fallback_reason",
+        "documents_considered",
+        "documents_with_hits",
+    ):
+        if key not in summary and metrics.get(key) is not None:
+            summary[key] = metrics.get(key)
+    return summary
+
+
+def _observation_selected_nodes_from_context(run: ChatRun) -> list[dict[str, Any]]:
+    context = _json_loads(run.execution_context_json, {})
+    if not isinstance(context, dict):
+        return []
+    retrieval = context.get("retrieval")
+    if not isinstance(retrieval, dict):
+        return []
+    diagnostics = retrieval.get("diagnostics")
+    fast = diagnostics.get("fast") if isinstance(diagnostics, dict) else None
+    selected_nodes = fast.get("selected_nodes") if isinstance(fast, dict) else None
+    if not isinstance(selected_nodes, list):
+        return []
+    return [node for node in selected_nodes if isinstance(node, dict)]
+
+
+def _observation_pageindex_nodes(
+    *,
+    selected_nodes: list[dict[str, Any]],
+    selected_sections: list[dict[str, Any]],
+    citations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    records: list[dict[str, Any]] = []
+    records.extend(selected_nodes)
+    records.extend(selected_sections)
+    records.extend(citations)
+
+    seen: set[tuple[Any, ...]] = set()
+    identities: list[dict[str, Any]] = []
+    for record in records:
+        identity = _observation_node_identity(record)
+        if not identity:
+            continue
+        key = (
+            identity.get("document_id"),
+            identity.get("version_id"),
+            identity.get("node_id"),
+            identity.get("title"),
+            identity.get("page_start"),
+            identity.get("page_end"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        identities.append(identity)
+    return _observation_records_preview(identities)
+
+
+def serialize_run_observation_payload(run: ChatRun) -> dict[str, Any]:
+    selected_sections = _json_loads(run.selected_sections_json, [])
+    citations = _json_loads(run.citations_json, [])
+    selected_sections_list = [item for item in selected_sections if isinstance(item, dict)] if isinstance(selected_sections, list) else []
+    citations_list = [item for item in citations if isinstance(item, dict)] if isinstance(citations, list) else []
+    metrics = _json_loads(run.metrics_json, {})
+    metrics_summary = _observation_metrics(metrics if isinstance(metrics, dict) else {})
+    retrieval_summary = _observation_retrieval_summary(run, metrics_summary)
+    selected_nodes = _observation_selected_nodes_from_context(run)
+    return {
+        "schema_version": "chat_run_completed_observation_v1",
+        "id": run.id,
+        "session_id": run.session_id,
+        "document_id": run.document_id,
+        "version_id": run.version_id,
+        "skill_id": run.skill_id,
+        "provider_id": run.provider_id,
+        "model": run.model,
+        "status": run.status,
+        "cancel_requested": bool(run.cancel_requested),
+        "cancel_reason": run.cancel_reason,
+        "question": _observation_text_summary(run.question, max_chars=1200),
+        "answer": _observation_text_summary(run.answer_text or run.answer, max_chars=4000),
+        "retrieval": retrieval_summary,
+        "pageindex_nodes": _observation_pageindex_nodes(
+            selected_nodes=selected_nodes,
+            selected_sections=selected_sections_list,
+            citations=citations_list,
+        ),
+        "citations": _observation_records_preview(citations_list),
+        "metrics": metrics_summary,
+        "last_error": _humanize_run_error(run.last_error),
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
         "created_at": run.created_at.isoformat() if run.created_at else None,
@@ -1086,7 +1518,12 @@ async def _finalize_run(
     if publish_terminal_events:
         await _publish_chat_event(run.id, "status", {"status": run.status})
         if run.status == "completed":
-            await _record_chat_observation(run, event_type="run_completed", status_value=run.status, payload=serialize_run(run))
+            await _record_chat_observation(
+                run,
+                event_type="run_completed",
+                status_value=run.status,
+                payload=serialize_run_observation_payload(run),
+            )
             await _publish_chat_event(run.id, "run_completed", serialize_run(run))
         elif run.status == "failed":
             exposed_error = _humanize_run_error(last_error or "run failed")
@@ -1200,6 +1637,8 @@ async def run_chat_run(run_id: str) -> None:
             subject="Chat run model",
         )
         embedding_mode = retrieval_config.get("embedding_mode")
+        if not embedding_mode and retrieval_config.get("retrieval_mode") == CHAT_RETRIEVAL_MODE_FAST:
+            embedding_mode = "system"
         embedding_config = resolve_embedding_config(
             provider_config=provider_config,
             embedding_mode=embedding_mode,
@@ -1320,6 +1759,10 @@ async def run_chat_run(run_id: str) -> None:
             "api_key": provider_config["api_key"],
             "extra_headers": provider_config.get("extra_headers") or {},
         }
+        retrieval_mode = str(
+            retrieval_options.pop("retrieval_mode", retrieval_config.get("retrieval_mode") or CHAT_RETRIEVAL_MODE_DEEP_RESEARCH)
+        ).strip().lower()
+        node_top_k = int(retrieval_options.pop("node_top_k", FAST_NODE_TOP_K_DEFAULT) or FAST_NODE_TOP_K_DEFAULT)
         rerank_mode = str(retrieval_options.get("rerank_mode") or "auto")
         retrieve_started = time.perf_counter()
         top_k = int(retrieval_options.pop("top_k", 5) or 5)
@@ -1332,6 +1775,8 @@ async def run_chat_run(run_id: str) -> None:
             run,
             "retrieval_started",
             top_k=top_k,
+            retrieval_mode=retrieval_mode,
+            node_top_k=node_top_k if retrieval_mode == CHAT_RETRIEVAL_MODE_FAST else None,
             candidate_top_k=candidate_top_k,
             selection_mode=selection_mode,
             max_context_pages=max_context_pages,
@@ -1343,6 +1788,221 @@ async def run_chat_run(run_id: str) -> None:
             if conversation_config.get("include_history", True) and history_messages
             else ""
         )
+
+        async def stream_final_answer_and_persist(
+            *,
+            citations_with_internal: list[dict],
+            context: str,
+            execution_context: dict,
+            retrieve_ms: int,
+            manual_count: int,
+            documents_considered: int,
+            documents_with_hits: int,
+            metrics_extra: dict[str, Any] | None = None,
+        ) -> ChatRun:
+            nonlocal run
+            run.execution_context_json = json.dumps(execution_context, ensure_ascii=False)
+            run.status = "answering"
+            run.heartbeat_at = datetime.utcnow()
+            db.commit()
+            db.refresh(run)
+            run = _raise_if_cancel_requested(db, run)
+            await _publish_chat_event(run.id, "context", {"execution_context": execution_context})
+            await _publish_chat_event(run.id, "status", {"status": "answering"})
+            await _record_chat_observation(
+                run,
+                event_type="run_status",
+                status_value=run.status,
+                payload={"execution_context": execution_context},
+            )
+
+            answer_prompt = build_generation_prompt(
+                run.question,
+                [citation["_node"] for citation in citations_with_internal if citation.get("_node")],
+                context,
+                system_prompt=request_config.get("system_prompt") or (skill.system_prompt if skill else None),
+                history_context=history_context or None,
+            )
+            completion_kwargs = {
+                "model": resolved_model.removeprefix("litellm/"),
+                "messages": [{"role": "user", "content": answer_prompt}],
+                "temperature": generation_options.get("temperature", 0),
+                "stream": True,
+                **generation_options,
+            }
+            stream_options = dict(completion_kwargs.get("stream_options") or {})
+            stream_options["include_usage"] = True
+            completion_kwargs["stream_options"] = stream_options
+            await _record_chat_step_started(run, "final_answer", {"model": completion_kwargs["model"]})
+            answer_attempt = 0
+            answer_parts: list[str] = []
+            seq = 0
+            finish_reason = None
+            streamed_usage = None
+            answer_started = time.perf_counter()
+            while True:
+                answer_attempt += 1
+                answer_request_event = {
+                    "type": "llm_completion",
+                    "label": "final_answer_stream",
+                    "attempt": answer_attempt,
+                    "phase": "request",
+                    "request": {
+                        "model": completion_kwargs["model"],
+                        "messages": completion_kwargs["messages"],
+                        "temperature": completion_kwargs.get("temperature"),
+                        "stream": True,
+                    },
+                }
+                _log_chat_run_llm_event(run, answer_request_event)
+                try:
+                    response = litellm.completion(**completion_kwargs)
+                    for chunk in response:
+                        run = _touch_run_heartbeat(db, run)
+                        run = _raise_if_cancel_requested(db, run)
+                        chunk_usage = _extract_usage_from_stream_chunk(chunk)
+                        if chunk_usage:
+                            streamed_usage = chunk_usage
+                        choices = getattr(chunk, "choices", None)
+                        if not choices:
+                            continue
+                        choice = choices[0]
+                        finish_reason = getattr(choice, "finish_reason", None) or finish_reason
+                        delta = ""
+                        if getattr(choice, "delta", None) is not None:
+                            delta = choice.delta.content or ""
+                        if not delta:
+                            continue
+                        answer_parts.append(delta)
+                        seq += 1
+                        await _publish_chat_event(run.id, "answer_delta", {"delta": delta, "seq": seq})
+                        await _record_chat_observation(
+                            run,
+                            event_type="answer_delta",
+                            step="final_answer",
+                            status_value=run.status,
+                            payload={"seq": seq, "delta": delta},
+                        )
+                    break
+                except Exception as exc:
+                    answer_error_event = {
+                        "type": "llm_completion",
+                        "label": "final_answer_stream",
+                        "attempt": answer_attempt,
+                        "phase": "error",
+                        "ok": False,
+                        "duration_ms": int((time.perf_counter() - answer_started) * 1000),
+                        "request": answer_request_event["request"],
+                        "error": str(exc),
+                    }
+                    if trace_recorder:
+                        trace_recorder.append_llm_call(answer_error_event)
+                    _log_chat_run_llm_event(run, answer_error_event)
+                    if answer_parts or answer_attempt >= 2:
+                        raise
+                    await _record_chat_observation(
+                        run,
+                        event_type="step_failed",
+                        step="final_answer",
+                        status_value=run.status,
+                        payload={"attempt": answer_attempt, "retrying": True, "error": str(exc)},
+                    )
+                    await asyncio.sleep(settings.run_step_retry_base_ms / 1000)
+
+            answer_text = "".join(answer_parts).strip()
+            answer_ms = int((time.perf_counter() - answer_started) * 1000)
+            citations = [
+                {key: value for key, value in citation.items() if not key.startswith("_")}
+                for citation in citations_with_internal
+            ]
+            answer_with_marker = build_answer_with_marker(answer_text, citations)
+            if streamed_usage:
+                usage_totals["successful_llm_calls"] += 1
+                _accumulate_usage_totals(usage_totals, streamed_usage)
+                stream_usage_source = "provider_stream"
+            else:
+                prompt_tokens = count_tokens(answer_prompt, model=resolved_model)
+                completion_tokens = count_tokens(answer_text, model=resolved_model)
+                fallback_usage = {
+                    "prompt_tokens": prompt_tokens + history_info["history_token_estimate"],
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + history_info["history_token_estimate"] + completion_tokens,
+                }
+                usage_totals["successful_llm_calls"] += 1
+                _accumulate_usage_totals(usage_totals, fallback_usage)
+                stream_usage_source = "estimated_fallback"
+            metrics = {
+                "queue_ms": queue_ms,
+                "retrieve_ms": retrieve_ms,
+                "answer_ms": answer_ms,
+                "total_ms": retrieve_ms + answer_ms,
+                "wall_clock_ms": queue_ms + retrieve_ms + answer_ms,
+                "input_tokens": usage_totals["input_tokens"],
+                "output_tokens": usage_totals["output_tokens"],
+                "total_tokens": usage_totals["total_tokens"],
+                "manual_count": manual_count,
+                "selected_section_count": len(citations),
+                "successful_llm_calls": usage_totals["successful_llm_calls"],
+                "citations_count": len(citations),
+                "stream_usage_source": stream_usage_source,
+                "documents_considered": documents_considered,
+                "documents_with_hits": documents_with_hits,
+            }
+            if metrics_extra:
+                metrics.update(metrics_extra)
+            serialized_sections = citations
+            run.answer = answer_text
+            run.answer_text = answer_text
+            run.answer_with_marker = answer_with_marker
+            run.selected_sections_json = json.dumps(serialized_sections, ensure_ascii=False)
+            run.citations_json = json.dumps(citations, ensure_ascii=False)
+            run.metrics_json = json.dumps(metrics, ensure_ascii=False)
+            run.last_error = None
+            run.heartbeat_at = datetime.utcnow()
+            db.commit()
+            db.refresh(run)
+
+            if session:
+                append_message(
+                    db,
+                    session_id=session.id,
+                    tenant_id=run.tenant_id,
+                    user_id=run.user_id,
+                    role="assistant",
+                    content=answer_text,
+                    run_id=run.id,
+                )
+            if trace_recorder:
+                trace_recorder.append_llm_call(
+                    {
+                        "type": "llm_completion",
+                        "label": "final_answer_stream",
+                        "phase": "response",
+                        "ok": True,
+                        "request": {
+                            "model": completion_kwargs["model"],
+                            "messages": completion_kwargs["messages"],
+                            "temperature": completion_kwargs.get("temperature"),
+                            "stream": True,
+                        },
+                        "duration_ms": answer_ms,
+                        "response_text": answer_text,
+                        "finish_reason": finish_reason,
+                    }
+                )
+                trace_recorder.finalize(
+                    status="completed",
+                    answer=answer_text,
+                    metrics=metrics,
+                    selected_sections=serialized_sections,
+                    execution_context=execution_context,
+                )
+            _log_chat_run_stage(run, "completed", metrics=metrics)
+            await _record_chat_step_completed(run, "final_answer", {"answer_ms": answer_ms, "answer_chars": len(answer_text)})
+            await _record_chat_step_started(run, "persist_result")
+            await _record_chat_step_completed(run, "persist_result", {"citations_count": len(citations)})
+            return run
+
         retrieval_query = run.question
         rewritten_query = None
         rewrite_applied = False
@@ -1407,14 +2067,22 @@ async def run_chat_run(run_id: str) -> None:
                 raise RuntimeError("Run manual target is missing")
             if not target_version.parsed_structure_path or target_version.parse_status != "index_ready":
                 raise RuntimeError("Document is not ready for querying yet")
+            manual_ref = build_manual_gate_ref(
+                document_id=target_document.id,
+                version_id=target_version.id,
+                document_label=manual_target.get("document_label") or target_document.display_name,
+                version_label=manual_target.get("version_label") or f"v{target_version.version_no}",
+                display_name=target_document.display_name,
+                source_filename=target_document.source_filename,
+                storage_path=manual_target.get("storage_path") or target_version.storage_path,
+                parsed_structure_path=manual_target.get("parsed_structure_path") or target_version.parsed_structure_path,
+                routing_index_status=getattr(target_version, "routing_index_status", None),
+                routing_index_path=getattr(target_version, "routing_index_path", None),
+                routing_index_version=getattr(target_version, "routing_asset_schema_version", None),
+            )
             resolved_manuals.append(
                 {
-                    "document_id": target_document.id,
-                    "version_id": target_version.id,
-                    "document_label": manual_target.get("document_label") or target_document.display_name,
-                    "version_label": manual_target.get("version_label") or f"v{target_version.version_no}",
-                    "storage_path": manual_target.get("storage_path") or target_version.storage_path,
-                    "parsed_structure_path": manual_target.get("parsed_structure_path") or target_version.parsed_structure_path,
+                    **manual_ref,
                     "routing_asset": _routing_asset_item_for_version(target_document.id, target_version),
                 }
             )
@@ -1439,196 +2107,532 @@ async def run_chat_run(run_id: str) -> None:
             },
         )
 
-        await _record_chat_step_started(run, "load_structures")
-        loaded_manuals = resolved_manuals
-        await _record_chat_step_completed(run, "load_structures", {"manual_count": len(loaded_manuals), "lazy_loaded": True})
-
-        await _record_chat_step_started(
-            run,
-            "retrieve_candidates",
-            {"manual_count": len(loaded_manuals), "candidate_top_k": candidate_top_k},
-        )
-        semaphore = asyncio.Semaphore(max(1, min(settings.retrieval_max_concurrency, len(loaded_manuals))))
-
-        async def retrieve_manual_candidates(manual: dict) -> list[dict]:
-            diagnostics: dict[str, object] = {}
-
-            async def operation():
-                async with semaphore:
-                    structure = load_structure_file(manual["parsed_structure_path"])
-                    candidates = await retrieve_candidates_for_manual_async(
-                        structure,
-                        retrieval_query,
-                        resolved_model,
-                        request_options=retrieval_options,
-                        trace_hook=run_trace_hook,
-                        stats_hook=stats_hook,
-                        candidate_top_k=candidate_top_k,
-                        selection_mode=selection_mode,
-                        diagnostics=diagnostics,
-                    )
-                    del structure
-                    return candidates
-
-            candidates = await _retry_async(
-                "retrieve_candidates",
-                operation,
-                retries=settings.run_step_max_retries,
-                base_delay_ms=settings.run_step_retry_base_ms,
-                run=run,
+        if retrieval_mode == CHAT_RETRIEVAL_MODE_FAST:
+            await _record_chat_step_started(
+                run,
+                "fast_retrieve_nodes",
+                {
+                    "manual_count": len(resolved_manuals),
+                    "node_top_k": node_top_k,
+                    "embedding_mode": embedding_mode,
+                },
             )
+            fast_result = _run_fast_node_retrieval(
+                db,
+                query=retrieval_query,
+                resolved_manuals=resolved_manuals,
+                knowledge_base_id=knowledge_base_id,
+                node_top_k=node_top_k,
+                embedding_mode=embedding_mode,
+                provider_config=provider_config,
+                embedding_config=embedding_config,
+                settings_obj=settings,
+            )
+            if int(fast_result.get("content_backed_node_count") or 0) <= 0:
+                raise RuntimeError("Fast retrieval requires content-backed section text; no section excerpts were available")
             retrieval_warnings.extend(
                 warning
-                for warning in diagnostics.get("warnings", [])
+                for warning in [
+                    fast_result.get("fallback_recommendation"),
+                ]
                 if isinstance(warning, str) and warning not in retrieval_warnings
             )
-            outline_diagnostics["manuals"].append(
-                snapshot_outline_diagnostics(
-                    manual,
-                    diagnostics,
-                    candidate_count=len(candidates),
-                )
-            )
-            for warning in diagnostics.get("warnings", []):
-                if isinstance(warning, str) and warning not in outline_diagnostics["warnings"]:
-                    outline_diagnostics["warnings"].append(warning)
-            return [
+            await _record_chat_step_completed(
+                run,
+                "fast_retrieve_nodes",
                 {
-                    "candidate_id": f"{manual['document_id']}:{manual['version_id']}:{index}",
+                    "manual_count": len(resolved_manuals),
+                    "node_top_k": node_top_k,
+                    "selected_node_count": fast_result["selected_node_count"],
+                    "content_backed_node_count": fast_result.get("content_backed_node_count"),
+                    "active_backend": fast_result.get("active_backend"),
+                    "requested_dense_source": fast_result.get("requested_dense_source"),
+                    "dense_source": fast_result.get("dense_source"),
+                    "fallback_reason": fast_result.get("fallback_reason"),
+                    "boundary_flags": fast_result.get("boundary_flags"),
+                    "node_search_latency_ms": fast_result.get("node_search_latency_ms"),
+                    "documents_considered": fast_result.get("documents_considered"),
+                    "documents_with_hits": fast_result.get("documents_with_hits"),
+                },
+            )
+            run = _touch_run_heartbeat(db, run)
+            run = _raise_if_cancel_requested(db, run)
+            await _record_chat_step_started(
+                run,
+                "build_context",
+                {"retrieval_mode": CHAT_RETRIEVAL_MODE_FAST, "citation_count": len(fast_result["citations_with_internal"])},
+            )
+            context_blocks = await build_context_from_citations_async(
+                fast_result["citations_with_internal"],
+                model=resolved_model,
+                max_context_pages=int(max_context_pages) if max_context_pages is not None else None,
+                max_context_tokens=int(max_context_tokens) if max_context_tokens is not None else None,
+                embedding_config=embedding_config,
+                settings_obj=settings,
+                allow_runtime_pdf_fallback=bool(
+                    getattr(settings, "deepresearch_runtime_pdf_fallback_enabled", False)
+                ),
+            )
+            context = "\n\n".join(context_blocks)
+            if not context.strip():
+                raise RuntimeError("Fast answer requires content-backed page excerpts; no answer context was available")
+            await _record_chat_step_completed(
+                run,
+                "build_context",
+                {
+                    "retrieval_mode": CHAT_RETRIEVAL_MODE_FAST,
+                    "context_block_count": len(context_blocks),
+                    "context_chars": len(context),
+                },
+            )
+            retrieve_ms = int((time.perf_counter() - retrieve_started) * 1000)
+            _log_chat_run_stage(
+                run,
+                "fast_retrieval_completed",
+                retrieve_ms=retrieve_ms,
+                retrieval_query=retrieval_query,
+                rewrite_applied=rewrite_applied,
+                selected_node_count=fast_result["selected_node_count"],
+                active_backend=fast_result.get("active_backend"),
+                warnings=retrieval_warnings,
+            )
+            retrieval_info = {
+                "retrieval_mode": CHAT_RETRIEVAL_MODE_FAST,
+                "query": retrieval_query,
+                "rewritten_query": rewritten_query,
+                "rewrite_applied": rewrite_applied,
+                "query_rewrite_strategy": rewrite_strategy,
+                "node_top_k": node_top_k,
+                "selected_node_count": fast_result["selected_node_count"],
+                "content_backed_node_count": fast_result.get("content_backed_node_count"),
+                "active_backend": fast_result.get("active_backend"),
+                "requested_dense_source": fast_result.get("requested_dense_source"),
+                "dense_source": fast_result.get("dense_source"),
+                "fallback_reason": fast_result.get("fallback_reason"),
+                "fallback_recommendation": fast_result.get("fallback_recommendation"),
+                "boundary_flags": fast_result.get("boundary_flags") or [],
+                "node_search_latency_ms": fast_result.get("node_search_latency_ms"),
+                "node_shadow_latency_ms": fast_result.get("node_shadow_latency_ms"),
+                "max_context_pages": int(max_context_pages) if max_context_pages is not None else None,
+                "max_context_tokens": int(max_context_tokens) if max_context_tokens is not None else None,
+                "warnings": retrieval_warnings,
+                "documents_considered": fast_result.get("documents_considered"),
+                "documents_with_hits": fast_result.get("documents_with_hits"),
+                "history_handling": {
+                    "query_rewrite_with_history": bool(conversation_config.get("query_rewrite_with_history", True)),
+                    "answer_prompt_history_included": bool(history_context),
+                    "note": "fast mode skips outline evidence expansion and uses top node retrieval directly",
+                },
+                "diagnostics": {
+                    "fast": {
+                        "mode": fast_result.get("mode"),
+                        "dense": fast_result.get("dense"),
+                        "corpus_summary": fast_result.get("corpus_summary"),
+                        "selected_nodes": [
+                            {
+                                "document_id": node.get("document_id"),
+                                "version_id": node.get("version_id"),
+                                "node_id": node.get("node_id"),
+                                "title": node.get("title"),
+                                "page_start": node.get("page_start"),
+                                "page_end": node.get("page_end"),
+                                "score": node.get("hybrid_score"),
+                                "source": node.get("corpus_source") or node.get("inventory_source"),
+                            }
+                            for node in fast_result.get("selected_nodes") or []
+                        ],
+                    }
+                },
+            }
+            generation_info = {
+                "temperature": generation_options.get("temperature"),
+            }
+            execution_context = _build_execution_context(
+                provider_config=provider_config,
+                resolved_model=resolved_model,
+                conversation_config=conversation_config,
+                history_info=history_info,
+                retrieval_info=retrieval_info,
+                generation_info=generation_info,
+            )
+            execution_context["telemetry"] = telemetry_payload(
+                embedding_provider=embedding_telemetry,
+                routing_asset_build=routing_asset_telemetry,
+            )
+            execution_context["target"] = {
+                "requested_mode": "knowledge_base" if knowledge_base_id else "single_document",
+                "resolved_mode": "multi_manual_federated" if len(resolved_manuals) > 1 else "single_manual",
+                "knowledge_base_id": knowledge_base_id,
+            }
+            execution_context["resolved_manuals"] = [
+                {
                     "document_id": manual["document_id"],
                     "version_id": manual["version_id"],
-                    "document_label": manual["document_label"],
+                    "label": manual["document_label"],
                     "version_label": manual["version_label"],
-                    "title": candidate.get("title"),
-                    "node_id": candidate.get("node_id"),
-                    "page_start": candidate.get("start_index"),
-                    "page_end": candidate.get("end_index"),
-                    "_node": candidate.get("node"),
-                    "_storage_path": manual["storage_path"],
                 }
-                for index, candidate in enumerate(candidates, start=1)
+                for manual in resolved_manuals
             ]
+            execution_context["merge"] = {
+                "strategy": "fast_node_topk",
+                "candidate_count": len(fast_result.get("selected_nodes") or []),
+                "selected_citation_count": len(fast_result["citations_with_internal"]),
+                "fallback_mode": fast_result.get("fallback_reason"),
+            }
+            run = await stream_final_answer_and_persist(
+                citations_with_internal=fast_result["citations_with_internal"],
+                context=context,
+                execution_context=execution_context,
+                retrieve_ms=retrieve_ms,
+                manual_count=len(resolved_manuals),
+                documents_considered=int(fast_result.get("documents_considered") or len(resolved_manuals)),
+                documents_with_hits=int(fast_result.get("documents_with_hits") or 0),
+                metrics_extra={
+                    "retrieval_mode": CHAT_RETRIEVAL_MODE_FAST,
+                    "node_top_k": node_top_k,
+                    "selected_node_count": fast_result["selected_node_count"],
+                    "content_backed_node_count": fast_result.get("content_backed_node_count"),
+                    "active_backend": fast_result.get("active_backend"),
+                    "requested_dense_source": fast_result.get("requested_dense_source"),
+                    "dense_source": fast_result.get("dense_source"),
+                    "fallback_reason": fast_result.get("fallback_reason"),
+                    "boundary_flags": fast_result.get("boundary_flags") or [],
+                    "node_search_latency_ms": fast_result.get("node_search_latency_ms"),
+                },
+            )
+            await _finalize_run(db, run=run, status_value="completed")
+            return
 
-        per_manual_candidates = await asyncio.gather(*(retrieve_manual_candidates(manual) for manual in loaded_manuals))
-        candidate_sections = [candidate for candidates in per_manual_candidates for candidate in candidates]
-        documents_with_hits = sum(1 for candidates in per_manual_candidates if candidates)
-        outline_diagnostics["manual_count"] = len(loaded_manuals)
-        outline_diagnostics["documents_considered"] = len(loaded_manuals)
-        outline_diagnostics["documents_with_hits"] = documents_with_hits
-        outline_diagnostics["selection_strategy"] = (
-            outline_diagnostics["manuals"][0].get("selection_strategy")
-            if outline_diagnostics["manuals"]
-            else None
-        )
-        outline_diagnostics["json_repair_applied"] = any(
-            bool(entry.get("json_repair_applied")) for entry in outline_diagnostics["manuals"]
-        )
-        outline_diagnostics["json_repair_succeeded"] = any(
-            bool(entry.get("json_repair_succeeded")) for entry in outline_diagnostics["manuals"]
-        )
+        await _record_chat_step_started(run, "manual_gate", {"manual_count": len(resolved_manuals)})
+        try:
+            manual_gate_result = run_manual_gate(
+                db,
+                question=retrieval_query,
+                manual_refs=resolved_manuals,
+                requested_mode=retrieval_config.get("manual_gate_mode"),
+                default_mode=settings.retrieval_manual_gate_mode,
+                allow_live=_chat_manual_gate_allow_live(),
+                live_deferred_reason=CHAT_MANUAL_GATE_LIVE_DEFERRED_REASON,
+            )
+        except Exception as exc:
+            logger.warning("Chat manual gate shadow failed for run %s: %s", run.id, exc)
+            manual_gate_result = manual_gate_error_result(
+                manual_refs=resolved_manuals,
+                requested_mode=retrieval_config.get("manual_gate_mode"),
+                default_mode=settings.retrieval_manual_gate_mode,
+                allow_live=_chat_manual_gate_allow_live(),
+                error=exc,
+                live_deferred_reason=CHAT_MANUAL_GATE_LIVE_DEFERRED_REASON,
+            )
+        manual_gate_step_telemetry = manual_gate_telemetry(gate_result=manual_gate_result)
         await _record_chat_step_completed(
             run,
-            "retrieve_candidates",
+            "manual_gate",
             {
-                "candidate_count": len(candidate_sections),
-                "documents_considered": len(loaded_manuals),
-                "documents_with_hits": documents_with_hits,
-                "outline_diagnostics": outline_diagnostics,
+                "manual_count": len(resolved_manuals),
+                "selected_manual_count": len(manual_gate_result["applied_manuals"]),
+                "requested_mode": manual_gate_result.get("requested_mode"),
+                "effective_mode": manual_gate_result.get("effective_mode"),
+                "decision": manual_gate_result.get("decision"),
+                "fallback_reason": manual_gate_result.get("fallback_reason"),
+                "telemetry": telemetry_payload(manual_gate=manual_gate_step_telemetry),
             },
         )
+        if str(manual_gate_result.get("fallback_reason") or "").startswith("manual_gate_error:"):
+            retrieval_warnings.append("Manual gate shadow failed and fell back to full manuals.")
 
         rerank_config = resolve_rerank_config(provider_config=provider_config, rerank_mode=rerank_mode)
-        rerank_repair_diagnostics: dict[str, object] = {}
-        manual_merged_candidates = merge_candidates_round_robin(per_manual_candidates, top_k)
-        reranked_candidates = manual_merged_candidates
-        rerank_meta = {
-            "applied": False,
-            "mode": "round_robin_manual_merge",
-            "candidate_count": len(candidate_sections),
-            "selected_count": len(reranked_candidates),
-        }
-        rerank_warning = None
-        await _record_chat_step_started(
-            run,
-            "rerank",
-            {
-                "requested_mode": rerank_mode,
-                "resolved_mode": rerank_config.get("resolved_mode"),
-                "enabled": rerank_config.get("enabled"),
-                "candidate_count": len(candidate_sections),
-            },
-        )
-        if candidate_sections and rerank_config.get("enabled"):
-            async def rerank_operation():
-                return await rerank_candidates_async(
-                    run.question,
-                    candidate_sections,
-                    rerank_config.get("model"),
-                    request_options={
-                        "api_base": rerank_config.get("base_url"),
-                        "api_key": rerank_config.get("api_key"),
-                        "provider_type": rerank_config.get("provider_type"),
-                    },
-                    trace_hook=run_trace_hook,
-                    stats_hook=stats_hook,
-                    top_k=top_k,
-                    diagnostics=rerank_repair_diagnostics,
-                )
+        loaded_manuals = list(manual_gate_result["applied_manuals"])
 
-            try:
-                reranked_candidates, rerank_meta = await _retry_async(
-                    "rerank",
-                    rerank_operation,
+        async def run_retrieval_attempt(
+            manuals_for_attempt: list[dict],
+            *,
+            full_retry_reason: str | None = None,
+        ) -> dict[str, Any]:
+            attempt = "full_retry" if full_retry_reason else "initial"
+            step_payload = {
+                "manual_count": len(manuals_for_attempt),
+                "attempt": attempt,
+                "full_retry_reason": full_retry_reason,
+            }
+            await _record_chat_step_started(run, "load_structures", step_payload)
+            await _record_chat_step_completed(run, "load_structures", {**step_payload, "lazy_loaded": True})
+
+            attempt_outline_diagnostics: dict[str, Any] = {
+                "requested_top_k": candidate_top_k,
+                "selection_mode": selection_mode,
+                "manuals": [],
+                "warnings": [],
+                "attempt": attempt,
+                "full_retry_reason": full_retry_reason,
+            }
+            await _record_chat_step_started(
+                run,
+                "retrieve_candidates",
+                {**step_payload, "candidate_top_k": candidate_top_k},
+            )
+            attempt_semaphore = asyncio.Semaphore(
+                max(1, min(settings.retrieval_max_concurrency, len(manuals_for_attempt)))
+            )
+
+            async def retrieve_manual_candidates(manual: dict) -> list[dict]:
+                diagnostics: dict[str, object] = {}
+
+                async def operation():
+                    async with attempt_semaphore:
+                        structure = load_structure_file(manual["parsed_structure_path"])
+                        candidates = await retrieve_candidates_for_manual_async(
+                            structure,
+                            retrieval_query,
+                            resolved_model,
+                            request_options=retrieval_options,
+                            trace_hook=run_trace_hook,
+                            stats_hook=stats_hook,
+                            candidate_top_k=candidate_top_k,
+                            selection_mode=selection_mode,
+                            diagnostics=diagnostics,
+                        )
+                        del structure
+                        return candidates
+
+                candidates = await _retry_async(
+                    "retrieve_candidates",
+                    operation,
                     retries=settings.run_step_max_retries,
                     base_delay_ms=settings.run_step_retry_base_ms,
                     run=run,
                 )
-            except Exception as exc:
-                reranked_candidates = manual_merged_candidates
-                rerank_meta = {
-                    "applied": False,
-                    "mode": "fallback_round_robin_manual_merge_after_error",
-                    "candidate_count": len(candidate_sections),
-                    "selected_count": len(reranked_candidates),
-                }
-                rerank_warning = f"Rerank failed and fell back to round-robin manual merge: {exc}"
-                retrieval_warnings.append(rerank_warning)
-        citations_with_internal = [
-            _citation_from_candidate(candidate, knowledge_base_id=knowledge_base_id, index=index)
-            for index, candidate in enumerate(reranked_candidates, start=1)
-        ]
-        await _record_chat_step_completed(
-            run,
-            "rerank",
-            {
-                "requested_mode": rerank_mode,
-                "resolved_mode": rerank_config.get("resolved_mode"),
-                "selected_count": len(citations_with_internal),
-                "candidate_count": len(candidate_sections),
-                "rerank_applied": rerank_meta.get("applied"),
-                "rerank_model": rerank_config.get("model"),
-                "rerank_provider_source": rerank_config.get("provider_source"),
-                "rerank_warning": rerank_warning,
-                "rerank_diagnostics": {
-                    "meta": rerank_meta,
-                    "repair": rerank_repair_diagnostics,
-                },
-            },
-        )
+                retrieval_warnings.extend(
+                    warning
+                    for warning in diagnostics.get("warnings", [])
+                    if isinstance(warning, str) and warning not in retrieval_warnings
+                )
+                attempt_outline_diagnostics["manuals"].append(
+                    snapshot_outline_diagnostics(
+                        manual,
+                        diagnostics,
+                        candidate_count=len(candidates),
+                    )
+                )
+                for warning in diagnostics.get("warnings", []):
+                    if isinstance(warning, str) and warning not in attempt_outline_diagnostics["warnings"]:
+                        attempt_outline_diagnostics["warnings"].append(warning)
+                return [
+                    {
+                        "candidate_id": f"{manual['document_id']}:{manual['version_id']}:{index}",
+                        "document_id": manual["document_id"],
+                        "version_id": manual["version_id"],
+                        "document_label": manual["document_label"],
+                        "version_label": manual["version_label"],
+                        "title": candidate.get("title"),
+                        "node_id": candidate.get("node_id"),
+                        "node_key": f"{manual['document_id']}:{manual['version_id']}:{candidate.get('node_id')}",
+                        "routing_index_version": manual.get("routing_index_version"),
+                        "page_start": candidate.get("start_index"),
+                        "page_end": candidate.get("end_index"),
+                        "_node": candidate.get("node"),
+                        "_storage_path": manual["storage_path"],
+                    }
+                    for index, candidate in enumerate(candidates, start=1)
+                ]
 
-        await _record_chat_step_started(run, "build_context", {"citation_count": len(citations_with_internal)})
-        context_blocks = await build_context_from_citations_async(
-            citations_with_internal,
-            model=resolved_model,
-            max_context_pages=int(max_context_pages) if max_context_pages is not None else None,
-            max_context_tokens=int(max_context_tokens) if max_context_tokens is not None else None,
+            per_manual_candidates = await asyncio.gather(*(retrieve_manual_candidates(manual) for manual in manuals_for_attempt))
+            candidate_sections = [candidate for candidates in per_manual_candidates for candidate in candidates]
+            documents_with_hits = sum(1 for candidates in per_manual_candidates if candidates)
+            attempt_outline_diagnostics["manual_count"] = len(manuals_for_attempt)
+            attempt_outline_diagnostics["documents_considered"] = len(manuals_for_attempt)
+            attempt_outline_diagnostics["documents_with_hits"] = documents_with_hits
+            attempt_outline_diagnostics["selection_strategy"] = (
+                attempt_outline_diagnostics["manuals"][0].get("selection_strategy")
+                if attempt_outline_diagnostics["manuals"]
+                else None
+            )
+            attempt_outline_diagnostics["json_repair_applied"] = any(
+                bool(entry.get("json_repair_applied")) for entry in attempt_outline_diagnostics["manuals"]
+            )
+            attempt_outline_diagnostics["json_repair_succeeded"] = any(
+                bool(entry.get("json_repair_succeeded")) for entry in attempt_outline_diagnostics["manuals"]
+            )
+            await _record_chat_step_completed(
+                run,
+                "retrieve_candidates",
+                {
+                    **step_payload,
+                    "candidate_count": len(candidate_sections),
+                    "documents_considered": len(manuals_for_attempt),
+                    "documents_with_hits": documents_with_hits,
+                    "outline_diagnostics": attempt_outline_diagnostics,
+                },
+            )
+
+            rerank_repair_diagnostics: dict[str, object] = {}
+            manual_merged_candidates = merge_candidates_round_robin(per_manual_candidates, top_k)
+            reranked_candidates = manual_merged_candidates
+            rerank_meta = {
+                "applied": False,
+                "mode": "round_robin_manual_merge",
+                "candidate_count": len(candidate_sections),
+                "selected_count": len(reranked_candidates),
+            }
+            rerank_warning = None
+            await _record_chat_step_started(
+                run,
+                "rerank",
+                {
+                    **step_payload,
+                    "requested_mode": rerank_mode,
+                    "resolved_mode": rerank_config.get("resolved_mode"),
+                    "enabled": rerank_config.get("enabled"),
+                    "candidate_count": len(candidate_sections),
+                },
+            )
+            if candidate_sections and rerank_config.get("enabled"):
+                async def rerank_operation():
+                    return await rerank_candidates_async(
+                        run.question,
+                        candidate_sections,
+                        rerank_config.get("model"),
+                        request_options={
+                            "api_base": rerank_config.get("base_url"),
+                            "api_key": rerank_config.get("api_key"),
+                            "provider_type": rerank_config.get("provider_type"),
+                        },
+                        trace_hook=run_trace_hook,
+                        stats_hook=stats_hook,
+                        top_k=top_k,
+                        diagnostics=rerank_repair_diagnostics,
+                    )
+
+                try:
+                    reranked_candidates, rerank_meta = await _retry_async(
+                        "rerank",
+                        rerank_operation,
+                        retries=settings.run_step_max_retries,
+                        base_delay_ms=settings.run_step_retry_base_ms,
+                        run=run,
+                    )
+                except Exception as exc:
+                    reranked_candidates = manual_merged_candidates
+                    rerank_meta = {
+                        "applied": False,
+                        "mode": "fallback_round_robin_manual_merge_after_error",
+                        "candidate_count": len(candidate_sections),
+                        "selected_count": len(reranked_candidates),
+                    }
+                    rerank_warning = f"Rerank failed and fell back to round-robin manual merge: {exc}"
+                    retrieval_warnings.append(rerank_warning)
+            citations_with_internal = [
+                _citation_from_candidate(candidate, knowledge_base_id=knowledge_base_id, index=index)
+                for index, candidate in enumerate(reranked_candidates, start=1)
+            ]
+            finalize_manual_gate_shadow_eval(manual_gate_result, citations_with_internal)
+            await _record_chat_step_completed(
+                run,
+                "rerank",
+                {
+                    **step_payload,
+                    "requested_mode": rerank_mode,
+                    "resolved_mode": rerank_config.get("resolved_mode"),
+                    "selected_count": len(citations_with_internal),
+                    "candidate_count": len(candidate_sections),
+                    "rerank_applied": rerank_meta.get("applied"),
+                    "rerank_model": rerank_config.get("model"),
+                    "rerank_provider_source": rerank_config.get("provider_source"),
+                    "rerank_warning": rerank_warning,
+                    "manual_gate_shadow_eval": (manual_gate_result.get("diagnostics") or {}).get("shadow_eval"),
+                    "rerank_diagnostics": {
+                        "meta": rerank_meta,
+                        "repair": rerank_repair_diagnostics,
+                    },
+                },
+            )
+
+            await _record_chat_step_started(
+                run,
+                "build_context",
+                {**step_payload, "citation_count": len(citations_with_internal)},
+            )
+            context_blocks = await build_context_from_citations_async(
+                citations_with_internal,
+                model=resolved_model,
+                max_context_pages=int(max_context_pages) if max_context_pages is not None else None,
+                max_context_tokens=int(max_context_tokens) if max_context_tokens is not None else None,
+                embedding_config=embedding_config,
+                settings_obj=settings,
+                allow_runtime_pdf_fallback=bool(
+                    getattr(settings, "deepresearch_runtime_pdf_fallback_enabled", False)
+                ),
+            )
+            context = "\n\n".join(context_blocks)
+            await _record_chat_step_completed(
+                run,
+                "build_context",
+                {**step_payload, "context_block_count": len(context_blocks), "context_chars": len(context)},
+            )
+            return {
+                "loaded_manuals": manuals_for_attempt,
+                "per_manual_candidates": per_manual_candidates,
+                "candidate_sections": candidate_sections,
+                "documents_with_hits": documents_with_hits,
+                "outline_diagnostics": attempt_outline_diagnostics,
+                "rerank_repair_diagnostics": rerank_repair_diagnostics,
+                "rerank_meta": rerank_meta,
+                "rerank_warning": rerank_warning,
+                "citations_with_internal": citations_with_internal,
+                "context_blocks": context_blocks,
+                "context": context,
+            }
+
+        retrieval_attempt = await run_retrieval_attempt(loaded_manuals)
+        full_retry_reason, full_retry_trigger = _manual_gate_full_retry_reason(
+            manual_gate_result,
+            resolved_manuals,
+            candidate_count=len(retrieval_attempt["candidate_sections"]),
+            context_blocks=retrieval_attempt["context_blocks"],
         )
-        context = "\n\n".join(context_blocks)
-        await _record_chat_step_completed(
-            run,
-            "build_context",
-            {"context_block_count": len(context_blocks), "context_chars": len(context)},
-        )
+        if full_retry_reason:
+            await _record_chat_step_started(
+                run,
+                "manual_gate_full_retry",
+                {
+                    "reason": full_retry_reason,
+                    "trigger": full_retry_trigger,
+                    "previous_manual_count": len(loaded_manuals),
+                    "full_manual_count": len(resolved_manuals),
+                },
+            )
+            apply_manual_gate_full_retry(
+                manual_gate_result,
+                resolved_manuals,
+                fallback_reason=full_retry_reason,
+                trigger=full_retry_trigger or full_retry_reason,
+            )
+            retry_warning = f"Manual gate live fell back to full manuals after {full_retry_reason}."
+            if retry_warning not in retrieval_warnings:
+                retrieval_warnings.append(retry_warning)
+            loaded_manuals = list(manual_gate_result["applied_manuals"])
+            await _record_chat_step_completed(
+                run,
+                "manual_gate_full_retry",
+                {
+                    "reason": full_retry_reason,
+                    "trigger": full_retry_trigger,
+                    "manual_count": len(loaded_manuals),
+                    "telemetry": telemetry_payload(manual_gate=manual_gate_telemetry(gate_result=manual_gate_result)),
+                },
+            )
+            retrieval_attempt = await run_retrieval_attempt(loaded_manuals, full_retry_reason=full_retry_reason)
+
+        per_manual_candidates = retrieval_attempt["per_manual_candidates"]
+        candidate_sections = retrieval_attempt["candidate_sections"]
+        documents_with_hits = retrieval_attempt["documents_with_hits"]
+        outline_diagnostics = retrieval_attempt["outline_diagnostics"]
+        rerank_repair_diagnostics = retrieval_attempt["rerank_repair_diagnostics"]
+        rerank_meta = retrieval_attempt["rerank_meta"]
+        rerank_warning = retrieval_attempt["rerank_warning"]
+        citations_with_internal = retrieval_attempt["citations_with_internal"]
+        context_blocks = retrieval_attempt["context_blocks"]
+        context = retrieval_attempt["context"]
 
         retrieve_ms = int((time.perf_counter() - retrieve_started) * 1000)
         _log_chat_run_stage(
@@ -1644,6 +2648,7 @@ async def run_chat_run(run_id: str) -> None:
             warnings=retrieval_warnings,
         )
         retrieval_info = {
+            "retrieval_mode": CHAT_RETRIEVAL_MODE_DEEP_RESEARCH,
             "query": retrieval_query,
             "rewritten_query": rewritten_query,
             "rewrite_applied": rewrite_applied,
@@ -1657,6 +2662,8 @@ async def run_chat_run(run_id: str) -> None:
             "warnings": retrieval_warnings,
             "documents_considered": len(loaded_manuals),
             "documents_with_hits": documents_with_hits,
+            "manual_gate_requested_mode": manual_gate_result.get("requested_mode"),
+            "manual_gate_effective_mode": manual_gate_result.get("effective_mode"),
             "rerank_mode": rerank_mode,
             "rerank_resolved_mode": rerank_config.get("resolved_mode"),
             "rerank_applied": rerank_meta.get("applied"),
@@ -1664,6 +2671,7 @@ async def run_chat_run(run_id: str) -> None:
             "rerank_provider_source": rerank_config.get("provider_source"),
             "rerank_warning": rerank_warning,
             "diagnostics": {
+                "manual_gate": manual_gate_result.get("diagnostics"),
                 "outline": outline_diagnostics,
                 "rerank": {
                     "meta": rerank_meta,
@@ -1684,6 +2692,7 @@ async def run_chat_run(run_id: str) -> None:
         )
         execution_context["telemetry"] = telemetry_payload(
             embedding_provider=embedding_telemetry,
+            manual_gate=manual_gate_telemetry(gate_result=manual_gate_result),
             routing_asset_build=routing_asset_telemetry,
         )
         execution_context["target"] = {
@@ -1698,7 +2707,7 @@ async def run_chat_run(run_id: str) -> None:
                 "label": manual["document_label"],
                 "version_label": manual["version_label"],
             }
-            for manual in loaded_manuals
+            for manual in resolved_manuals
         ]
         execution_context["merge"] = {
             "strategy": "rerank_merge" if rerank_meta.get("applied") else "round_robin_manual_merge",
@@ -1706,199 +2715,16 @@ async def run_chat_run(run_id: str) -> None:
             "selected_citation_count": len(citations_with_internal),
             "fallback_mode": None if rerank_meta.get("applied") else rerank_meta.get("mode"),
         }
-        run.execution_context_json = json.dumps(execution_context, ensure_ascii=False)
-        run.status = "answering"
-        run.heartbeat_at = datetime.utcnow()
-        db.commit()
-        db.refresh(run)
-        run = _raise_if_cancel_requested(db, run)
-        await _publish_chat_event(run.id, "context", {"execution_context": execution_context})
-        await _publish_chat_event(run.id, "status", {"status": "answering"})
-        await _record_chat_observation(run, event_type="run_status", status_value=run.status, payload={"execution_context": execution_context})
-
-        answer_prompt = build_generation_prompt(
-            run.question,
-            [citation["_node"] for citation in citations_with_internal if citation.get("_node")],
-            context,
-            system_prompt=request_config.get("system_prompt") or (skill.system_prompt if skill else None),
-            history_context=history_context or None,
+        run = await stream_final_answer_and_persist(
+            citations_with_internal=citations_with_internal,
+            context=context,
+            execution_context=execution_context,
+            retrieve_ms=retrieve_ms,
+            manual_count=len(loaded_manuals),
+            documents_considered=len(loaded_manuals),
+            documents_with_hits=documents_with_hits,
+            metrics_extra={"retrieval_mode": CHAT_RETRIEVAL_MODE_DEEP_RESEARCH},
         )
-        completion_kwargs = {
-            "model": resolved_model.removeprefix("litellm/"),
-            "messages": [{"role": "user", "content": answer_prompt}],
-            "temperature": generation_options.get("temperature", 0),
-            "stream": True,
-            **generation_options,
-        }
-        stream_options = dict(completion_kwargs.get("stream_options") or {})
-        stream_options["include_usage"] = True
-        completion_kwargs["stream_options"] = stream_options
-        await _record_chat_step_started(run, "final_answer", {"model": completion_kwargs["model"]})
-        answer_attempt = 0
-        answer_parts: list[str] = []
-        seq = 0
-        finish_reason = None
-        streamed_usage = None
-        answer_started = time.perf_counter()
-        while True:
-            answer_attempt += 1
-            answer_request_event = {
-                "type": "llm_completion",
-                "label": "final_answer_stream",
-                "attempt": answer_attempt,
-                "phase": "request",
-                "request": {
-                    "model": completion_kwargs["model"],
-                    "messages": completion_kwargs["messages"],
-                    "temperature": completion_kwargs.get("temperature"),
-                    "stream": True,
-                },
-            }
-            _log_chat_run_llm_event(run, answer_request_event)
-            try:
-                response = litellm.completion(**completion_kwargs)
-                for chunk in response:
-                    run = _touch_run_heartbeat(db, run)
-                    run = _raise_if_cancel_requested(db, run)
-                    chunk_usage = _extract_usage_from_stream_chunk(chunk)
-                    if chunk_usage:
-                        streamed_usage = chunk_usage
-                    choices = getattr(chunk, "choices", None)
-                    if not choices:
-                        continue
-                    choice = choices[0]
-                    finish_reason = getattr(choice, "finish_reason", None) or finish_reason
-                    delta = ""
-                    if getattr(choice, "delta", None) is not None:
-                        delta = choice.delta.content or ""
-                    if not delta:
-                        continue
-                    answer_parts.append(delta)
-                    seq += 1
-                    await _publish_chat_event(run.id, "answer_delta", {"delta": delta, "seq": seq})
-                    await _record_chat_observation(
-                        run,
-                        event_type="answer_delta",
-                        step="final_answer",
-                        status_value=run.status,
-                        payload={"seq": seq, "delta": delta},
-                    )
-                break
-            except Exception as exc:
-                answer_error_event = {
-                    "type": "llm_completion",
-                    "label": "final_answer_stream",
-                    "attempt": answer_attempt,
-                    "phase": "error",
-                    "ok": False,
-                    "duration_ms": int((time.perf_counter() - answer_started) * 1000),
-                    "request": answer_request_event["request"],
-                    "error": str(exc),
-                }
-                if trace_recorder:
-                    trace_recorder.append_llm_call(answer_error_event)
-                _log_chat_run_llm_event(run, answer_error_event)
-                if answer_parts or answer_attempt >= 2:
-                    raise
-                await _record_chat_observation(
-                    run,
-                    event_type="step_failed",
-                    step="final_answer",
-                    status_value=run.status,
-                    payload={"attempt": answer_attempt, "retrying": True, "error": str(exc)},
-                )
-                await asyncio.sleep(settings.run_step_retry_base_ms / 1000)
-
-        answer_text = "".join(answer_parts).strip()
-        answer_ms = int((time.perf_counter() - answer_started) * 1000)
-        citations = [
-            {key: value for key, value in citation.items() if not key.startswith("_")}
-            for citation in citations_with_internal
-        ]
-        answer_with_marker = build_answer_with_marker(answer_text, citations)
-        if streamed_usage:
-            usage_totals["successful_llm_calls"] += 1
-            _accumulate_usage_totals(usage_totals, streamed_usage)
-            stream_usage_source = "provider_stream"
-        else:
-            prompt_tokens = count_tokens(answer_prompt, model=resolved_model)
-            completion_tokens = count_tokens(answer_text, model=resolved_model)
-            fallback_usage = {
-                "prompt_tokens": prompt_tokens + history_info["history_token_estimate"],
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + history_info["history_token_estimate"] + completion_tokens,
-            }
-            usage_totals["successful_llm_calls"] += 1
-            _accumulate_usage_totals(usage_totals, fallback_usage)
-            stream_usage_source = "estimated_fallback"
-        metrics = {
-            "queue_ms": queue_ms,
-            "retrieve_ms": retrieve_ms,
-            "answer_ms": answer_ms,
-            "total_ms": retrieve_ms + answer_ms,
-            "wall_clock_ms": queue_ms + retrieve_ms + answer_ms,
-            "input_tokens": usage_totals["input_tokens"],
-            "output_tokens": usage_totals["output_tokens"],
-            "total_tokens": usage_totals["total_tokens"],
-            "manual_count": len(loaded_manuals),
-            "selected_section_count": len(citations),
-            "successful_llm_calls": usage_totals["successful_llm_calls"],
-            "citations_count": len(citations),
-            "stream_usage_source": stream_usage_source,
-            "documents_considered": len(loaded_manuals),
-            "documents_with_hits": documents_with_hits,
-        }
-        serialized_sections = citations
-        run.answer = answer_text
-        run.answer_text = answer_text
-        run.answer_with_marker = answer_with_marker
-        run.selected_sections_json = json.dumps(serialized_sections, ensure_ascii=False)
-        run.citations_json = json.dumps(citations, ensure_ascii=False)
-        run.metrics_json = json.dumps(metrics, ensure_ascii=False)
-        run.last_error = None
-        run.heartbeat_at = datetime.utcnow()
-        db.commit()
-        db.refresh(run)
-
-        if session:
-            append_message(
-                db,
-                session_id=session.id,
-                tenant_id=run.tenant_id,
-                user_id=run.user_id,
-                role="assistant",
-                content=answer_text,
-                run_id=run.id,
-            )
-        if trace_recorder:
-            trace_recorder.append_llm_call(
-                {
-                    "type": "llm_completion",
-                    "label": "final_answer_stream",
-                    "phase": "response",
-                    "ok": True,
-                    "request": {
-                        "model": completion_kwargs["model"],
-                        "messages": completion_kwargs["messages"],
-                        "temperature": completion_kwargs.get("temperature"),
-                        "stream": True,
-                    },
-                    "duration_ms": answer_ms,
-                    "response_text": answer_text,
-                    "finish_reason": finish_reason,
-                }
-            )
-            trace_recorder.finalize(
-                status="completed",
-                answer=answer_text,
-                metrics=metrics,
-                selected_sections=serialized_sections,
-                execution_context=execution_context,
-            )
-        _log_chat_run_stage(run, "completed", metrics=metrics)
-        await _record_chat_step_completed(run, "final_answer", {"answer_ms": answer_ms, "answer_chars": len(answer_text)})
-        await _record_chat_step_started(run, "persist_result")
-        await _record_chat_step_completed(run, "persist_result", {"citations_count": len(citations)})
         await _finalize_run(db, run=run, status_value="completed")
     except ChatRunCancelled as exc:
         run = db.get(ChatRun, run_id)

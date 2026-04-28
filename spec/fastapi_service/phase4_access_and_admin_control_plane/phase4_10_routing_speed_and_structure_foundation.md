@@ -247,6 +247,23 @@ Required rule set:
 
 Those decisions must be discussed separately before implementation.
 
+## 7.1 Follow-up Product Surface
+
+The later Fast Search work builds on the `Phase 4.10` routing-index foundation, but it is not part of the original `4.10` scope.
+
+Current follow-up product boundary after the `B4.2` architecture decision:
+
+- `Fast Search` is a separate fast lookup path for explicit section, fact, definition, numeric, and requirement queries.
+- `DeepResearch` remains the original reasoning / outline / evidence-expansion path.
+- Elasticsearch is the required runtime search index for Fast Search and DeepResearch context retrieval.
+- ES must hold node metadata, searchable `section_text` / page-text fields, lexical fields, embedding vectors, `routing_index_version`, and document/version/tenant metadata where available.
+- Local embedding artifact exact scan is legacy transitional infrastructure only; it is not a production runtime fallback after `B4.2`.
+- Missing ES index, missing `section_text`, or stale routing-version data is `data_not_ready` / runtime `NO-GO`, not a silent local fallback.
+- Runtime PDF extraction is disabled by default and only allowed as explicit debug / emergency fallback; it does not satisfy the performance GO condition.
+- Fast Search is not approved as a live replacement for chat/compliance retrieval, evidence expansion, or DeepResearch.
+
+See [fast_search_product_surface.md](fast_search_product_surface.md) for the product contract, API, frontend boundary, and validation commands.
+
 ## 8. Acceptance Standard
 
 `Phase 4.10` closeout requires all of the following, and the current tree now satisfies the phase-local bar:

@@ -103,6 +103,16 @@ def _normalize_text(value: Any) -> str | None:
     return text or None
 
 
+def _next_routing_index_version(current: object) -> str:
+    value = _normalize_text(current) or "v1"
+    prefix, marker, suffix = value.rpartition("-r")
+    if marker and suffix.isdigit():
+        next_value = f"{prefix}-r{int(suffix) + 1}"
+    else:
+        next_value = f"{value}-r2"
+    return next_value[:32]
+
+
 def _migration_head() -> str | None:
     try:
         from alembic.config import Config
@@ -604,13 +614,14 @@ def _execute_backfill_record(db: Session, record: dict[str, Any]) -> dict[str, A
         raise RuntimeError("parsed_structure_path is missing")
     structure, source_doc_name = _load_parsed_structure(parsed_path)
     document_label = _normalize_text(record.get("display_name")) or _normalize_text(record.get("source_filename")) or "Document"
+    next_routing_index_version = _next_routing_index_version(record.get("routing_index_version"))
     routing_index = build_routing_index_payload(
         structure,
         document_label=document_label,
         document_id=str(record["document_id"]),
         version_id=str(record["version_id"]),
         source_doc_name=source_doc_name or _normalize_text(record.get("source_filename")),
-        routing_index_version=_normalize_text(record.get("routing_index_version")) or "v1",
+        routing_index_version=next_routing_index_version,
         build_options=RoutingBuildOptions.disabled(),
     )
     routing_index_path = _write_routing_index(

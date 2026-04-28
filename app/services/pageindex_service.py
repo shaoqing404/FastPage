@@ -21,6 +21,7 @@ from pageindex.utils import (
     structure_to_list,
 )
 from app.services.storage_service import read_json_artifact
+from app.services.section_text_provider import SectionTextProvider, SectionTextResult
 from app.models.routing_asset_contract import (
     ROUTING_ASSET_DEFERRED,
     ROUTING_ASSET_PENDING,
@@ -1152,16 +1153,66 @@ def _build_context_block_for_citation(
     )
 
 
+def _build_context_block_from_section_text(
+    citation: dict[str, Any],
+    record: SectionTextResult,
+    *,
+    model: str,
+    max_context_pages: int | None,
+    max_context_tokens: int | None,
+) -> str:
+    if record.stale or record.status != "ready":
+        return ""
+    text = (record.text or "").strip()
+    if not text:
+        return ""
+    page_start = citation.get("page_start") or record.page_start
+    page_end = citation.get("page_end") or record.page_end
+    if page_start is not None and page_end is not None and max_context_pages is not None:
+        if int(page_end) - int(page_start) + 1 > max_context_pages:
+            return ""
+    excerpt = f"## Section: {citation.get('title') or record.title or 'untitled'} (pages {page_start}-{page_end})\n{text}"
+    if max_context_tokens is not None and count_tokens(excerpt, model=model) > max_context_tokens:
+        return ""
+    return "\n".join(
+        [
+            f"[{citation.get('citation_id') or citation.get('candidate_id')}]",
+            f"source: {citation.get('document_label') or citation.get('document_id') or 'unknown'}",
+            f"pages: {page_start}-{page_end}",
+            f"title: {citation.get('title') or record.title or 'untitled'}",
+            excerpt,
+        ]
+    )
+
+
 async def build_context_from_citations_async(
     citations: list[dict[str, Any]],
     *,
     model: str,
     max_context_pages: int | None,
     max_context_tokens: int | None,
+    section_text_provider: SectionTextProvider | None = None,
+    embedding_config: dict[str, Any] | None = None,
+    settings_obj: Any | None = None,
+    allow_runtime_pdf_fallback: bool = False,
 ) -> list[str]:
     ensure_run_reuse_cache()
+    provider = section_text_provider or SectionTextProvider(
+        embedding_config=embedding_config,
+        settings_obj=settings_obj,
+    )
+    section_records = provider.get_for_citations(citations)
 
-    async def build_one(citation: dict[str, Any]) -> str:
+    async def build_one(citation: dict[str, Any], record: SectionTextResult) -> str:
+        block = _build_context_block_from_section_text(
+            citation,
+            record,
+            model=model,
+            max_context_pages=max_context_pages,
+            max_context_tokens=max_context_tokens,
+        )
+        if block.strip() or not allow_runtime_pdf_fallback:
+            return block
         return await asyncio.to_thread(
             _build_context_block_for_citation,
             citation,
@@ -1170,7 +1221,7 @@ async def build_context_from_citations_async(
             max_context_tokens=max_context_tokens,
         )
 
-    blocks = await asyncio.gather(*(build_one(citation) for citation in citations))
+    blocks = await asyncio.gather(*(build_one(citation, record) for citation, record in zip(citations, section_records, strict=False)))
     return [block for block in blocks if block.strip()]
 
 

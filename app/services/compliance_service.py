@@ -27,10 +27,17 @@ from app.services.pageindex_service import (
     snapshot_outline_diagnostics,
 )
 from app.services.provider_service import resolve_embedding_config, resolve_provider_config, resolve_rerank_config, validate_provider_model_selection
+from app.services.routing_consumer_service import (
+    build_manual_gate_ref,
+    finalize_manual_gate_shadow_eval,
+    manual_gate_error_result,
+    run_manual_gate,
+)
 from app.services.runtime_observation_service import record_run_observation_event
 from app.services.task_queue_service import enqueue_compliance_run
 from app.services.telemetry_service import (
     embedding_provider_telemetry,
+    manual_gate_telemetry,
     routing_asset_build_telemetry,
     routing_asset_item,
     telemetry_payload,
@@ -61,7 +68,10 @@ DEFAULT_RETRIEVAL_CONFIG = {
     "rerank_mode": "auto",
     "max_context_pages": 20,
     "max_context_tokens": 12000,
+    "manual_gate_mode": None,
 }
+
+COMPLIANCE_MANUAL_GATE_LIVE_DEFERRED_REASON = "compliance_live_disabled"
 
 TERMINAL_COMPLIANCE_STATUSES = {"completed", "failed", "cancelled"}
 ACTIVE_COMPLIANCE_STATUSES = {"retrieving", "answering"}
@@ -69,6 +79,10 @@ ACTIVE_COMPLIANCE_STATUSES = {"retrieving", "answering"}
 DEFAULT_GENERATION_CONFIG = {
     "temperature": 0,
 }
+
+
+def _compliance_manual_gate_allow_live() -> bool:
+    return False
 
 
 def _json_loads(text: str | None, fallback):
@@ -155,11 +169,14 @@ def _normalize_retrieval_config(payload: dict[str, Any] | None) -> dict[str, Any
         "rerank_mode": rerank_mode,
         "max_context_pages": None,
         "max_context_tokens": None,
+        "manual_gate_mode": None,
     }
     if data.get("max_context_pages") not in (None, ""):
         normalized["max_context_pages"] = _coerce_positive_int("max_context_pages", data.get("max_context_pages"))
     if data.get("max_context_tokens") not in (None, ""):
         normalized["max_context_tokens"] = _coerce_positive_int("max_context_tokens", data.get("max_context_tokens"))
+    if data.get("manual_gate_mode") not in (None, ""):
+        normalized["manual_gate_mode"] = str(data.get("manual_gate_mode")).strip().lower()
     return normalized
 
 
@@ -470,13 +487,25 @@ def _resolve_manuals_for_knowledge_base(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Document {document.id} version {version.id} is not ready for querying",
             )
+        manual_ref = build_manual_gate_ref(
+            document_id=document.id,
+            version_id=version.id,
+            document_label=binding.label or document.display_name,
+            version_label=f"v{version.version_no}",
+            display_name=document.display_name,
+            source_filename=document.source_filename,
+            storage_path=version.storage_path,
+            parsed_structure_path=version.parsed_structure_path,
+            routing_index_status=getattr(version, "routing_index_status", None),
+            routing_index_path=getattr(version, "routing_index_path", None),
+            routing_index_version=getattr(version, "routing_asset_schema_version", None),
+        )
         resolved_manuals.append(
             {
+                **manual_ref,
                 "binding": binding,
                 "document": document,
                 "version": version,
-                "document_label": binding.label or document.display_name,
-                "version_label": f"v{version.version_no}",
                 "workspace_id": workspace_id,
             }
         )
@@ -1475,13 +1504,51 @@ async def run_compliance_run(run_id: str) -> None:
             },
         )
 
+        await _record_compliance_step_started(run, "manual_gate", {"manual_count": len(resolved_manuals)})
+        try:
+            manual_gate_result = run_manual_gate(
+                db,
+                question=run.question,
+                manual_refs=resolved_manuals,
+                requested_mode=retrieval_config.get("manual_gate_mode"),
+                default_mode=settings.retrieval_manual_gate_mode,
+                allow_live=_compliance_manual_gate_allow_live(),
+                live_deferred_reason=COMPLIANCE_MANUAL_GATE_LIVE_DEFERRED_REASON,
+            )
+        except Exception as exc:
+            logger.warning("Compliance manual gate shadow failed for run %s: %s", run.id, exc)
+            manual_gate_result = manual_gate_error_result(
+                manual_refs=resolved_manuals,
+                requested_mode=retrieval_config.get("manual_gate_mode"),
+                default_mode=settings.retrieval_manual_gate_mode,
+                allow_live=_compliance_manual_gate_allow_live(),
+                error=exc,
+                live_deferred_reason=COMPLIANCE_MANUAL_GATE_LIVE_DEFERRED_REASON,
+            )
+        manual_gate_step_telemetry = manual_gate_telemetry(gate_result=manual_gate_result)
+        await _record_compliance_step_completed(
+            run,
+            "manual_gate",
+            {
+                "manual_count": len(resolved_manuals),
+                "selected_manual_count": len(manual_gate_result["applied_manuals"]),
+                "requested_mode": manual_gate_result.get("requested_mode"),
+                "effective_mode": manual_gate_result.get("effective_mode"),
+                "decision": manual_gate_result.get("decision"),
+                "fallback_reason": manual_gate_result.get("fallback_reason"),
+                "telemetry": telemetry_payload(manual_gate=manual_gate_step_telemetry),
+            },
+        )
+
         await _record_compliance_step_started(run, "load_structures")
-        manuals_with_structure = resolved_manuals
+        manuals_with_structure = list(manual_gate_result["applied_manuals"])
         await _record_compliance_step_completed(run, "load_structures", {"manual_count": len(manuals_with_structure), "lazy_loaded": True})
 
         candidate_top_k = max(int(retrieval_config["global_top_k"]) * 3, 12, int(retrieval_config["per_document_top_k"]))
         semaphore = asyncio.Semaphore(max(1, min(settings.retrieval_max_concurrency, len(manuals_with_structure))))
         retrieval_warnings: list[str] = []
+        if str(manual_gate_result.get("fallback_reason") or "").startswith("manual_gate_error:"):
+            retrieval_warnings.append("Manual gate shadow failed and fell back to full manuals.")
         outline_diagnostics: dict[str, Any] = {
             "requested_top_k": candidate_top_k,
             "selection_mode": retrieval_config["selection_mode"],
@@ -1629,6 +1696,7 @@ async def run_compliance_run(run_id: str) -> None:
             for index, candidate in enumerate(reranked_candidates, start=1)
         ]
         citations = _strip_internal_citation_fields(citations_with_internal)
+        finalize_manual_gate_shadow_eval(manual_gate_result, citations_with_internal)
         await _record_compliance_step_completed(
             run,
             "rerank",
@@ -1638,6 +1706,7 @@ async def run_compliance_run(run_id: str) -> None:
                 "rerank_model": rerank_config.get("model"),
                 "rerank_provider_source": rerank_config.get("provider_source"),
                 "rerank_warning": rerank_warning,
+                "manual_gate_shadow_eval": (manual_gate_result.get("diagnostics") or {}).get("shadow_eval"),
                 "rerank_diagnostics": {
                     "meta": rerank_meta,
                     "repair": rerank_repair_diagnostics,
@@ -1651,6 +1720,9 @@ async def run_compliance_run(run_id: str) -> None:
             model=run.model,
             max_context_pages=retrieval_config.get("max_context_pages"),
             max_context_tokens=retrieval_config.get("max_context_tokens"),
+            allow_runtime_pdf_fallback=bool(
+                getattr(settings, "deepresearch_runtime_pdf_fallback_enabled", False)
+            ),
         )
         merge_ms = 0
         await _record_compliance_step_completed(run, "build_context", {"context_block_count": len(context_blocks)})
@@ -1661,6 +1733,7 @@ async def run_compliance_run(run_id: str) -> None:
             "workspace_id": run.workspace_id,
             "telemetry": telemetry_payload(
                 embedding_provider=embedding_telemetry,
+                manual_gate=manual_gate_telemetry(gate_result=manual_gate_result),
                 routing_asset_build=routing_asset_telemetry,
             ),
             "target": {
@@ -1681,6 +1754,8 @@ async def run_compliance_run(run_id: str) -> None:
                 "per_document_top_k": retrieval_config["per_document_top_k"],
                 "global_top_k": retrieval_config["global_top_k"],
                 "selection_mode": retrieval_config["selection_mode"],
+                "manual_gate_requested_mode": manual_gate_result.get("requested_mode"),
+                "manual_gate_effective_mode": manual_gate_result.get("effective_mode"),
                 "rerank_mode": rerank_mode,
                 "rerank_resolved_mode": rerank_config.get("resolved_mode"),
                 "documents_considered": len(resolved_manuals),
@@ -1688,6 +1763,7 @@ async def run_compliance_run(run_id: str) -> None:
                 "rerank_warning": rerank_warning,
                 "warnings": retrieval_warnings,
                 "diagnostics": {
+                    "manual_gate": manual_gate_result.get("diagnostics"),
                     "outline": outline_diagnostics,
                     "rerank": {
                         "meta": rerank_meta,

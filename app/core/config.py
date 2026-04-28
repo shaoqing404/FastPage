@@ -106,6 +106,7 @@ class Settings:
     routing_node_es_password: str
     routing_node_es_use_ssl: bool
     routing_node_es_index_prefix: str
+    deepresearch_runtime_pdf_fallback_enabled: bool
 
     # ── Routing asset build hooks ───────────────────────────────────────────
     routing_route_docs_build_mode: str
@@ -380,6 +381,9 @@ def get_settings() -> Settings:
         routing_node_es_password=routing_node_es_password,
         routing_node_es_use_ssl=routing_node_es_use_ssl,
         routing_node_es_index_prefix=os.getenv("ROUTING_NODE_ES_INDEX_PREFIX", "pageindex-node-embeddings"),
+        deepresearch_runtime_pdf_fallback_enabled=(
+            os.getenv("DEEPRESEARCH_RUNTIME_PDF_FALLBACK_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+        ),
         routing_route_docs_build_mode=_env_first(
             ("ROUTING_ROUTE_DOCS_BUILD_MODE", "ROUTING_ROUTE_DOC_BUILD_MODE"),
             "disabled",

@@ -106,10 +106,33 @@ That means:
 - [phase4_8_test_led_experience_stabilization.md](phase4_8_test_led_experience_stabilization.md)
 - [phase4_9_multi_manual_runtime_and_observability_closeout.md](phase4_9_multi_manual_runtime_and_observability_closeout.md)
 - [phase4_10_routing_speed_and_structure_foundation.md](phase4_10_routing_speed_and_structure_foundation.md)
+- [fast_search_product_surface.md](fast_search_product_surface.md)
 - [phase4_10_execution_prompts.md](phase4_10_execution_prompts.md)
 - [phase4_closeout_status.md](phase4_closeout_status.md)
 
 Historical design notes and earlier batch docs remain available in git history and can be restored if the closeout work needs them again.
+
+### B4.2 Runtime Search Decision
+
+Starting with `B4.2`, Elasticsearch is the required runtime search index for Fast Search and DeepResearch context retrieval.
+
+Runtime indexed data must include node metadata, title / breadcrumb lexical fields, `section_text` / page-text searchable fields, embedding vectors, `routing_index_version`, document/version identifiers, and tenant/workspace metadata where available.
+
+Artifact disposition:
+
+- existing local embedding artifact bundle and exact-scan code is legacy transitional infrastructure
+- migration scripts may read old artifacts to seed ES
+- diagnostics and historical B2/B2.8 validation may continue to reference artifact exact scan
+- new runtime product features must not depend on artifact exact scan
+- artifact exact scan is not a production runtime fallback after `B4.2`
+
+Runtime gates:
+
+- missing ES index is `data_not_ready` / runtime `NO-GO`
+- missing `section_text` is `data_not_ready` / runtime `NO-GO`
+- stale routing-version data is degraded and must not be treated as fresh context
+- runtime PDF extraction is disabled by default and only allowed as explicit debug / emergency fallback
+- DeepResearch runtime PDF extraction does not count as performance GO
 
 ### Operator-doc handoff
 
@@ -130,8 +153,9 @@ The `spec/` tree remains the parent-stage design and gate record.
 3. Treat `Phase 4.7` as already `GO` on the current tree.
 4. Keep `Phase 4.9` at `Conditional GO` until its final rerun artifact is refreshed.
 5. Treat `Phase 4.10` as `Conditional GO` pending the broader parent-stage rerun.
-6. Rerun the `Phase 4.9` / `Phase 4.10` real-runtime validation chain on the current tree.
-7. Only then open `Phase 5`.
+6. Treat `Fast Search Product Surface` as a scoped `GO` for validation, separate from DeepResearch and not a replacement for it.
+7. Rerun the `Phase 4.9` / `Phase 4.10` real-runtime validation chain on the current tree.
+8. Only then open `Phase 5`.
 
 ## Parent-stage Closeout Rule
 
