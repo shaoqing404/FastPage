@@ -35,11 +35,11 @@ class TestWorkspaceAccessService(unittest.TestCase):
         caps = get_workspace_role_capabilities("admin")
         self.assertTrue(caps.get("can_edit_workspace_metadata"))
         self.assertFalse(caps.get("can_transfer_founder"))
-        
+
         caps = get_workspace_role_capabilities("member")
         self.assertFalse(caps.get("can_manage_members"))
         self.assertTrue(caps.get("can_manage_skills"))
-        
+
     def test_founder_only_capability_cannot_be_overridden_by_others(self):
         with self.assertRaises(HTTPException) as ctx:
             validate_workspace_permissions_override({"can_transfer_founder": True}, role="admin")
@@ -48,14 +48,14 @@ class TestWorkspaceAccessService(unittest.TestCase):
 
         caps = resolve_workspace_capabilities("admin", '{"can_transfer_founder": true}')
         self.assertFalse(caps.get("can_transfer_founder"))
-        
+
         caps_founder = resolve_workspace_capabilities("founder", '{"can_manage_invites": false}')
         self.assertTrue(caps_founder.get("can_transfer_founder"))
         self.assertFalse(caps_founder.get("can_manage_invites"))
 
     def test_private_visibility_reads_and_edits(self):
         kb = KnowledgeBase(workspace_id="ws_1", created_by="user_123", visibility="private")
-        
+
         p_creator_member = self.create_principal("member", "ws_1")
         self.assertTrue(can_read_knowledge_base(p_creator_member, kb))
         self.assertTrue(can_edit_knowledge_base(p_creator_member, kb))
@@ -73,7 +73,7 @@ class TestWorkspaceAccessService(unittest.TestCase):
         kb_edit = KnowledgeBase(workspace_id="ws_1", created_by="user_123", visibility="workspace_edit")
 
         p_other_member = self.create_principal("member", "ws_1", user=self.other_user)
-        
+
         self.assertTrue(can_read_knowledge_base(p_other_member, kb_read))
         self.assertFalse(can_edit_knowledge_base(p_other_member, kb_read))
 
@@ -82,7 +82,7 @@ class TestWorkspaceAccessService(unittest.TestCase):
 
     def test_workspace_edit_does_not_elevate_guest_without_capability(self):
         skill_edit = ChatSkill(workspace_id="ws_1", owner_user_id="user_123", visibility="workspace_edit")
-        
+
         p_guest = self.create_principal("guest", "ws_1", user=self.other_user)
         self.assertTrue(can_read_skill(p_guest, skill_edit))
         self.assertFalse(can_edit_skill(p_guest, skill_edit))

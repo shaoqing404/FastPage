@@ -77,7 +77,7 @@ def create_platform_user(
 
     now = datetime.utcnow()
     user_id = f"user_{uuid.uuid4().hex}"
-    
+
     user = User(
         id=user_id,
         tenant_id=actor_tenant_id,

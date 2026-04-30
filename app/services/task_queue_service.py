@@ -13,6 +13,17 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 
+def _redis_client_kwargs() -> dict[str, Any]:
+    return {
+        "decode_responses": True,
+        "socket_keepalive": True,
+        "socket_timeout": settings.redis_socket_timeout_seconds,
+        "socket_connect_timeout": settings.redis_socket_connect_timeout_seconds,
+        "health_check_interval": settings.redis_health_check_interval_seconds,
+        "retry_on_timeout": True,
+    }
+
+
 def chat_event_channel(run_id: str) -> str:
     return f"pageindex:chat:events:{run_id}"
 
@@ -54,7 +65,7 @@ class RedisTaskQueue(BaseTaskQueue):
         except ImportError as exc:  # pragma: no cover - environment fallback
             raise RuntimeError("redis package is not installed") from exc
 
-        self.client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+        self.client = redis.Redis.from_url(settings.redis_url, **_redis_client_kwargs())
 
     def enqueue_parse_job(self, job_id: str) -> None:
         payload = json.dumps({"kind": "parse_job", "job_id": job_id})
@@ -140,7 +151,7 @@ class RedisChatEventSubscription(BaseChatEventSubscription):
         import redis.asyncio as redis_async
 
         self.channel = channel
-        self.client = redis_async.Redis.from_url(settings.redis_url, decode_responses=True)
+        self.client = redis_async.Redis.from_url(settings.redis_url, **_redis_client_kwargs())
         self.pubsub = self.client.pubsub()
 
     async def start(self) -> "RedisChatEventSubscription":
@@ -206,7 +217,7 @@ async def _get_redis_publish_client() -> Any:
 
         import redis.asyncio as redis_async
 
-        _redis_publish_client = redis_async.Redis.from_url(settings.redis_url, decode_responses=True)
+        _redis_publish_client = redis_async.Redis.from_url(settings.redis_url, **_redis_client_kwargs())
         _redis_publish_client_url = settings.redis_url
         return _redis_publish_client
 

@@ -23,6 +23,7 @@ This parent stage should be managed as:
 - `Phase 4.8 Test-Led Experience Stabilization`
 - `Phase 4.9 Multi-Manual Runtime And Observability Closeout`
 - `Phase 4.10 Routing Speed And Structure Foundation`
+- `Phase 4.11 B-Stage Baseline And Phase 5 Entry`
 
 `Phase 5` remains reserved for:
 
@@ -82,19 +83,21 @@ The current codebase now materially includes:
 - `Phase 4.8` provider/workspace uplift and follow-up frontend usability fixes
 - `Phase 4.9` multi-manual runtime and observability closure
 - `Phase 4.10` routing speed and structure foundation
+- `Phase 4.11` B-stage runtime/product baseline and Phase 5 entry handoff
 
-Current parent-stage blocker summary (`2026-04-23`):
+Current parent-stage blocker summary (`2026-04-30`):
 
 - the phase4 spec/validation surface has been restored and re-aligned to the current chat-session contract
 - local `Phase 4.7` harness contract checks pass again, and the current-tree runtime validation artifact is finalized
 - the current frontend tree now passes `build`
 - `Phase 4.9` runtime foundation is materially landed, but still awaiting final rerun-based hard closeout
 - `Phase 4.10` routing speed / structure foundation is now materially landed at the code-and-targeted-test level
-- the remaining parent-stage blocker is the broader current-tree rerun / artifact refresh for `4.9`, plus validation-suite stabilization, not an open `4.10` implementation batch
+- `Phase 4.11` records the first archived 500Q Skills Chat baseline as `GO with follow-up`
+- the remaining parent-stage work is now soak/regression evidence and Phase 5 entry optimization, not an open B-stage implementation blocker
 
 That means:
 
-- `Phase 4` is still `NO-GO`
+- `Phase 4` is `Conditional GO`
 - `Phase 5` is still `NO-GO`
 
 ## Structure
@@ -106,6 +109,7 @@ That means:
 - [phase4_8_test_led_experience_stabilization.md](phase4_8_test_led_experience_stabilization.md)
 - [phase4_9_multi_manual_runtime_and_observability_closeout.md](phase4_9_multi_manual_runtime_and_observability_closeout.md)
 - [phase4_10_routing_speed_and_structure_foundation.md](phase4_10_routing_speed_and_structure_foundation.md)
+- [phase4_11_b_stage_baseline_and_phase5_entry.md](phase4_11_b_stage_baseline_and_phase5_entry.md)
 - [fast_search_product_surface.md](fast_search_product_surface.md)
 - [phase4_10_execution_prompts.md](phase4_10_execution_prompts.md)
 - [phase4_closeout_status.md](phase4_closeout_status.md)
@@ -153,9 +157,10 @@ The `spec/` tree remains the parent-stage design and gate record.
 3. Treat `Phase 4.7` as already `GO` on the current tree.
 4. Keep `Phase 4.9` at `Conditional GO` until its final rerun artifact is refreshed.
 5. Treat `Phase 4.10` as `Conditional GO` pending the broader parent-stage rerun.
-6. Treat `Fast Search Product Surface` as a scoped `GO` for validation, separate from DeepResearch and not a replacement for it.
-7. Rerun the `Phase 4.9` / `Phase 4.10` real-runtime validation chain on the current tree.
-8. Only then open `Phase 5`.
+6. Treat `Phase 4.11` as `GO with follow-up`.
+7. Treat `Fast Search Product Surface` as the primary business landing path for direct manual Q&A.
+8. Run the full 5000Q soak/regression during the May Day window.
+9. Open `Phase 5.0` for retrieval parallelization, context compression, chain caching, and quality/cost tuning.
 
 ## Parent-stage Closeout Rule
 

@@ -2,7 +2,7 @@
 
 - Repository root: current PageIndex checkout
 - Parent stage: `Phase 4 Access, Admin, and Pre-Phase5 Closeout`
-- Status date: `2026-04-23`
+- Status date: `2026-04-28`
 - Current decision: `Phase 4.10 closeout conditional-go pending parent-stage rerun`
 
 ## 1. Phase Intent
@@ -255,12 +255,40 @@ Current follow-up product boundary after the `B4.2` architecture decision:
 
 - `Fast Search` is a separate fast lookup path for explicit section, fact, definition, numeric, and requirement queries.
 - `DeepResearch` remains the original reasoning / outline / evidence-expansion path.
+- `/api/v1/search/fast` is the low-level retrieval/debug API; Skills Chat is the standard answer surface.
+- Skills Chat accepts `retrieval_config.retrieval_mode` as `"fast"` or `"deep_research"`.
+- Fast mode in Skills Chat means quick node retrieval plus answer generation, with context size and provider latency visible in runtime metrics.
 - Elasticsearch is the required runtime search index for Fast Search and DeepResearch context retrieval.
 - ES must hold node metadata, searchable `section_text` / page-text fields, lexical fields, embedding vectors, `routing_index_version`, and document/version/tenant metadata where available.
 - Local embedding artifact exact scan is legacy transitional infrastructure only; it is not a production runtime fallback after `B4.2`.
 - Missing ES index, missing `section_text`, or stale routing-version data is `data_not_ready` / runtime `NO-GO`, not a silent local fallback.
 - Runtime PDF extraction is disabled by default and only allowed as explicit debug / emergency fallback; it does not satisfy the performance GO condition.
 - Fast Search is not approved as a live replacement for chat/compliance retrieval, evidence expansion, or DeepResearch.
+- OpenAI-compatible providers are supported for upstream LLM/rerank/embedding calls; the current service does not expose a public OpenAI-compatible `/v1/chat/completions` API.
+
+B4.5 streaming stabilization is a runtime-performance follow-up built on this foundation:
+
+- no per-provider-chunk DB commit / refresh in chat streaming
+- sampled `answer_delta` observations
+- reused Redis publish client
+- batched frontend streaming answer updates
+- runtime metrics retained for retrieval latency, provider TTFT, answer latency, selected context size, prompt/token usage, and streamed delta counts
+
+The later B4.5 API reliability hardening is also a runtime follow-up, not a routing-index scope expansion:
+
+- MySQL DB pool behavior is env-configured and budgeted across API workers plus app workers.
+- Long Skills Chat SSE streams must not hold request-scoped FastAPI DB sessions while waiting on provider/pubsub events.
+- Startup migrations are guarded by an env switch and local file lock.
+- Redis event paths use health / timeout / keepalive protection.
+- These changes protect FastSearch / DeepResearch concurrent runtime validation but do not alter routing-index schema, ES-only search requirements, or evidence selection semantics.
+
+The first archived 500Q Skills Chat comparison on `2026-04-30` is recorded as a B-stage runtime/product `GO with follow-up`:
+
+- FastSearch p50 / p95 `13.96s / 22.78s`, quality average `7.84`
+- DeepResearch p50 / p95 `20.74s / 49.02s`, quality average `6.84`
+- FastSearch is the current primary landing path for direct manual Q&A
+- follow-up optimization should focus on retrieval parallelization, context compression, and cache design
+- these follow-ups are not part of the original `Phase 4.10-A/B/C/D` routing-index implementation scope
 
 See [fast_search_product_surface.md](fast_search_product_surface.md) for the product contract, API, frontend boundary, and validation commands.
 
@@ -285,6 +313,7 @@ What is still not claimed here:
 
 - this file does not claim the broader `Phase 4.7` / `Phase 4.9` / `Phase 4.10` real-runtime validation chain has already been rerun on the current stack
 - that larger rerun remains a parent-stage closeout gate rather than a remaining `4.10` implementation gap
+- this file does not claim production GO unless ES readiness, no-silent-fallback behavior, retrieval/provider latency, final prompt/token metrics, and correctness/citation checks pass together
 
 ## 9. Gate Decision
 

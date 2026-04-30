@@ -4,8 +4,14 @@ __pycache__
 .env*
 !.env.example
 .venv/
+.venv.broken-*/
+node_modules
 logs/
 data/
+results/
+.claude/
+.codex/
+!.env.example
 !docker/.env.example
 
 # Generated routing asset maintenance reports. Keep validation evidence out of
@@ -13,3 +19,16 @@ data/
 results/routing_asset_scan*.json
 results/routing_asset_sample_dry_run*.json
 results/routing_asset_backfill_rollback*.json
+《运行手册》（第1版）.pdf
+
+# Local evaluation archives and scratch probes may contain real API keys or
+# environment-specific endpoints. Keep them out of baseline commits.
+test/
+scripts/test0428_5000/
+scripts/testforFastSearch5.md
+scripts/b4_5_provider_path_probe.py
+scripts/phase47/es_validation_agent_prompt.md
+run_eval.py
+scratch_*.py
+frontend/build_log.txt
+frontend/patch-skill-chat.sh

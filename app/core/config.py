@@ -33,6 +33,12 @@ class Settings:
     # ── Database ────────────────────────────────────────────────────────────
     database_mode: str
     database_url: str
+    db_pool_pre_ping: bool
+    db_pool_recycle_seconds: int
+    db_pool_timeout_seconds: int
+    db_pool_size: int
+    db_max_overflow: int
+    run_migrations_on_startup: bool
 
     # ── CORS ────────────────────────────────────────────────────────────────
     cors_allow_origins: list[str]
@@ -140,6 +146,13 @@ def _env_first(names: tuple[str, ...], default: str) -> str:
         if value is not None:
             return value
     return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = _env_text(name)
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
 
 
 def _infer_database_mode_from_url(database_url: str) -> str:
@@ -312,6 +325,12 @@ def get_settings() -> Settings:
         llm_api_key=os.getenv("LLM_API_KEY", os.getenv("OPENAI_API_KEY", "")),
         database_mode=database_mode,
         database_url=database_url,
+        db_pool_pre_ping=_env_bool("DB_POOL_PRE_PING", True),
+        db_pool_recycle_seconds=int(os.getenv("DB_POOL_RECYCLE_SECONDS", "1800")),
+        db_pool_timeout_seconds=int(os.getenv("DB_POOL_TIMEOUT_SECONDS", "5")),
+        db_pool_size=int(os.getenv("DB_POOL_SIZE", "3")),
+        db_max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "2")),
+        run_migrations_on_startup=_env_bool("RUN_MIGRATIONS_ON_STARTUP", True),
         cors_allow_origins=cors_allow_origins,
         cors_allow_origin_regex=cors_allow_origin_regex,
         storage_backend=os.getenv("STORAGE_BACKEND", "local"),

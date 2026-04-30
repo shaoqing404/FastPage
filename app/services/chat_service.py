@@ -2944,8 +2944,8 @@ async def run_chat_run(run_id: str) -> None:
 
 
 async def stream_skill_run_events(
-    db: Session,
     *,
+    session_factory=SessionLocal,
     principal: Principal,
     user: User,
     skill,
@@ -2963,41 +2963,42 @@ async def stream_skill_run_events(
     disconnect_check: Callable[[], Awaitable[bool]] | None = None,
 ):
     request_config = dict(request_config or {})
-    if "_run_target" not in request_config:
-        if document is not None and version is not None:
-            manual = {
-                "document": document,
-                "version": version,
-                "document_label": getattr(document, "display_name", getattr(document, "source_filename", document.id)),
-                "version_label": f"v{getattr(version, 'version_no', '?')}",
-            }
-            request_config["_run_target"] = _skill_manual_snapshot(skill, [manual])
-        else:
-            resolved_document, resolved_version, run_target = resolve_skill_run_targets(
-                db,
-                principal=principal,
-                skill=skill,
-                document_id=document_id,
-            )
-            request_config["_run_target"] = run_target
-            document = resolved_document
-            version = resolved_version
-    run = _create_pending_run(
-        db,
-        principal=principal,
-        user=user,
-        document=document,
-        version=version,
-        question=question,
-        model=model,
-        request_config=request_config,
-        conversation_config=conversation_config,
-        retrieval_config=retrieval_config,
-        generation_config=generation_config,
-        skill=skill,
-        provider_id=provider_id,
-        session_id=session_id,
-    )
+    with session_factory() as db:
+        if "_run_target" not in request_config:
+            if document is not None and version is not None:
+                manual = {
+                    "document": document,
+                    "version": version,
+                    "document_label": getattr(document, "display_name", getattr(document, "source_filename", document.id)),
+                    "version_label": f"v{getattr(version, 'version_no', '?')}",
+                }
+                request_config["_run_target"] = _skill_manual_snapshot(skill, [manual])
+            else:
+                resolved_document, resolved_version, run_target = resolve_skill_run_targets(
+                    db,
+                    principal=principal,
+                    skill=skill,
+                    document_id=document_id,
+                )
+                request_config["_run_target"] = run_target
+                document = resolved_document
+                version = resolved_version
+        run = _create_pending_run(
+            db,
+            principal=principal,
+            user=user,
+            document=document,
+            version=version,
+            question=question,
+            model=model,
+            request_config=request_config,
+            conversation_config=conversation_config,
+            retrieval_config=retrieval_config,
+            generation_config=generation_config,
+            skill=skill,
+            provider_id=provider_id,
+            session_id=session_id,
+        )
 
     yield {
         "event": "run_started",
@@ -3017,72 +3018,90 @@ async def stream_skill_run_events(
 
     subscription = await open_chat_event_subscription(run.id)
     try:
-        _mark_run_queued(db, run.id)
+        with session_factory() as db:
+            _mark_run_queued(db, run.id)
         yield {"event": "status", "data": {"status": "queued"}}
         await _record_chat_observation(run, event_type="run_status", status_value="queued", payload=None)
         while True:
             if disconnect_check and await disconnect_check():
-                await request_run_cancel(
-                    db,
-                    principal=principal,
-                    run_id=run.id,
-                    reason="client aborted stream",
-                )
+                with session_factory() as db:
+                    await request_run_cancel(
+                        db,
+                        principal=principal,
+                        run_id=run.id,
+                        reason="client aborted stream",
+                    )
                 raise asyncio.CancelledError
             try:
                 event = await subscription.next_event(timeout=max(settings.chat_run_poll_interval_ms / 1000, 0.2))
             except asyncio.TimeoutError:
-                current = _load_run_snapshot(
-                    db,
-                    tenant_id=run.tenant_id,
-                    run_id=run.id,
-                    refresh_transaction=True,
-                )
-                if current.status in TERMINAL_RUN_STATUSES:
+                terminal_event = None
+                with session_factory() as db:
+                    current = _load_run_snapshot(
+                        db,
+                        tenant_id=run.tenant_id,
+                        run_id=run.id,
+                        refresh_transaction=True,
+                    )
                     if current.status == "completed":
-                        yield {"event": "status", "data": {"status": "completed"}}
-                        yield {"event": "run_completed", "data": serialize_run(current)}
-                        return
-                    if current.status == "cancelled":
-                        yield {"event": "status", "data": {"status": "cancelled"}}
-                        return
-                    if current.status == "failed":
+                        terminal_event = [
+                            {"event": "status", "data": {"status": "completed"}},
+                            {"event": "run_completed", "data": serialize_run(current)},
+                        ]
+                    elif current.status == "cancelled":
+                        terminal_event = [{"event": "status", "data": {"status": "cancelled"}}]
+                    elif current.status == "failed":
                         exposed_error = _humanize_run_error(current.last_error or "run failed")
-                        yield {"event": "status", "data": {"status": "failed"}}
-                        yield {
-                            "event": "error",
-                            "data": {
-                                "code": "skill_stream_failed",
-                                "message": exposed_error,
-                                "detail": exposed_error,
+                        terminal_event = [
+                            {"event": "status", "data": {"status": "failed"}},
+                            {
+                                "event": "error",
+                                "data": {
+                                    "code": "skill_stream_failed",
+                                    "message": exposed_error,
+                                    "detail": exposed_error,
+                                },
                             },
-                        }
-                        return
+                        ]
+                    elif current.status in TERMINAL_RUN_STATUSES:
+                        terminal_event = []
+                if terminal_event is not None:
+                    for item in terminal_event:
+                        yield item
                     return
                 continue
             except StopAsyncIteration:
-                current = _load_run_snapshot(
-                    db,
-                    tenant_id=run.tenant_id,
-                    run_id=run.id,
-                    refresh_transaction=True,
-                )
-                if current.status == "completed":
-                    yield {"event": "status", "data": {"status": "completed"}}
-                    yield {"event": "run_completed", "data": serialize_run(current)}
-                elif current.status == "cancelled":
-                    yield {"event": "status", "data": {"status": "cancelled"}}
-                elif current.status == "failed":
-                    exposed_error = _humanize_run_error(current.last_error or "run failed")
-                    yield {"event": "status", "data": {"status": "failed"}}
-                    yield {
-                        "event": "error",
-                        "data": {
-                            "code": "skill_stream_failed",
-                            "message": exposed_error,
-                            "detail": exposed_error,
-                        },
-                    }
+                terminal_event = None
+                with session_factory() as db:
+                    current = _load_run_snapshot(
+                        db,
+                        tenant_id=run.tenant_id,
+                        run_id=run.id,
+                        refresh_transaction=True,
+                    )
+                    if current.status == "completed":
+                        terminal_event = [
+                            {"event": "status", "data": {"status": "completed"}},
+                            {"event": "run_completed", "data": serialize_run(current)},
+                        ]
+                    elif current.status == "cancelled":
+                        terminal_event = [{"event": "status", "data": {"status": "cancelled"}}]
+                    elif current.status == "failed":
+                        exposed_error = _humanize_run_error(current.last_error or "run failed")
+                        terminal_event = [
+                            {"event": "status", "data": {"status": "failed"}},
+                            {
+                                "event": "error",
+                                "data": {
+                                    "code": "skill_stream_failed",
+                                    "message": exposed_error,
+                                    "detail": exposed_error,
+                                },
+                            },
+                        ]
+                if terminal_event:
+                    for item in terminal_event:
+                        yield item
                 return
 
             yield event

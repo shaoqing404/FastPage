@@ -21,7 +21,7 @@ class TestWorkspaceAdminService(unittest.TestCase):
     def setUp(self):
         self.user_founder = User(id="user_founder")
         self.user_admin = User(id="user_admin")
-        
+
         self.principal_founder = Principal(
             kind="session",
             tenant_id="tenant_1",
@@ -51,23 +51,23 @@ class TestWorkspaceAdminService(unittest.TestCase):
         target_membership = WorkspaceMembership(id="m_1", role="member")
         _assert_manageable_target(self.principal_founder, target_membership, desired_role="admin")
         _assert_manageable_target(self.principal_founder, target_membership, desired_role="guest")
-        
+
         # Founder allocating
         _assert_assignable_role(self.principal_founder, role="admin")
 
     def test_admin_can_only_manage_member_or_guest(self):
         target_guest = WorkspaceMembership(id="m_2", role="guest")
-        
+
         # Admin managing guest -> member
         _assert_manageable_target(self.principal_admin, target_guest, desired_role="member")
-        
+
         # Admin assigning
         _assert_assignable_role(self.principal_admin, role="guest")
         _assert_assignable_role(self.principal_admin, role="member")
 
     def test_admin_cannot_manage_admin(self):
         target_admin = WorkspaceMembership(id="m_3", role="admin")
-        
+
         with self.assertRaises(HTTPException) as ctx:
             _assert_manageable_target(self.principal_admin, target_admin, desired_role="member")
         self.assertEqual(ctx.exception.status_code, 403)
@@ -95,22 +95,22 @@ class TestWorkspaceAdminService(unittest.TestCase):
         db = MagicMock()
         mock_ws = Workspace(id="ws_1")
         mock_get_ws.return_value = mock_ws
-        
+
         current_founder = WorkspaceMembership(id="mem_1", user_id="user_founder", role="founder")
         target_member = WorkspaceMembership(id="mem_2", user_id="target_user", role="member", status="active")
-        
+
         # list_active_founder_memberships called twice (before and after)
         mock_list_founders.side_effect = [[current_founder], [target_member]]
-        
+
         db.scalar.return_value = target_member
-        
+
         result = transfer_workspace_founder(
-            db, 
-            self.principal_founder, 
-            "ws_1", 
+            db,
+            self.principal_founder,
+            "ws_1",
             target_user_id="target_user"
         )
-        
+
         self.assertEqual(current_founder.role, "admin")
         self.assertEqual(target_member.role, "founder")
         self.assertEqual(result["workspace_id"], "ws_1")
@@ -138,7 +138,7 @@ class TestWorkspaceAdminService(unittest.TestCase):
         db = MagicMock()
         mock_ws = Workspace(id="ws_1", is_default=True)
         mock_get_ws.return_value = mock_ws
-        
+
         with self.assertRaises(HTTPException) as ctx:
             archive_workspace(db, self.principal_founder, "ws_1")
         self.assertEqual(ctx.exception.status_code, 409)
@@ -149,9 +149,9 @@ class TestWorkspaceAdminService(unittest.TestCase):
         db = MagicMock()
         mock_ws = Workspace(id="ws_1", is_default=False, status="active")
         mock_get_ws.return_value = mock_ws
-        
+
         result = archive_workspace(db, self.principal_founder, "ws_1")
-        
+
         self.assertEqual(mock_ws.status, "archived")
         self.assertIsNotNone(mock_ws.archived_at)
         self.assertEqual(mock_ws.archived_by, "user_founder")

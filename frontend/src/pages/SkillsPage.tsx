@@ -183,7 +183,7 @@ export const SkillsPage: React.FC = () => {
                   ? `No workspace default is set, so creation will use shared default provider ${tenantDefaultProvider.name}.`
                   : 'No workspace-available provider is configured yet. Share or import one in Provider Hub, or set a workspace default provider first.'}
             </InlineAlert>
-            
+
             <div className="grid gap-6 lg:grid-cols-2">
               <div className="space-y-4">
                 <Field label="Skill Name" required>

@@ -496,6 +496,81 @@
   - 产品面上尚未把 cross-tenant 负向验证标准化为一个稳定、低人工成本的 operator 流程
   - 运行面 closeout 过程仍需 `Phase 4.7` 做 operationalization
 
+### 5.10 当前 runtime reliability 补充状态（2026-04-29）
+
+`B4.5` 后续 FastSearch / DeepResearch 并发测试暴露出新的 API 层可靠性问题：长生命周期 SSE 在高并发下可能间接持有 request-scoped DB session，叠加 SQLAlchemy 默认 pool 行为、MySQL stale connection、startup migration 并发风险，使登录等普通 API 请求出现 `pool_timeout` 级别的无首字节等待。
+
+该问题归属 `Phase 4.5` runtime closeout hardening，而不是新的产品面或检索策略变更。已审计通过的补充实现包括：
+
+- DB pool 参数 env 化，默认值面向企业并发部署保持保守预算：
+  - `DB_POOL_PRE_PING=true`
+  - `DB_POOL_RECYCLE_SECONDS=1800`
+  - `DB_POOL_TIMEOUT_SECONDS=5`
+  - `DB_POOL_SIZE=3`
+  - `DB_MAX_OVERFLOW=2`
+- MySQL engine 路径启用 pool pre-ping / recycle / timeout / size / overflow；SQLite 路径不注入这些 pool 参数。
+- Skills Chat streaming 入口不再把 request-scoped `Session` 带入长生命周期 SSE relay：
+  - stream principal resolution 使用短 session 并返回 scalar snapshot
+  - skill / document / run preparation 使用短 session
+  - `stream_skill_run_events()` 改为通过 `session_factory` 在需要 DB 读写时短开短关
+  - terminal serialization 在 session 作用域内完成，避免 detached ORM 懒加载
+- startup migration 增加 `RUN_MIGRATIONS_ON_STARTUP` 开关和本地 `fcntl` 文件锁，降低多 API worker 同时启动时的 Alembic 竞争风险。
+- Redis API/event publish 路径统一补齐 health check / socket keepalive / timeout 类连接保护。
+- 针对 DB pool 配置、startup migration gate、streaming session lifecycle、stream hot-path contract 的测试已补齐并通过代理审计。
+
+当前判定：
+
+- 代码审计：`GO`
+- 阶段归属：`Phase 4.5 runtime reliability hardening`
+- 正式 closeout 证据：第一批 500Q runtime baseline 已在 `2026-04-30` 完成并记录为 `GO with follow-up`；后续 5000Q 作为 soak/regression 证据，不再阻塞 B-stage runtime baseline 结束
+- 注意事项：`scripts/b4_4_skill_chat_harness.py` 的 latency metrics 改动属于测试工具增强；若纳入提交，应作为验证工具变更记录，不作为产品 runtime 代码 gate
+
+### 5.11 Skills Chat 500Q runtime baseline（2026-04-30）
+
+第一批 Skills Chat FastSearch / DeepResearch 500Q 对照测试已归档到：
+
+- `/Users/shaoqing/workspace/PageIndex/test/20240430_Pageindex_SkillsChat_FastSearch_and_DeepResearch_5000Q/test0428_5000/`
+- `b4_4_skill_analysis_report.md`
+- `b4_5_skill_attribution_report.md`
+- `b4_4_skill_leader_report.xlsx`
+
+测试口径：
+
+- `fast`: 500 runs, 500 OK, 0 errors
+- `deep_research`: 500 runs, 500 OK, 0 errors
+- skill id: `380b5ee0-6e66-46a8-8355-4b3fbd3a5d6b`
+- FastSearch uses `node_top_k=3`
+- The directory name contains `5000Q`, but this recorded baseline is the first 500Q batch, not the full 5000Q closeout.
+
+核心结果：
+
+- FastSearch end-to-end p50 / p95: `13959ms / 22776ms`
+- DeepResearch end-to-end p50 / p95: `20741ms / 49015ms`
+- FastSearch TTFT p50 / p95: `10324ms / 16864ms`
+- DeepResearch TTFT p50 / p95: `16744ms / 35162ms`
+- FastSearch quality average score: `7.84`
+- DeepResearch quality average score: `6.84`
+- Paired questions: `499`
+- FastSearch faster: `444` or `445` depending on rounded report source
+- DeepResearch faster: `55`
+- FastSearch quality better: `166`
+- DeepResearch quality better: `22`
+- FastSearch pass / weak / fail: `463 / 30 / 6` over `499` evaluated answers
+- DeepResearch pass / weak / fail: `370 / 46 / 84` over `500` evaluated answers
+
+结论：
+
+- `B4.5 Skills Chat runtime/product baseline`: `GO with follow-up`
+- FastSearch is the current business landing path for direct operating-manual Q&A.
+- DeepResearch remains available for broader reasoning, but this batch does not prove it reliably compensates for its additional latency.
+- This baseline closes the B-stage runtime reliability concern for the first 500Q batch; it does not replace the pending full 5000Q soak/regression evidence.
+
+Follow-up ownership:
+
+- Retrieval parallelization, context compression, and chain caching move to the next optimization stage.
+- FastSearch average input tokens remain high (`~96k`), so context-window / parent-suppression work remains recommended, but it is not a B-stage closeout blocker.
+- Current telemetry still needs better final context size reporting; this batch contains useful `input_tokens` but `context_chars` is not populated in the JSONL outputs.
+
 ## 6. 本阶段明确不做的内容
 
 以下内容全部留给 `Phase 5` 或更后阶段：

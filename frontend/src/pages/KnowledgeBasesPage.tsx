@@ -30,7 +30,7 @@ const getKnowledgeBaseStatusTone = (status: string): 'default' | 'success' | 'wa
 export const KnowledgeBasesPage: React.FC = () => {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  
+
   const [isCreateMode, setIsCreateMode] = useState(false);
   const [formState, setFormState] = useState<KnowledgeBaseFormState>(EMPTY_FORM);
   const [createError, setCreateError] = useState('');
@@ -151,7 +151,7 @@ export const KnowledgeBasesPage: React.FC = () => {
         <GlassPanel title="Create New Knowledge Base" subtitle="Define the metadata now, then you can add documents on the next page.">
           <form className="space-y-6" onSubmit={handleCreateSubmit}>
             {createError && <InlineAlert tone="danger" title="Creation Failed">{createError}</InlineAlert>}
-            
+
             <div className="grid gap-6 lg:grid-cols-2">
               <div className="space-y-4">
                 <Field label="Knowledge Base Name" required>

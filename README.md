@@ -9,12 +9,25 @@ PageIndex Service is an internal-document search and research console built arou
 
 It is designed for enterprise knowledge bases where documents are long, structured, and operationally important: manuals, policies, reports, standards, compliance material, and other source-of-truth files.
 
+In plain terms: PageIndex helps an operator ask questions against large internal documents, quickly find the exact sections that matter, and escalate harder questions to a slower research path when a complete answer needs more evidence.
+
 The project has two complementary retrieval modes:
 
 - **Fast Search**: low-latency section and node search for explicit facts, definitions, requirements, numeric lookups, and obvious chapter/section questions.
 - **DeepResearch**: the original PageIndex reasoning path for multi-step, cross-section, official-source, and evidence-complete answers.
 
 Fast Search is the main speed-oriented product surface. DeepResearch remains the accuracy-first path when a question needs broader reasoning or complete evidence expansion.
+
+## Feature Snapshot
+
+- **FastSearch** for direct section lookup and fast answer generation over indexed document nodes.
+- **DeepResearch** for multi-step, cross-section answers with broader evidence expansion.
+- **Enterprise internal deployment** with tenant/workspace controls, private providers, MySQL, Redis, and MinIO/S3-compatible storage.
+- **Worker/API separation** through Redis-backed async parse, chat, and compliance queues.
+- **Concurrent workers** via `WORKER_PROCESS_COUNT`, worker heartbeats, task recycling, and memory guardrails.
+- **ES-backed retrieval** as the production runtime path for FastSearch and DeepResearch context.
+- **Observability/runtime metrics** for queue time, retrieval latency, provider TTFT, answer latency, token counts, and streaming behavior.
+- **OpenAI-compatible provider support** for LLM, rerank, and embedding services.
 
 ## What It Does
 
@@ -187,24 +200,63 @@ uv run python scripts/phase47/es_full_validation.py
 
 That validation script performs real ES writes when ES is enabled and a bundle is found.
 
-### 4. Start the backend stack
+### 4. Initialize the database
+
+For source development:
+
+```bash
+cp .env.example .env
+uv sync --python 3.12
+uv run alembic upgrade head
+```
+
+For Docker, the API entrypoint runs migrations on startup. You can rerun them explicitly:
 
 ```bash
 cd docker
-./start.sh
+docker compose --profile full exec api alembic upgrade head
 ```
 
-The API runs at `http://127.0.0.1:22223` by default.
+### 5. Start API and workers
 
-### 5. Start the frontend
+Minimal local API mode uses SQLite/local storage/local queue and does not need a standalone worker:
+
+```bash
+uv run uvicorn app.main:app --host 127.0.0.1 --port 22223
+```
+
+Production-style Docker mode uses MySQL, Redis, MinIO, API, and worker processes launched by the API container:
+
+```bash
+cd docker
+cp .env.example .env
+PAGEINDEX_COMPOSE_PROFILE=full bash start.sh
+```
+
+If you run source services with Redis queues, start the API and worker separately:
+
+```bash
+uv run uvicorn app.main:app --host 127.0.0.1 --port 22223
+TASK_QUEUE_BACKEND=redis uv run python -m app.worker
+```
+
+The API runs at `http://127.0.0.1:22223` by default. `WORKER_PROCESS_COUNT` controls concurrent worker child processes.
+
+### 6. Start the frontend
 
 ```bash
 cd frontend
 npm install
-VITE_API_BASE_URL=http://127.0.0.1:22223/api/v1 npm run dev
+npm run dev
 ```
 
 Open `http://localhost:5173`.
+
+`frontend/.env.example` leaves `VITE_API_BASE_URL` empty so the browser infers `http://<current-host>:22223/api/v1`. Set it explicitly only when you need a fixed backend target:
+
+```bash
+VITE_API_BASE_URL=http://127.0.0.1:22223/api/v1 npm run dev
+```
 
 ## Using the Console
 
@@ -215,6 +267,13 @@ Open `http://localhost:5173`.
 5. Use **DeepResearch** in Skill Chat for long-form answers and cross-section reasoning.
 
 Fast Search is also available as a standalone console page for quick document lookup and debugging.
+
+Product boundary:
+
+- `/api/v1/search/fast` is a low-level retrieval/debug API that returns node cards and readiness diagnostics.
+- Skills Chat is the standard product answer interface.
+- Skills Chat supports `retrieval_config.retrieval_mode` with `"fast"` for quick retrieval plus answer generation and `"deep_research"` for the full reasoning path.
+- This repository supports OpenAI-compatible upstream providers; it does not expose a public OpenAI-compatible `/v1/chat/completions` API surface.
 
 ## Important Environment Variables
 
@@ -336,7 +395,46 @@ Response includes:
 - `requested_dense_source`
 - `dense_source`
 
+Skills Chat:
+
+```http
+POST /api/v1/chat/skills/{skill_id}/run
+POST /api/v1/chat/skills/{skill_id}/run/stream
+```
+
+Fast mode request shape:
+
+```json
+{
+  "question": "特殊机场有哪些？",
+  "stream": true,
+  "retrieval_config": {
+    "retrieval_mode": "fast",
+    "node_top_k": 10
+  }
+}
+```
+
+DeepResearch request shape:
+
+```json
+{
+  "question": "请给出完整官方依据。",
+  "stream": true,
+  "retrieval_config": {
+    "retrieval_mode": "deep_research"
+  }
+}
+```
+
 DeepResearch / skill chat remains on the existing chat endpoints and SSE flow.
+
+### Runtime modes and observability
+
+- `retrieval_mode="fast"` runs ES-backed node retrieval, builds a compact context, and then generates an answer with normal provider metrics.
+- `retrieval_mode="deep_research"` runs the broader PageIndex outline/evidence path.
+- Fast Search defaults to quick retrieval plus answer generation in Skills Chat; context size, selected node count, retrieval latency, provider TTFT, answer latency, and token metrics are emitted through run metrics and runtime observations.
+- B4.5 streaming avoids per-chunk DB commit/refresh work, samples `answer_delta` observations, reuses the Redis publish client, and batches frontend streaming answer updates.
 
 ### B4.2 Fast Search backend rule
 
@@ -379,6 +477,16 @@ Real-manual Fast Search benchmark evidence is produced by:
 ```bash
 uv run python scripts/phase47/real_manual_shadow_eval.py
 ```
+
+Tracked automated model/skill-run helpers include:
+
+```bash
+uv run python scripts/b4_4_deepseek_direct_probe.py
+uv run python scripts/b4_4_latency_compare.py
+uv run python scripts/b4_4_skill_chat_harness.py --help
+```
+
+Some local `scripts/phase47/` harnesses may exist in operator workspaces for ES and skill-run validation. Treat untracked local harnesses as environment-specific and do not commit credential-bearing defaults.
 
 ## Open Source Note
 

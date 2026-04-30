@@ -110,7 +110,6 @@ def serialize_invite(invite: WorkspaceInvite, *, now: datetime | None = None) ->
         "updated_at": invite.updated_at,
     }
 
-
 # ---------------------------------------------------------------------------
 # Internal guards
 # ---------------------------------------------------------------------------
@@ -827,4 +826,3 @@ def claim_workspace_invite(
             "permissions": auth_context.workspace_permissions,
         },
     }
-

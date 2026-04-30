@@ -82,7 +82,7 @@ class TestSkillStreamRuntimeContract(unittest.TestCase):
 
         async def scenario():
             stream = stream_skill_run_events(
-                MagicMock(),
+                session_factory=lambda: MagicMock(),
                 principal=self.principal,
                 user=self.user,
                 skill=self.skill,
@@ -131,7 +131,7 @@ class TestSkillStreamRuntimeContract(unittest.TestCase):
 
         async def scenario():
             stream = stream_skill_run_events(
-                MagicMock(),
+                session_factory=lambda: MagicMock(),
                 principal=self.principal,
                 user=self.user,
                 skill=self.skill,
@@ -191,11 +191,20 @@ class TestSkillStreamRuntimeContract(unittest.TestCase):
 
         app = FastAPI()
         app.include_router(chat_router_module.router)
-        app.dependency_overrides[chat_router_module.get_current_principal] = lambda: self.principal
-        app.dependency_overrides[chat_router_module.get_db] = lambda: MagicMock()
+        chat_router_module.resolve_stream_principal = lambda credentials, api_key_value: self.principal
         chat_router_module._require_can_run_skills = lambda principal: None
-        chat_router_module.get_skill_or_404 = lambda db, principal, skill_id: self.skill
-        chat_router_module.resolve_document_version = lambda db, principal, document_id, version_id: (self.document, self.version)
+        chat_router_module._prepare_skill_stream_context = lambda **kwargs: (
+            self.principal,
+            self.skill,
+            self.document,
+            self.version,
+            None,
+            self.skill.model,
+            {},
+            {},
+            {},
+            {},
+        )
 
         async def broken_stream_skill_run_events(*args, **kwargs):
             if False:

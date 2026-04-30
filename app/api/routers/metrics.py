@@ -16,9 +16,9 @@ router = APIRouter(prefix="/api/v1/metrics", tags=["metrics"])
 @router.get("/overview")
 def overview(db: Session = Depends(get_db), principal: Principal = Depends(get_current_principal)):
     require_workspace_capability(principal, "can_view_runs")
-    
+
     tenant_id = principal.tenant_id
-    
+
     total_documents = db.scalar(
         select(func.count()).select_from(Document).where(
             Document.tenant_id == tenant_id,
@@ -37,7 +37,7 @@ def overview(db: Session = Depends(get_db), principal: Principal = Depends(get_c
             get_workspace_visibility_filter(db, principal, ChatRun),
         )
     ) or 0
-    
+
     return {
         "documents": total_documents,
         "parse_jobs": total_jobs,

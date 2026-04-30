@@ -1,5 +1,6 @@
 import json
 import logging
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -47,16 +48,42 @@ def _migration_config() -> Config:
     return config
 
 
-def _run_migrations() -> None:
-    if command is None:
-        Base.metadata.create_all(bind=engine)
-        return
+@contextmanager
+def _migration_file_lock():
+    lock_path = get_settings().data_dir / "migration.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = lock_path.open("w")
     try:
-        command.upgrade(_migration_config(), "head")
-    except Exception as e:
-        logger.error(f"Database migration failed during bootstrap: {e}")
-        logger.error("Please ensure you have resolved any data inconsistencies (e.g. duplicate emails) before upgrading the database.")
-        raise
+        try:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        except (ImportError, OSError) as exc:  # pragma: no cover - platform fallback
+            logger.warning("Migration file lock unavailable; running without lock: %s", exc)
+        yield
+    finally:
+        try:
+            try:
+                import fcntl
+
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            except (ImportError, OSError):
+                pass
+        finally:
+            lock_file.close()
+
+
+def _run_migrations() -> None:
+    with _migration_file_lock():
+        if command is None:
+            Base.metadata.create_all(bind=engine)
+            return
+        try:
+            command.upgrade(_migration_config(), "head")
+        except Exception as e:
+            logger.error(f"Database migration failed during bootstrap: {e}")
+            logger.error("Please ensure you have resolved any data inconsistencies (e.g. duplicate emails) before upgrading the database.")
+            raise
 
 
 def _ensure_default_workspace(db: Session, tenant_id: str, created_by: str | None) -> Workspace:
@@ -261,8 +288,11 @@ def _normalize_provider_workspace_scope(db: Session, tenant_id: str, default_wor
 
 
 def init_db() -> None:
-    _run_migrations()
     settings = get_settings()
+    if getattr(settings, "run_migrations_on_startup", True):
+        _run_migrations()
+    else:
+        logger.info("Skipping startup database migrations because RUN_MIGRATIONS_ON_STARTUP=false")
 
     with Session(engine) as db:
         tenant = db.get(Tenant, "tenant_default")

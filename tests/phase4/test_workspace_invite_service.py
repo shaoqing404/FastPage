@@ -76,11 +76,11 @@ class TestWorkspaceInviteService(unittest.TestCase):
         self, mock_upsert, mock_ensure, mock_create_token, mock_resolve_context
     ):
         db = MagicMock()
-        
+
         invite = WorkspaceInvite(
-            id="inv_1", 
-            workspace_id="ws_1", 
-            email="foo@example.com", 
+            id="inv_1",
+            workspace_id="ws_1",
+            email="foo@example.com",
             status="pending",
             expires_at=datetime.utcnow() + datetime.timedelta(days=1) if hasattr(datetime, "timedelta") else datetime.fromtimestamp(datetime.utcnow().timestamp() + 86400),
             role="member",
@@ -88,7 +88,7 @@ class TestWorkspaceInviteService(unittest.TestCase):
         )
         workspace = Workspace(id="ws_1", tenant_id="tenant_target", status="active", is_default=False)
         db.get.side_effect = lambda model, oid: invite if model == WorkspaceInvite else workspace
-        
+
         # Mocks for post-accept
         mock_auth_ctx = MagicMock()
         mock_auth_ctx.workspace = workspace
@@ -99,7 +99,7 @@ class TestWorkspaceInviteService(unittest.TestCase):
         mock_create_token.return_value = "new_stub_token"
 
         result = accept_workspace_invite(db, self.user_session, "inv_1")
-        
+
         # Verify tenant handoff
         self.assertEqual(self.user_session.tenant_id, "tenant_target")
         self.assertEqual(result["access_token"], "new_stub_token")
@@ -109,9 +109,9 @@ class TestWorkspaceInviteService(unittest.TestCase):
     def test_accept_duplicate_email_validation(self):
         db = MagicMock()
         invite = WorkspaceInvite(
-            id="inv_1", 
-            workspace_id="ws_1", 
-            email="bar@example.com", 
+            id="inv_1",
+            workspace_id="ws_1",
+            email="bar@example.com",
             status="pending",
             expires_at=datetime.fromtimestamp(2000000000),
             role="member"
@@ -128,9 +128,9 @@ class TestWorkspaceInviteService(unittest.TestCase):
     def test_accept_invalid_workspace_or_invite_state(self):
         db = MagicMock()
         invite = WorkspaceInvite(
-            id="inv_1", 
-            workspace_id="ws_1", 
-            email="foo@example.com", 
+            id="inv_1",
+            workspace_id="ws_1",
+            email="foo@example.com",
             status="revoked",
             expires_at=datetime.fromtimestamp(2000000000),
             role="member"
@@ -176,28 +176,28 @@ class TestWorkspaceInviteService(unittest.TestCase):
         db = MagicMock()
         mock_ws = Workspace(id="ws_1", tenant_id="tenant_1")
         mock_get_ws.return_value = mock_ws
-        
+
         # Test 1: create for unregistered email (basic create success)
         db.scalar.return_value = None  # No duplicate
-        
+
         payload = Payload(email=" NEW@example.com ", role="member", permissions_override={})
         result = create_workspace_invite(db, self.principal_admin, "ws_1", payload)
-        
+
         # Normalized email check
         self.assertEqual(result["email"], "new@example.com")
         self.assertEqual(result["role"], "member")
         self.assertEqual(result["status"], "pending")
-        
+
         # Test 2: duplicate pending invite 409
         # Mock database to return an existing pending invite that hasn't expired
         existing_pending = WorkspaceInvite(
-            id="inv_2", 
-            email="new@example.com", 
-            status="pending", 
+            id="inv_2",
+            email="new@example.com",
+            status="pending",
             expires_at=datetime.fromtimestamp(2000000000)
         )
         db.scalar.return_value = existing_pending
-        
+
         with self.assertRaises(HTTPException) as ctx:
             create_workspace_invite(db, self.principal_admin, "ws_1", payload)
         self.assertEqual(ctx.exception.status_code, 409)

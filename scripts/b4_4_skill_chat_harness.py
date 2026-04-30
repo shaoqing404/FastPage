@@ -1372,51 +1372,80 @@ def score_single_answer(
         "thinking": {"type": "enabled"},
         "reasoning_effort": "high",
     }
-    started = mono_now()
-    response = eval_session.post(
-        f"{eval_api_base.rstrip('/')}/chat/completions",
-        headers={"Authorization": f"Bearer {eval_api_key}", "Content-Type": "application/json"},
-        json=payload,
-        timeout=(30, 300),
-    )
-    latency_ms = round((mono_now() - started) * 1000.0, 3)
-    response.raise_for_status()
-    body = response.json()
-    choices = body.get("choices") or []
     content = ""
-    if choices and isinstance(choices, list):
-        first_choice = choices[0]
-        if isinstance(first_choice, dict):
-            message = first_choice.get("message") or {}
-            if isinstance(message, dict):
-                content = str(message.get("content") or "")
-    parsed = extract_json_object(content)
-    usage = body.get("usage") or {}
-    content_score = parsed.get("content_score")
-    citation_score = parsed.get("citation_score")
-    structure_score = parsed.get("structure_score")
-    completeness_score = parsed.get("completeness_score")
-    hallucination_risk = str(parsed.get("hallucination_risk") or "medium").strip().lower()
-    verdict = str(parsed.get("verdict") or "fail").strip().lower()
-    evaluator_reason = str(parsed.get("evaluator_reason") or parsed.get("reason") or "").strip()
-    return {
-        "question_id": record["question_id"],
-        "retrieval_mode": record["retrieval_mode"],
-        "content_score": int(content_score) if str(content_score).isdigit() else 0,
-        "citation_score": int(citation_score) if str(citation_score).isdigit() else 0,
-        "structure_score": int(structure_score) if str(structure_score).isdigit() else 0,
-        "completeness_score": int(completeness_score) if str(completeness_score).isdigit() else 0,
-        "hallucination_risk": hallucination_risk if hallucination_risk in {"none", "low", "medium", "high"} else "medium",
-        "verdict": verdict if verdict in {"pass", "weak_pass", "fail"} else "fail",
-        "evaluator_reason": evaluator_reason,
-        "evaluator_model": eval_model,
-        "score_source": "llm",
-        "score_prompt_tokens": _safe_int(usage.get("prompt_tokens")),
-        "score_completion_tokens": _safe_int(usage.get("completion_tokens")),
-        "score_total_tokens": _safe_int(usage.get("total_tokens")),
-        "score_latency_ms": latency_ms,
-        "score_raw_content": content,
-    }
+    usage: dict[str, Any] = {}
+    started = mono_now()
+    latency_ms: float | None = None
+    try:
+        response = eval_session.post(
+            f"{eval_api_base.rstrip('/')}/chat/completions",
+            headers={"Authorization": f"Bearer {eval_api_key}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=(30, 300),
+        )
+        latency_ms = round((mono_now() - started) * 1000.0, 3)
+        response.raise_for_status()
+        body = response.json()
+        choices = body.get("choices") or []
+        if choices and isinstance(choices, list):
+            first_choice = choices[0]
+            if isinstance(first_choice, dict):
+                message = first_choice.get("message") or {}
+                if isinstance(message, dict):
+                    content = str(message.get("content") or "")
+        parsed = extract_json_object(content)
+        usage = body.get("usage") or {}
+        content_score = parsed.get("content_score")
+        citation_score = parsed.get("citation_score")
+        structure_score = parsed.get("structure_score")
+        completeness_score = parsed.get("completeness_score")
+        hallucination_risk = str(parsed.get("hallucination_risk") or "medium").strip().lower()
+        verdict = str(parsed.get("verdict") or "fail").strip().lower()
+        evaluator_reason = str(parsed.get("evaluator_reason") or parsed.get("reason") or "").strip()
+        return {
+            "question_id": record["question_id"],
+            "retrieval_mode": record["retrieval_mode"],
+            "content_score": int(content_score) if str(content_score).isdigit() else 0,
+            "citation_score": int(citation_score) if str(citation_score).isdigit() else 0,
+            "structure_score": int(structure_score) if str(structure_score).isdigit() else 0,
+            "completeness_score": int(completeness_score) if str(completeness_score).isdigit() else 0,
+            "hallucination_risk": hallucination_risk if hallucination_risk in {"none", "low", "medium", "high"} else "medium",
+            "verdict": verdict if verdict in {"pass", "weak_pass", "fail"} else "fail",
+            "evaluator_reason": evaluator_reason,
+            "evaluator_model": eval_model,
+            "score_source": "llm",
+            "score_prompt_tokens": _safe_int(usage.get("prompt_tokens")),
+            "score_completion_tokens": _safe_int(usage.get("completion_tokens")),
+            "score_total_tokens": _safe_int(usage.get("total_tokens")),
+            "score_latency_ms": latency_ms,
+            "score_raw_content": content,
+        }
+    except Exception as exc:
+        raw_preview = ""
+        response_text = locals().get("response")
+        if response_text is not None:
+            try:
+                raw_preview = str(response_text.text or "")[:2000]
+            except Exception:
+                raw_preview = ""
+        return {
+            "question_id": record["question_id"],
+            "retrieval_mode": record["retrieval_mode"],
+            "content_score": 0,
+            "citation_score": 0,
+            "structure_score": 0,
+            "completeness_score": 0,
+            "hallucination_risk": "high",
+            "verdict": "fail",
+            "evaluator_reason": f"evaluation_error: {exc}",
+            "evaluator_model": eval_model,
+            "score_source": "llm_error",
+            "score_prompt_tokens": None,
+            "score_completion_tokens": None,
+            "score_total_tokens": None,
+            "score_latency_ms": latency_ms,
+            "score_raw_content": raw_preview,
+        }
 
 
 def extract_json_object(text: str) -> dict[str, Any]:
@@ -1716,6 +1745,8 @@ def build_latency_summary(
         retrieval = [float(record["retrieval_ms"]) for record in records if record.get("retrieval_ms") is not None]
         build_context = [float(record["build_context_ms"]) for record in records if record.get("build_context_ms") is not None]
         final_answer = [float(record["final_answer_ms"]) for record in records if record.get("final_answer_ms") is not None]
+        queue_ms = [float(record["queue_ms"]) for record in records if record.get("queue_ms") is not None]
+        sse_flush_lag = [float(record["sse_flush_lag_ms"]) for record in records if record.get("sse_flush_lag_ms") is not None]
         output_tokens_per_sec = [float(record["output_tokens_per_sec"]) for record in records if record.get("output_tokens_per_sec") is not None]
         input_tokens = [int(record["input_tokens"]) for record in records if record.get("input_tokens") is not None]
         return {
@@ -1727,8 +1758,14 @@ def build_latency_summary(
             "retrieval_ms": _latency_summary(retrieval),
             "build_context_ms": _latency_summary(build_context),
             "final_answer_ms": _latency_summary(final_answer),
+            "queue_ms": _latency_summary(queue_ms),
+            "sse_flush_lag_ms": _latency_summary(sse_flush_lag),
             "output_tokens_per_sec": _latency_summary(output_tokens_per_sec),
             "input_tokens_avg": _mean_non_null([float(value) for value in input_tokens]),
+            "correlation_input_tokens_final_answer": _pearson(
+                [float(record["input_tokens"]) for record in records if record.get("input_tokens") is not None and record.get("final_answer_ms") is not None],
+                [float(record["final_answer_ms"]) for record in records if record.get("input_tokens") is not None and record.get("final_answer_ms") is not None],
+            ),
             "correlation_input_tokens_total_elapsed": _pearson(
                 [float(record["input_tokens"]) for record in records if record.get("input_tokens") is not None and record.get("total_elapsed_ms") is not None],
                 [float(record["total_elapsed_ms"]) for record in records if record.get("input_tokens") is not None and record.get("total_elapsed_ms") is not None],
@@ -1833,7 +1870,16 @@ def build_eval_summary(
 
     by_question_type = summarize_by_group(fast_summary["records"] + deep_summary["records"], "question_type")
     by_difficulty = summarize_by_group(fast_summary["records"] + deep_summary["records"], "difficulty")
-    by_token_bucket = summarize_by_group(fast_summary["records"] + deep_summary["records"], "_token_bucket")
+    by_token_bucket = summarize_by_group(
+        [
+            {
+                **record,
+                "_token_bucket": _token_bucket(record.get("input_tokens")),
+            }
+            for record in fast_summary["records"] + deep_summary["records"]
+        ],
+        "_token_bucket",
+    )
     by_citation_correctness = summarize_by_group(
         [
             {
@@ -2022,7 +2068,7 @@ def build_and_write_reports(
     fast_judgments: list[dict[str, Any]],
     deep_judgments: list[dict[str, Any]],
     openai_judgments: list[dict[str, Any]] | None,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
     latency_summary = build_latency_summary(fast_records=fast_records, deep_records=deep_records, openai_records=openai_records)
     write_json(LATENCY_SUMMARY_PATH, latency_summary)
     eval_summary = build_eval_summary(
@@ -2036,6 +2082,146 @@ def build_and_write_reports(
     )
     write_json(EVAL_SUMMARY_PATH, eval_summary)
 
+    def md_table(headers: list[str], rows: list[list[str]]) -> list[str]:
+        lines = [
+            "| " + " | ".join(headers) + " |",
+            "| " + " | ".join("---" for _ in headers) + " |",
+        ]
+        for row in rows:
+            lines.append("| " + " | ".join(row) + " |")
+        return lines
+
+    def fmt_pct(value: Any) -> str:
+        if value is None:
+            return "N/A"
+        try:
+            return f"{float(value) * 100:.1f}%"
+        except Exception:
+            return "N/A"
+
+    def fmt_cell(value: Any) -> str:
+        if value is None:
+            return "N/A"
+        return str(value).replace("|", "\\|")
+
+    def group_rows(groups: list[dict[str, Any]]) -> list[list[str]]:
+        rows: list[list[str]] = []
+        for group in groups:
+            rows.append(
+                [
+                    fmt_cell(group.get("group")),
+                    fmt_cell(group.get("count")),
+                    fmt_pct(group.get("pass_rate")),
+                    fmt_pct(group.get("weak_pass_rate")),
+                    fmt_pct(group.get("fail_rate")),
+                    fmt_cell(group.get("content_score_avg")),
+                    fmt_cell(group.get("citation_score_avg")),
+                    fmt_cell(group.get("structure_score_avg")),
+                    fmt_cell(group.get("completeness_score_avg")),
+                    fmt_cell(group.get("avg_total_elapsed_ms")),
+                    fmt_cell(group.get("avg_ttft_ms")),
+                    fmt_cell(group.get("avg_output_tokens")),
+                ]
+            )
+        return rows
+
+    mode_rows = [
+        [
+            "fast",
+            fmt_cell(latency_summary["fast"]["count"]),
+            fmt_cell(format_ms(latency_summary["fast"]["total_elapsed_ms"]["p50_ms"])),
+            fmt_cell(format_ms(latency_summary["fast"]["total_elapsed_ms"]["p95_ms"])),
+            fmt_cell(format_ms(latency_summary["fast"]["total_elapsed_ms"]["max_ms"])),
+            fmt_cell(format_ms(latency_summary["fast"]["ttft_ms"]["p50_ms"])),
+            fmt_cell(format_ms(latency_summary["fast"]["ttft_ms"]["p95_ms"])),
+            fmt_cell(format_ms(latency_summary["fast"]["ttft_ms"]["max_ms"])),
+            fmt_cell(format_ms(latency_summary["fast"]["output_tokens_per_sec"]["avg_ms"])),
+        ],
+        [
+            "deep_research",
+            fmt_cell(latency_summary["deep_research"]["count"]),
+            fmt_cell(format_ms(latency_summary["deep_research"]["total_elapsed_ms"]["p50_ms"])),
+            fmt_cell(format_ms(latency_summary["deep_research"]["total_elapsed_ms"]["p95_ms"])),
+            fmt_cell(format_ms(latency_summary["deep_research"]["total_elapsed_ms"]["max_ms"])),
+            fmt_cell(format_ms(latency_summary["deep_research"]["ttft_ms"]["p50_ms"])),
+            fmt_cell(format_ms(latency_summary["deep_research"]["ttft_ms"]["p95_ms"])),
+            fmt_cell(format_ms(latency_summary["deep_research"]["ttft_ms"]["max_ms"])),
+            fmt_cell(format_ms(latency_summary["deep_research"]["output_tokens_per_sec"]["avg_ms"])),
+        ],
+    ]
+
+    component_rows = [
+        [
+            "fast",
+            fmt_cell(format_ms(latency_summary["fast"]["queue_ms"]["p50_ms"])),
+            fmt_cell(format_ms(latency_summary["fast"]["retrieval_ms"]["p50_ms"])),
+            fmt_cell(format_ms(latency_summary["fast"]["build_context_ms"]["p50_ms"])),
+            fmt_cell(format_ms(latency_summary["fast"]["final_answer_ms"]["p50_ms"])),
+            fmt_cell(format_ms(latency_summary["fast"]["queue_ms"]["p95_ms"])),
+            fmt_cell(format_ms(latency_summary["fast"]["retrieval_ms"]["p95_ms"])),
+            fmt_cell(format_ms(latency_summary["fast"]["build_context_ms"]["p95_ms"])),
+            fmt_cell(format_ms(latency_summary["fast"]["final_answer_ms"]["p95_ms"])),
+        ],
+        [
+            "deep_research",
+            fmt_cell(format_ms(latency_summary["deep_research"]["queue_ms"]["p50_ms"])),
+            fmt_cell(format_ms(latency_summary["deep_research"]["retrieval_ms"]["p50_ms"])),
+            fmt_cell(format_ms(latency_summary["deep_research"]["build_context_ms"]["p50_ms"])),
+            fmt_cell(format_ms(latency_summary["deep_research"]["final_answer_ms"]["p50_ms"])),
+            fmt_cell(format_ms(latency_summary["deep_research"]["queue_ms"]["p95_ms"])),
+            fmt_cell(format_ms(latency_summary["deep_research"]["retrieval_ms"]["p95_ms"])),
+            fmt_cell(format_ms(latency_summary["deep_research"]["build_context_ms"]["p95_ms"])),
+            fmt_cell(format_ms(latency_summary["deep_research"]["final_answer_ms"]["p95_ms"])),
+        ],
+    ]
+
+    correlation_rows = [
+        [
+            "fast",
+            fmt_cell(latency_summary["fast"]["correlation_input_tokens_final_answer"]),
+            fmt_cell(latency_summary["fast"]["correlation_input_tokens_total_elapsed"]),
+            fmt_cell(latency_summary["fast"]["input_tokens_avg"]),
+        ],
+        [
+            "deep_research",
+            fmt_cell(latency_summary["deep_research"]["correlation_input_tokens_final_answer"]),
+            fmt_cell(latency_summary["deep_research"]["correlation_input_tokens_total_elapsed"]),
+            fmt_cell(latency_summary["deep_research"]["input_tokens_avg"]),
+        ],
+    ]
+
+    slow_rows = [
+        [
+            fmt_cell(record["question_id"]),
+            fmt_cell(record["retrieval_mode"]),
+            fmt_cell(format_ms(record.get("total_elapsed_ms"))),
+            fmt_cell(format_ms(record.get("ttft_ms"))),
+            fmt_cell(format_ms(record.get("retrieval_ms"))),
+            fmt_cell(format_ms(record.get("build_context_ms"))),
+            fmt_cell(format_ms(record.get("final_answer_ms"))),
+            fmt_cell(format_ms(record.get("queue_ms"))),
+            fmt_cell(record.get("dominant_cause")),
+            fmt_cell(record.get("question_type")),
+            fmt_cell(record.get("difficulty")),
+        ]
+        for record in eval_summary["slow_cases"][:10]
+    ]
+
+    wrong_rows = [
+        [
+            fmt_cell(record["question_id"]),
+            fmt_cell(record["retrieval_mode"]),
+            fmt_cell(record.get("content_score")),
+            fmt_cell(record.get("citation_score")),
+            fmt_cell(record.get("structure_score")),
+            fmt_cell(record.get("completeness_score")),
+            fmt_cell(record.get("hallucination_risk")),
+            fmt_cell(record.get("verdict")),
+            fmt_cell(record.get("evaluator_reason")),
+        ]
+        for record in eval_summary["wrong_cases"][:10]
+    ]
+
     latency_report = [
         "# B4.4 Skills Chat Latency Report",
         "",
@@ -2043,22 +2229,84 @@ def build_and_write_reports(
         f"- Questions: {len(questions)}",
         f"- OpenAI-compatible interface: {openai_status.get('reason', 'unknown')}",
         "",
-        "## FastSearch",
-        f"- p50 total elapsed: {format_ms(latency_summary['fast']['total_elapsed_ms']['p50_ms'])} ms",
-        f"- p95 total elapsed: {format_ms(latency_summary['fast']['total_elapsed_ms']['p95_ms'])} ms",
-        f"- max total elapsed: {format_ms(latency_summary['fast']['total_elapsed_ms']['max_ms'])} ms",
-        f"- TTFT p50/p95/max: {format_ms(latency_summary['fast']['ttft_ms']['p50_ms'])} / {format_ms(latency_summary['fast']['ttft_ms']['p95_ms'])} / {format_ms(latency_summary['fast']['ttft_ms']['max_ms'])} ms",
-        f"- output tokens/sec avg: {format_ms(latency_summary['fast']['output_tokens_per_sec']['avg_ms'])}",
+        "## Mode Summary",
+        *md_table(
+            [
+                "Mode",
+                "Count",
+                "p50 total",
+                "p95 total",
+                "max total",
+                "p50 TTFT",
+                "p95 TTFT",
+                "max TTFT",
+                "output tok/s avg",
+            ],
+            mode_rows,
+        ),
         "",
-        "## DeepResearch",
-        f"- p50 total elapsed: {format_ms(latency_summary['deep_research']['total_elapsed_ms']['p50_ms'])} ms",
-        f"- p95 total elapsed: {format_ms(latency_summary['deep_research']['total_elapsed_ms']['p95_ms'])} ms",
-        f"- max total elapsed: {format_ms(latency_summary['deep_research']['total_elapsed_ms']['max_ms'])} ms",
-        f"- TTFT p50/p95/max: {format_ms(latency_summary['deep_research']['ttft_ms']['p50_ms'])} / {format_ms(latency_summary['deep_research']['ttft_ms']['p95_ms'])} / {format_ms(latency_summary['deep_research']['ttft_ms']['max_ms'])} ms",
-        f"- output tokens/sec avg: {format_ms(latency_summary['deep_research']['output_tokens_per_sec']['avg_ms'])}",
+        "## Component Breakdown",
+        *md_table(
+            [
+                "Mode",
+                "p50 queue",
+                "p50 retrieval",
+                "p50 build_context",
+                "p50 final_answer",
+                "p95 queue",
+                "p95 retrieval",
+                "p95 build_context",
+                "p95 final_answer",
+            ],
+            component_rows,
+        ),
+        "",
+        "## Token Correlation",
+        *md_table(
+            [
+                "Mode",
+                "input tokens vs final answer ms",
+                "input tokens vs total elapsed ms",
+                "avg input tokens",
+            ],
+            correlation_rows,
+        ),
+        "",
+        "## Top Slow Cases",
+        *md_table(
+            [
+                "QID",
+                "Mode",
+                "Total ms",
+                "TTFT ms",
+                "Retrieval ms",
+                "Build ctx ms",
+                "Final answer ms",
+                "Queue ms",
+                "Dominant cause",
+                "Type",
+                "Difficulty",
+            ],
+            slow_rows,
+        ),
         "",
     ]
     LATENCY_REPORT_PATH.write_text("\n".join(latency_report), encoding="utf-8")
+
+    retrieval_rows = [
+        [
+            fmt_cell(mode),
+            fmt_cell(mode_summary["count"]),
+            fmt_pct(mode_summary["pass_rate"]),
+            fmt_pct(mode_summary["weak_pass_rate"]),
+            fmt_pct(mode_summary["fail_rate"]),
+            fmt_cell(mode_summary["content_score_avg"]),
+            fmt_cell(mode_summary["citation_score_avg"]),
+            fmt_cell(mode_summary["structure_score_avg"]),
+            fmt_cell(mode_summary["completeness_score_avg"]),
+        ]
+        for mode, mode_summary in eval_summary["by_retrieval_mode"].items()
+    ]
 
     eval_report = [
         "# B4.4 Skills Chat Quality Report",
@@ -2067,32 +2315,222 @@ def build_and_write_reports(
         f"- OpenAI-compatible interface: {openai_status.get('reason', 'unknown')}",
         "",
         "## Retrieval Modes",
+        *md_table(
+            [
+                "Mode",
+                "Count",
+                "Pass rate",
+                "Weak pass rate",
+                "Fail rate",
+                "Content avg",
+                "Citation avg",
+                "Structure avg",
+                "Completeness avg",
+            ],
+            retrieval_rows,
+        ),
         "",
-        "| Mode | Count | Pass rate | Weak pass rate | Fail rate | Content avg | Citation avg | Structure avg | Completeness avg |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "## Group Breakdown",
+        "### By Question Type",
+        *md_table(
+            [
+                "Group",
+                "Count",
+                "Pass rate",
+                "Weak pass rate",
+                "Fail rate",
+                "Content avg",
+                "Citation avg",
+                "Structure avg",
+                "Completeness avg",
+                "Avg total ms",
+                "Avg TTFT ms",
+                "Avg output tokens",
+            ],
+            group_rows(eval_summary["by_question_type"]),
+        ),
+        "",
+        "### By Difficulty",
+        *md_table(
+            [
+                "Group",
+                "Count",
+                "Pass rate",
+                "Weak pass rate",
+                "Fail rate",
+                "Content avg",
+                "Citation avg",
+                "Structure avg",
+                "Completeness avg",
+                "Avg total ms",
+                "Avg TTFT ms",
+                "Avg output tokens",
+            ],
+            group_rows(eval_summary["by_difficulty"]),
+        ),
+        "",
+        "### By Token Bucket",
+        *md_table(
+            [
+                "Group",
+                "Count",
+                "Pass rate",
+                "Weak pass rate",
+                "Fail rate",
+                "Content avg",
+                "Citation avg",
+                "Structure avg",
+                "Completeness avg",
+                "Avg total ms",
+                "Avg TTFT ms",
+                "Avg output tokens",
+            ],
+            group_rows(eval_summary["by_token_bucket"]),
+        ),
+        "",
+        "### By Citation Correctness",
+        *md_table(
+            [
+                "Group",
+                "Count",
+                "Pass rate",
+                "Weak pass rate",
+                "Fail rate",
+                "Content avg",
+                "Citation avg",
+                "Structure avg",
+                "Completeness avg",
+                "Avg total ms",
+                "Avg TTFT ms",
+                "Avg output tokens",
+            ],
+            group_rows(eval_summary["by_citation_correctness"]),
+        ),
+        "",
+        "### By Latency Bucket",
+        *md_table(
+            [
+                "Group",
+                "Count",
+                "Pass rate",
+                "Weak pass rate",
+                "Fail rate",
+                "Content avg",
+                "Citation avg",
+                "Structure avg",
+                "Completeness avg",
+                "Avg total ms",
+                "Avg TTFT ms",
+                "Avg output tokens",
+            ],
+            group_rows(eval_summary["by_latency_bucket"]),
+        ),
+        "",
+        "## Fast vs Deep",
+        f"- Paired count: {eval_summary['fast_vs_deep']['paired_count']}",
+        f"- Improved: {eval_summary['fast_vs_deep']['improved_count']}",
+        f"- Regressed: {eval_summary['fast_vs_deep']['regressed_count']}",
+        f"- Same: {eval_summary['fast_vs_deep']['same_count']}",
+        "",
+        "### Top Improvements",
+        *md_table(
+            [
+                "QID",
+                "Fast score",
+                "Deep score",
+                "Score delta",
+                "Fast total ms",
+                "Deep total ms",
+                "Latency delta ms",
+            ],
+            [
+                [
+                    fmt_cell(record["question_id"]),
+                    fmt_cell(record["fast_score_sum"]),
+                    fmt_cell(record["deep_score_sum"]),
+                    fmt_cell(record["score_delta"]),
+                    fmt_cell(format_ms(record.get("fast_total_elapsed_ms"))),
+                    fmt_cell(format_ms(record.get("deep_total_elapsed_ms"))),
+                    fmt_cell(format_ms(record.get("latency_delta_ms"))),
+                ]
+                for record in sorted(
+                    eval_summary["fast_vs_deep"]["paired_records"],
+                    key=lambda item: (int(item.get("score_delta") or 0), -float(item.get("latency_delta_ms") or 0.0)),
+                    reverse=True,
+                )[:10]
+            ],
+        ),
+        "",
+        "### Top Regressions",
+        *md_table(
+            [
+                "QID",
+                "Fast score",
+                "Deep score",
+                "Score delta",
+                "Fast total ms",
+                "Deep total ms",
+                "Latency delta ms",
+            ],
+            [
+                [
+                    fmt_cell(record["question_id"]),
+                    fmt_cell(record["fast_score_sum"]),
+                    fmt_cell(record["deep_score_sum"]),
+                    fmt_cell(record["score_delta"]),
+                    fmt_cell(format_ms(record.get("fast_total_elapsed_ms"))),
+                    fmt_cell(format_ms(record.get("deep_total_elapsed_ms"))),
+                    fmt_cell(format_ms(record.get("latency_delta_ms"))),
+                ]
+                for record in sorted(
+                    eval_summary["fast_vs_deep"]["paired_records"],
+                    key=lambda item: (int(item.get("score_delta") or 0), float(item.get("latency_delta_ms") or 0.0)),
+                )[:10]
+            ],
+        ),
+        "",
+        "## Top Wrong Cases",
+        *md_table(
+            [
+                "QID",
+                "Mode",
+                "Content",
+                "Citation",
+                "Structure",
+                "Completeness",
+                "Risk",
+                "Verdict",
+                "Reason",
+            ],
+            wrong_rows,
+        ),
+        "",
+        "## Correlations",
+        *md_table(
+            [
+                "Mode",
+                "input tokens vs final answer ms",
+                "input tokens vs total elapsed ms",
+            ],
+            [
+                [
+                    "fast",
+                    fmt_cell(eval_summary["correlations"]["fast"]["input_tokens_vs_final_answer_ms"]),
+                    fmt_cell(eval_summary["correlations"]["fast"]["input_tokens_vs_total_elapsed_ms"]),
+                ],
+                [
+                    "deep_research",
+                    fmt_cell(eval_summary["correlations"]["deep_research"]["input_tokens_vs_final_answer_ms"]),
+                    fmt_cell(eval_summary["correlations"]["deep_research"]["input_tokens_vs_total_elapsed_ms"]),
+                ],
+            ],
+        ),
+        "",
+        f"## GO/NO-GO: {eval_summary['go_no_go']['status']}",
+        f"- {eval_summary['go_no_go']['reason']}",
+        "",
+        "## Minimal Fixes",
     ]
-    for mode in ("fast", "deep_research"):
-        mode_summary = eval_summary["by_retrieval_mode"][mode]
-        eval_report.append(
-            f"| {mode} | {mode_summary['count']} | {format_ms(mode_summary['pass_rate'] * 100 if mode_summary['pass_rate'] is not None else None)}% | "
-            f"{format_ms(mode_summary['weak_pass_rate'] * 100 if mode_summary['weak_pass_rate'] is not None else None)}% | "
-            f"{format_ms(mode_summary['fail_rate'] * 100 if mode_summary['fail_rate'] is not None else None)}% | "
-            f"{format_ms(mode_summary['content_score_avg'])} | {format_ms(mode_summary['citation_score_avg'])} | {format_ms(mode_summary['structure_score_avg'])} | {format_ms(mode_summary['completeness_score_avg'])} |"
-        )
-    eval_report.extend(
-        [
-            "",
-            "## Fast vs Deep",
-            f"- Paired count: {eval_summary['fast_vs_deep']['paired_count']}",
-            f"- Improved: {eval_summary['fast_vs_deep']['improved_count']}",
-            f"- Regressed: {eval_summary['fast_vs_deep']['regressed_count']}",
-            "",
-            f"## GO/NO-GO: {eval_summary['go_no_go']['status']}",
-            f"- {eval_summary['go_no_go']['reason']}",
-            "",
-            "## Minimal Fixes",
-        ]
-    )
     for fix in eval_summary["go_no_go"]["minimum_fix"]:
         eval_report.append(f"- {fix}")
     EVAL_REPORT_PATH.write_text("\n".join(eval_report), encoding="utf-8")

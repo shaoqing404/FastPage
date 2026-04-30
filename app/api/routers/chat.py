@@ -1,13 +1,16 @@
 import json
 import logging
+from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_principal
-from app.core.db import get_db
+from app.api.deps import get_current_principal, resolve_stream_principal
+from app.core.auth import api_key_scheme, bearer_scheme
+from app.core.db import SessionLocal, get_db
 from app.core.errors import AppError, ErrorCode, status_to_error_code
 from app.core.principal import Principal
 from app.schemas.chat import (
@@ -86,6 +89,106 @@ def _require_can_view_runs(principal: Principal) -> None:
     )
 
 
+def _skill_stream_snapshot(value):
+    if value is None:
+        return None
+    fields = (
+        "id",
+        "tenant_id",
+        "workspace_id",
+        "owner_user_id",
+        "name",
+        "knowledge_base_id",
+        "provider_id",
+        "model",
+        "request_config_json",
+        "conversation_config_json",
+        "retrieval_config_json",
+        "generation_config_json",
+    )
+    payload = {field: getattr(value, field, None) for field in fields}
+    payload["documents"] = [
+        SimpleNamespace(document_id=item.document_id)
+        for item in list(getattr(value, "documents", []) or [])
+    ]
+    return SimpleNamespace(**payload)
+
+
+def _document_stream_snapshot(value):
+    if value is None:
+        return None
+    return SimpleNamespace(
+        id=value.id,
+        workspace_id=value.workspace_id,
+        display_name=getattr(value, "display_name", None),
+        source_filename=getattr(value, "source_filename", None),
+    )
+
+
+def _version_stream_snapshot(value):
+    if value is None:
+        return None
+    return SimpleNamespace(
+        id=value.id,
+        version_no=value.version_no,
+        parsed_structure_path=value.parsed_structure_path,
+        parse_status=value.parse_status,
+        storage_path=getattr(value, "storage_path", None),
+        routing_index_status=getattr(value, "routing_index_status", None),
+        routing_index_path=getattr(value, "routing_index_path", None),
+        routing_asset_schema_version=getattr(value, "routing_asset_schema_version", None),
+    )
+
+
+def _prepare_skill_stream_context(
+    *,
+    skill_id: str,
+    payload: SkillRunRequest,
+    credentials: HTTPAuthorizationCredentials | None,
+    api_key_value: str | None,
+) -> tuple[Principal, object, object | None, object | None, str | None, str | None, dict, dict, dict, dict]:
+    principal = resolve_stream_principal(credentials, api_key_value)
+    _require_can_run_skills(principal)
+    with SessionLocal() as db:
+        skill = get_skill_or_404(db, principal, skill_id)
+        request_config = json.loads(skill.request_config_json or "{}")
+        conversation_config = json.loads(skill.conversation_config_json or "{}")
+        retrieval_config = json.loads(skill.retrieval_config_json or "{}")
+        generation_config = json.loads(skill.generation_config_json or "{}")
+        session_id = payload.session_id
+        if not session_id and payload.auto_create_session:
+            session = create_session(
+                db,
+                principal,
+                payload.session_title or skill.name,
+                skill_id=skill.id,
+            )
+            session_id = session.id
+        document, version, run_target = resolve_skill_run_targets(
+            db,
+            principal=principal,
+            skill=skill,
+            document_id=payload.document_id,
+        )
+        request_config = {
+            **request_config,
+            **({"system_prompt": payload.system_prompt} if payload.system_prompt else {}),
+            "_run_target": run_target,
+        }
+        return (
+            principal,
+            _skill_stream_snapshot(skill),
+            _document_stream_snapshot(document),
+            _version_stream_snapshot(version),
+            session_id,
+            payload.model or skill.model,
+            request_config,
+            {**conversation_config, **payload.conversation_config},
+            {**retrieval_config, **payload.retrieval_config},
+            {**generation_config, **payload.generation_config},
+        )
+
+
 @router.post("/chat/ask", response_model=ChatRunOut)
 async def ask_question(payload: AskRequest, db: Session = Depends(get_db), principal: Principal = Depends(get_current_principal)):
     document, version = resolve_document_version(db, principal, payload.document_id, payload.version_id)
@@ -111,44 +214,42 @@ async def run_skill(
     skill_id: str,
     payload: SkillRunRequest,
     request: Request,
-    db: Session = Depends(get_db),
-    principal: Principal = Depends(get_current_principal),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    api_key_value: str | None = Depends(api_key_scheme),
 ):
-    _require_can_run_skills(principal)
     if payload.stream:
         async def event_stream():
             try:
-                skill = get_skill_or_404(db, principal, skill_id)
-                request_config = json.loads(skill.request_config_json or "{}")
-                conversation_config = json.loads(skill.conversation_config_json or "{}")
-                retrieval_config = json.loads(skill.retrieval_config_json or "{}")
-                generation_config = json.loads(skill.generation_config_json or "{}")
-                session_id = payload.session_id
-                if not session_id and payload.auto_create_session:
-                    session = create_session(
-                        db,
-                        principal,
-                        payload.session_title or skill.name,
-                        skill_id=skill.id,
-                    )
-                    session_id = session.id
+                (
+                    principal,
+                    skill,
+                    document,
+                    version,
+                    session_id,
+                    model,
+                    request_config,
+                    conversation_config,
+                    retrieval_config,
+                    generation_config,
+                ) = _prepare_skill_stream_context(
+                    skill_id=skill_id,
+                    payload=payload,
+                    credentials=credentials,
+                    api_key_value=api_key_value,
+                )
                 async for event in stream_skill_run_events(
-                    db,
+                    session_factory=SessionLocal,
                     principal=principal,
                     user=principal.user,
                     skill=skill,
-                    document=None,
-                    version=None,
+                    document=document,
+                    version=version,
                     question=payload.question,
-                    model=payload.model or skill.model,
-                    request_config={
-                        **request_config,
-                        **({"system_prompt": payload.system_prompt} if payload.system_prompt else {}),
-                    },
-                    conversation_config={**conversation_config, **payload.conversation_config},
-                    retrieval_config={**retrieval_config, **payload.retrieval_config},
-                    generation_config={**generation_config, **payload.generation_config},
-                    document_id=payload.document_id,
+                    model=model,
+                    request_config=request_config,
+                    conversation_config=conversation_config,
+                    retrieval_config=retrieval_config,
+                    generation_config=generation_config,
                     provider_id=payload.provider_id,
                     session_id=session_id,
                     disconnect_check=request.is_disconnected,
@@ -166,47 +267,50 @@ async def run_skill(
                 "X-Accel-Buffering": "no",
             },
         )
-    skill = get_skill_or_404(db, principal, skill_id)
-    request_config = json.loads(skill.request_config_json or "{}")
-    conversation_config = json.loads(skill.conversation_config_json or "{}")
-    retrieval_config = json.loads(skill.retrieval_config_json or "{}")
-    generation_config = json.loads(skill.generation_config_json or "{}")
-    document, version, run_target = resolve_skill_run_targets(
-        db,
-        principal=principal,
-        skill=skill,
-        document_id=payload.document_id,
-    )
-    session_id = payload.session_id
-    if not session_id and payload.auto_create_session:
-        session = create_session(
+    principal = resolve_stream_principal(credentials, api_key_value)
+    _require_can_run_skills(principal)
+    with SessionLocal() as db:
+        skill = get_skill_or_404(db, principal, skill_id)
+        request_config = json.loads(skill.request_config_json or "{}")
+        conversation_config = json.loads(skill.conversation_config_json or "{}")
+        retrieval_config = json.loads(skill.retrieval_config_json or "{}")
+        generation_config = json.loads(skill.generation_config_json or "{}")
+        document, version, run_target = resolve_skill_run_targets(
             db,
-            principal,
-            payload.session_title or skill.name,
-            skill_id=skill.id,
+            principal=principal,
+            skill=skill,
+            document_id=payload.document_id,
         )
-        session_id = session.id
-    run = await create_chat_run(
-        db,
-        principal=principal,
-        user=principal.user,
-        document=document,
-        version=version,
-        question=payload.question,
-        model=payload.model or skill.model,
-        request_config={
-            **request_config,
-            **({"system_prompt": payload.system_prompt} if payload.system_prompt else {}),
-            "_run_target": run_target,
-        },
-        conversation_config={**conversation_config, **payload.conversation_config},
-        retrieval_config={**retrieval_config, **payload.retrieval_config},
-        generation_config={**generation_config, **payload.generation_config},
-        skill=skill,
-        provider_id=payload.provider_id,
-        session_id=session_id,
-    )
-    return serialize_run(run)
+        session_id = payload.session_id
+        if not session_id and payload.auto_create_session:
+            session = create_session(
+                db,
+                principal,
+                payload.session_title or skill.name,
+                skill_id=skill.id,
+            )
+            session_id = session.id
+        run = await create_chat_run(
+            db,
+            principal=principal,
+            user=principal.user,
+            document=document,
+            version=version,
+            question=payload.question,
+            model=payload.model or skill.model,
+            request_config={
+                **request_config,
+                **({"system_prompt": payload.system_prompt} if payload.system_prompt else {}),
+                "_run_target": run_target,
+            },
+            conversation_config={**conversation_config, **payload.conversation_config},
+            retrieval_config={**retrieval_config, **payload.retrieval_config},
+            generation_config={**generation_config, **payload.generation_config},
+            skill=skill,
+            provider_id=payload.provider_id,
+            session_id=session_id,
+        )
+        return serialize_run(run)
 
 
 @router.post("/chat/skills/{skill_id}/run/stream")
@@ -214,43 +318,41 @@ async def run_skill_stream(
     skill_id: str,
     payload: SkillRunRequest,
     request: Request,
-    db: Session = Depends(get_db),
-    principal: Principal = Depends(get_current_principal),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    api_key_value: str | None = Depends(api_key_scheme),
 ):
-    _require_can_run_skills(principal)
     async def event_stream():
         try:
-            skill = get_skill_or_404(db, principal, skill_id)
-            request_config = json.loads(skill.request_config_json or "{}")
-            conversation_config = json.loads(skill.conversation_config_json or "{}")
-            retrieval_config = json.loads(skill.retrieval_config_json or "{}")
-            generation_config = json.loads(skill.generation_config_json or "{}")
-            session_id = payload.session_id
-            if not session_id and payload.auto_create_session:
-                session = create_session(
-                    db,
-                    principal,
-                    payload.session_title or skill.name,
-                    skill_id=skill.id,
-                )
-                session_id = session.id
+            (
+                principal,
+                skill,
+                document,
+                version,
+                session_id,
+                model,
+                request_config,
+                conversation_config,
+                retrieval_config,
+                generation_config,
+            ) = _prepare_skill_stream_context(
+                skill_id=skill_id,
+                payload=payload,
+                credentials=credentials,
+                api_key_value=api_key_value,
+            )
             async for event in stream_skill_run_events(
-                db,
+                session_factory=SessionLocal,
                 principal=principal,
                 user=principal.user,
                 skill=skill,
-                document=None,
-                version=None,
+                document=document,
+                version=version,
                 question=payload.question,
-                model=payload.model or skill.model,
-                request_config={
-                    **request_config,
-                    **({"system_prompt": payload.system_prompt} if payload.system_prompt else {}),
-                },
-                conversation_config={**conversation_config, **payload.conversation_config},
-                retrieval_config={**retrieval_config, **payload.retrieval_config},
-                generation_config={**generation_config, **payload.generation_config},
-                document_id=payload.document_id,
+                model=model,
+                request_config=request_config,
+                conversation_config=conversation_config,
+                retrieval_config=retrieval_config,
+                generation_config=generation_config,
                 provider_id=payload.provider_id,
                 session_id=session_id,
                 disconnect_check=request.is_disconnected,
