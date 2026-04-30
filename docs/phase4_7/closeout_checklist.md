@@ -49,6 +49,11 @@ uv run python -m unittest tests.phase4.test_phase47_validation_defaults
 uv run python -m unittest discover -s tests/phase4 -p 'test_*.py'
 ```
 
+说明：
+
+- 前两个命令是当前树上相对稳定的门禁
+- 最后一个 blanket `discover` 目前已知存在顺序敏感性；不要把它当作单独的通过条件
+
 4. 确认 backend API、worker、MySQL、MinIO、Redis 都已连到当前目标环境。
 
 ## 3. Test User Provisioning
@@ -153,3 +158,9 @@ uv run python scripts/phase47/validation_artifacts.py audit
 - portrait / control-plane 验证是否通过
 - cleanup 是完成、部分完成，还是为了排障而保留
 - 哪些限制仍然存在，但不属于本阶段重新设计范围
+
+当前树证据：
+
+- `results/phase4_7_backend_validation_passed_20260423T100430Z.json`
+- cleanup 已完成
+- `password_reset_flow.performed` 为 `false`

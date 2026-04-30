@@ -59,7 +59,10 @@ class ModelProviderOut(BaseModel):
     source_provider_id: str | None
     source_provider_name: str | None
     is_workspace_default_candidate: bool
-    capabilities: dict[str, Any] = Field(default_factory=dict)
+    capabilities: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additive capability contract for chat, rerank, and embedding model families.",
+    )
     created_at: datetime
     updated_at: datetime
 

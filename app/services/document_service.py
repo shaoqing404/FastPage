@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.errors import AppError, ErrorCode
 from app.core.principal import Principal
 from app.models import ChatMessage, ChatRun, ChatSkillDocument, Document, DocumentVersion, KnowledgeBaseDocument, ParseJob, Workspace
-from app.services.storage_service import delete_document_tree, save_uploaded_pdf
+from app.services.storage_service import copy_source_pdf_to_version, delete_document_tree, save_uploaded_pdf
 
 
 def _hash_file(path) -> str:
@@ -148,6 +148,49 @@ def restore_document_version(db: Session, principal: Principal, document_id: str
     db.commit()
     db.refresh(document)
     return document
+
+
+def create_rebuild_version(
+    db: Session,
+    principal: Principal,
+    document_id: str,
+    source_version_id: str | None = None,
+) -> tuple[Document, DocumentVersion]:
+    document = get_document_or_404(db, principal, document_id)
+    target_version_id = source_version_id or document.active_version_id
+    if not target_version_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Document has no active version")
+    source_version = db.get(DocumentVersion, target_version_id)
+    if source_version is None or source_version.document_id != document.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document version not found")
+
+    current_max = db.scalar(select(func.max(DocumentVersion.version_no)).where(DocumentVersion.document_id == document.id)) or 0
+    version = DocumentVersion(
+        id=str(uuid.uuid4()),
+        document_id=document.id,
+        version_no=int(current_max) + 1,
+        storage_path="",
+        file_hash=source_version.file_hash,
+        parse_status="uploaded",
+    )
+    db.add(version)
+    db.flush()
+    storage_uri = copy_source_pdf_to_version(
+        source_uri=source_version.storage_path,
+        tenant_id=principal.tenant_id,
+        document_id=document.id,
+        version_id=version.id,
+    )
+    version.storage_path = storage_uri
+    if storage_uri.startswith("minio://"):
+        version.file_hash = f"rebuild:{source_version.id}:{version.id}"
+    document.active_version_id = version.id
+    document.status = "uploaded"
+    document.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(document)
+    db.refresh(version)
+    return document, version
 
 
 def delete_document(db: Session, principal: Principal, document_id: str) -> None:

@@ -42,7 +42,8 @@ Allowed fallback PDFs:
 
 Check all items before live validation:
 
-- `uv run python -m unittest discover -s tests/phase4 -p 'test_*.py'` passes
+- stable `tests.phase4` subsets used by the current tree pass
+- the blanket `uv run python -m unittest discover -s tests/phase4 -p 'test_*.py'` sweep is currently known to be order-sensitive and is not the sole gate
 - `.env` points at the intended `MySQL + MinIO + Redis` runtime
 - backend API and worker are reachable
 - provider `.env` credentials are valid for `openai_compatible` creation
@@ -146,3 +147,15 @@ Rule for `Phase 4.7`:
 - platform portrait routes regress
 - API-key or workspace-isolation checks regress
 - cleanup leaves ambiguous active validation artifacts
+
+## 10. Current-Tree Evidence
+
+Current passing artifact:
+
+- `results/phase4_7_backend_validation_passed_20260423T100430Z.json`
+
+Observed current-tree details:
+
+- cleanup completed
+- `password_reset_flow.performed == false`
+- the blanket `tests/phase4` discover sweep is still order-sensitive after `tests.phase4.test_bootstrap_init_db` or `tests.phase4.test_main_import_hotfix`

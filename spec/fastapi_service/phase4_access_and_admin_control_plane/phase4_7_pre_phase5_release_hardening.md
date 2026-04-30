@@ -17,10 +17,11 @@ This phase assumes product-surface closure work has already been assigned to `Ph
 
 It also assumes that any `Phase 4.5` blocker first repaired at unit-test or contract-test level has already been rerun on the real project runtime surface before being treated as a hardening baseline.
 
-Current inherited baseline (`2026-04-17`):
+Current inherited baseline (`2026-04-23`):
 
 - `Phase 4.5` enters `4.7` as `Conditional GO`
 - `Phase 4.6` enters `4.7` as `GO`
+- `Phase 4.7` now closes as `GO` on the current tree with a finalized runtime artifact
 - `4.7` therefore inherits a runtime-revalidated control-plane/product baseline rather than a code-audited-only baseline
 
 ## 2. Scope

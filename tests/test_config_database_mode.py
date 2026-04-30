@@ -104,6 +104,37 @@ class TestConfigDatabaseMode(unittest.TestCase):
             self.assertEqual(settings.database_mode, "mysql")
             self.assertEqual(settings.database_url, override_url)
 
+    def test_routing_route_docs_mode_uses_canonical_env_before_legacy_alias(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(
+                os.environ,
+                {
+                    "DATA_DIR": str(Path(temp_dir) / "data"),
+                    "ROUTING_ROUTE_DOCS_BUILD_MODE": "dry_run",
+                    "ROUTING_ROUTE_DOC_BUILD_MODE": "persist",
+                },
+                clear=True,
+            ):
+                config.get_settings.cache_clear()
+                settings = config.get_settings()
+
+            self.assertEqual(settings.routing_route_docs_build_mode, "dry_run")
+
+    def test_routing_route_docs_mode_supports_legacy_singular_alias(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(
+                os.environ,
+                {
+                    "DATA_DIR": str(Path(temp_dir) / "data"),
+                    "ROUTING_ROUTE_DOC_BUILD_MODE": "persist",
+                },
+                clear=True,
+            ):
+                config.get_settings.cache_clear()
+                settings = config.get_settings()
+
+            self.assertEqual(settings.routing_route_docs_build_mode, "persist")
+
 
 if __name__ == "__main__":
     unittest.main()

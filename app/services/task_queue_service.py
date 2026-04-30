@@ -1,6 +1,8 @@
 import asyncio
+import inspect
 import json
 import logging
+from typing import Any
 
 from fastapi.encoders import jsonable_encoder
 
@@ -9,6 +11,17 @@ from app.core.config import get_settings
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+
+def _redis_client_kwargs() -> dict[str, Any]:
+    return {
+        "decode_responses": True,
+        "socket_keepalive": True,
+        "socket_timeout": settings.redis_socket_timeout_seconds,
+        "socket_connect_timeout": settings.redis_socket_connect_timeout_seconds,
+        "health_check_interval": settings.redis_health_check_interval_seconds,
+        "retry_on_timeout": True,
+    }
 
 
 def chat_event_channel(run_id: str) -> str:
@@ -52,7 +65,7 @@ class RedisTaskQueue(BaseTaskQueue):
         except ImportError as exc:  # pragma: no cover - environment fallback
             raise RuntimeError("redis package is not installed") from exc
 
-        self.client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+        self.client = redis.Redis.from_url(settings.redis_url, **_redis_client_kwargs())
 
     def enqueue_parse_job(self, job_id: str) -> None:
         payload = json.dumps({"kind": "parse_job", "job_id": job_id})
@@ -106,6 +119,9 @@ class LocalChatEventBus:
 
 
 _local_chat_event_bus = LocalChatEventBus()
+_redis_publish_client: Any | None = None
+_redis_publish_client_url: str | None = None
+_redis_publish_client_lock = asyncio.Lock()
 
 
 class LocalChatEventSubscription(BaseChatEventSubscription):
@@ -135,7 +151,7 @@ class RedisChatEventSubscription(BaseChatEventSubscription):
         import redis.asyncio as redis_async
 
         self.channel = channel
-        self.client = redis_async.Redis.from_url(settings.redis_url, decode_responses=True)
+        self.client = redis_async.Redis.from_url(settings.redis_url, **_redis_client_kwargs())
         self.pubsub = self.client.pubsub()
 
     async def start(self) -> "RedisChatEventSubscription":
@@ -174,19 +190,72 @@ class RedisChatEventSubscription(BaseChatEventSubscription):
         await self.client.aclose()
 
 
+async def _close_redis_publish_client(client: Any) -> None:
+    try:
+        close = getattr(client, "aclose", None)
+        if close is None:
+            return
+        result = close()
+        if inspect.isawaitable(result):
+            await result
+    except Exception as exc:
+        logger.warning("Failed to close Redis event publish client: %s", exc)
+
+
+async def _get_redis_publish_client() -> Any:
+    global _redis_publish_client, _redis_publish_client_url
+
+    async with _redis_publish_client_lock:
+        if _redis_publish_client is not None and _redis_publish_client_url == settings.redis_url:
+            return _redis_publish_client
+
+        previous_client = _redis_publish_client
+        _redis_publish_client = None
+        _redis_publish_client_url = None
+        if previous_client is not None:
+            await _close_redis_publish_client(previous_client)
+
+        import redis.asyncio as redis_async
+
+        _redis_publish_client = redis_async.Redis.from_url(settings.redis_url, **_redis_client_kwargs())
+        _redis_publish_client_url = settings.redis_url
+        return _redis_publish_client
+
+
+async def _reset_redis_publish_client(client: Any | None = None) -> None:
+    global _redis_publish_client, _redis_publish_client_url
+
+    client_to_close = None
+    async with _redis_publish_client_lock:
+        if client is not None and _redis_publish_client is not client:
+            return
+        client_to_close = _redis_publish_client
+        _redis_publish_client = None
+        _redis_publish_client_url = None
+
+    if client_to_close is not None:
+        await _close_redis_publish_client(client_to_close)
+
+
+async def _publish_redis_channel_event(channel: str, payload: str) -> None:
+    for attempt in range(2):
+        client = await _get_redis_publish_client()
+        try:
+            await client.publish(channel, payload)
+            return
+        except Exception as exc:
+            await _reset_redis_publish_client(client)
+            if attempt == 1:
+                raise
+            logger.warning("Redis event publish failed; rebuilding publish client: %s", exc)
+
+
 async def _publish_channel_event(channel: str, payload: str) -> None:
     if settings.task_queue_backend == "redis":
         try:
-            import redis.asyncio as redis_async
+            await _publish_redis_channel_event(channel, payload)
         except ImportError:  # pragma: no cover - environment fallback
             await _local_chat_event_bus.publish(channel, payload)
-            return
-
-        client = redis_async.Redis.from_url(settings.redis_url, decode_responses=True)
-        try:
-            await client.publish(channel, payload)
-        finally:
-            await client.aclose()
         return
     await _local_chat_event_bus.publish(channel, payload)
 

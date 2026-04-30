@@ -21,6 +21,9 @@ This parent stage should be managed as:
 - `Phase 4.6 Tenant Directory and Access Portrait`
 - `Phase 4.7 Pre-Phase5 Release Hardening`
 - `Phase 4.8 Test-Led Experience Stabilization`
+- `Phase 4.9 Multi-Manual Runtime And Observability Closeout`
+- `Phase 4.10 Routing Speed And Structure Foundation`
+- `Phase 4.11 B-Stage Baseline And Phase 5 Entry`
 
 `Phase 5` remains reserved for:
 
@@ -76,19 +79,25 @@ The current codebase now materially includes:
 
 - `Phase 4.5` operational control-plane closure
 - `Phase 4.6` tenant/workspace/user portrait surfaces
-- `Phase 4.7` reset / hardening / validation assets
+- `Phase 4.7` reset / hardening / validation assets and refreshed current-tree runtime evidence
 - `Phase 4.8` provider/workspace uplift and follow-up frontend usability fixes
+- `Phase 4.9` multi-manual runtime and observability closure
+- `Phase 4.10` routing speed and structure foundation
+- `Phase 4.11` B-stage runtime/product baseline and Phase 5 entry handoff
 
-Current parent-stage blocker summary (`2026-04-21`):
+Current parent-stage blocker summary (`2026-04-30`):
 
 - the phase4 spec/validation surface has been restored and re-aligned to the current chat-session contract
-- local `Phase 4.7` harness contract checks pass again
-- full frontend `build` still fails on the current tree
-- the post-`4.8` real-runtime closeout rerun is still pending
+- local `Phase 4.7` harness contract checks pass again, and the current-tree runtime validation artifact is finalized
+- the current frontend tree now passes `build`
+- `Phase 4.9` runtime foundation is materially landed, but still awaiting final rerun-based hard closeout
+- `Phase 4.10` routing speed / structure foundation is now materially landed at the code-and-targeted-test level
+- `Phase 4.11` records the first archived 500Q Skills Chat baseline as `GO with follow-up`
+- the remaining parent-stage work is now soak/regression evidence and Phase 5 entry optimization, not an open B-stage implementation blocker
 
 That means:
 
-- `Phase 4` is still `NO-GO`
+- `Phase 4` is `Conditional GO`
 - `Phase 5` is still `NO-GO`
 
 ## Structure
@@ -98,9 +107,36 @@ That means:
 - [phase4_master_stage_plan.md](phase4_master_stage_plan.md)
 - [phase4_7_closeout_report.md](phase4_7_closeout_report.md)
 - [phase4_8_test_led_experience_stabilization.md](phase4_8_test_led_experience_stabilization.md)
+- [phase4_9_multi_manual_runtime_and_observability_closeout.md](phase4_9_multi_manual_runtime_and_observability_closeout.md)
+- [phase4_10_routing_speed_and_structure_foundation.md](phase4_10_routing_speed_and_structure_foundation.md)
+- [phase4_11_b_stage_baseline_and_phase5_entry.md](phase4_11_b_stage_baseline_and_phase5_entry.md)
+- [fast_search_product_surface.md](fast_search_product_surface.md)
+- [phase4_10_execution_prompts.md](phase4_10_execution_prompts.md)
 - [phase4_closeout_status.md](phase4_closeout_status.md)
 
 Historical design notes and earlier batch docs remain available in git history and can be restored if the closeout work needs them again.
+
+### B4.2 Runtime Search Decision
+
+Starting with `B4.2`, Elasticsearch is the required runtime search index for Fast Search and DeepResearch context retrieval.
+
+Runtime indexed data must include node metadata, title / breadcrumb lexical fields, `section_text` / page-text searchable fields, embedding vectors, `routing_index_version`, document/version identifiers, and tenant/workspace metadata where available.
+
+Artifact disposition:
+
+- existing local embedding artifact bundle and exact-scan code is legacy transitional infrastructure
+- migration scripts may read old artifacts to seed ES
+- diagnostics and historical B2/B2.8 validation may continue to reference artifact exact scan
+- new runtime product features must not depend on artifact exact scan
+- artifact exact scan is not a production runtime fallback after `B4.2`
+
+Runtime gates:
+
+- missing ES index is `data_not_ready` / runtime `NO-GO`
+- missing `section_text` is `data_not_ready` / runtime `NO-GO`
+- stale routing-version data is degraded and must not be treated as fresh context
+- runtime PDF extraction is disabled by default and only allowed as explicit debug / emergency fallback
+- DeepResearch runtime PDF extraction does not count as performance GO
 
 ### Operator-doc handoff
 
@@ -118,9 +154,13 @@ The `spec/` tree remains the parent-stage design and gate record.
 
 1. Keep `Phase 4.5` at `Conditional GO`.
 2. Keep `Phase 4.6` at `GO`.
-3. Rerun `Phase 4.7` hardening validation on the current post-`4.8` tree.
-4. Clear remaining `Phase 4.8` frontend build blockers and finish closeout revalidation.
-5. Only then open `Phase 5`.
+3. Treat `Phase 4.7` as already `GO` on the current tree.
+4. Keep `Phase 4.9` at `Conditional GO` until its final rerun artifact is refreshed.
+5. Treat `Phase 4.10` as `Conditional GO` pending the broader parent-stage rerun.
+6. Treat `Phase 4.11` as `GO with follow-up`.
+7. Treat `Fast Search Product Surface` as the primary business landing path for direct manual Q&A.
+8. Run the full 5000Q soak/regression during the May Day window.
+9. Open `Phase 5.0` for retrieval parallelization, context compression, chain caching, and quality/cost tuning.
 
 ## Parent-stage Closeout Rule
 

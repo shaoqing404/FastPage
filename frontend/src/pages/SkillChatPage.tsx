@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
@@ -91,10 +91,14 @@ const DEFAULT_CONVERSATION_CONFIG = {
   history_turn_limit: 4,
   history_token_budget: 1800,
 };
+const FAST_SEARCH_TOP_K_RECOMMENDED = 3;
+const FAST_SEARCH_TOP_K_MAX = 10;
+const RECOMMENDED_CONTEXT_TOKEN_BUDGET = 131072;
+const STREAMING_ANSWER_FLUSH_INTERVAL_MS = 75;
 
 const SELECTION_MODE_OPTIONS = [
-  { value: 'outline_llm', label: 'Model-guided outline selection' },
-  { value: 'lexical_fallback', label: 'Keyword fallback only' },
+  { value: 'outline_llm', label: '模型引导大纲选择' },
+  { value: 'lexical_fallback', label: '仅关键词回退' },
 ];
 
 const CUSTOM_MODEL_VALUE = '__custom_model__';
@@ -102,18 +106,37 @@ const CUSTOM_MODEL_VALUE = '__custom_model__';
 const formatResolutionSource = (source: string | null | undefined) => {
   switch (source) {
     case 'runtime_override':
-      return 'Runtime draft override';
+      return '运行时草稿覆盖';
     case 'skill_saved_provider':
-      return 'Saved skill provider';
+      return 'Skill 已保存 Provider';
     case 'workspace_default_provider':
-      return 'Workspace default provider';
+      return '工作区默认 Provider';
     case 'tenant_default_provider':
-      return 'Tenant default provider';
+      return '租户默认 Provider';
     case 'system_default_provider':
-      return 'Backend system fallback';
+      return '后端系统回退';
     default:
-      return 'Not resolved yet';
+      return '尚未解析';
   }
+};
+
+const formatMillisecondsAsSeconds = (value: unknown) => {
+  const milliseconds = Number(value);
+  if (!Number.isFinite(milliseconds)) return 'N/A';
+  return `${(milliseconds / 1000).toFixed(2)} s`;
+};
+
+const formatTokenBreakdown = (metrics: ChatRun['metrics'] | undefined) => {
+  if (!metrics) return undefined;
+  const input = metrics.input_tokens ?? 'N/A';
+  const output = metrics.output_tokens ?? 'N/A';
+  return `输入 ${input} · 输出 ${output}；输出可能包含 Provider 统计的隐藏推理/内部 token。`;
+};
+
+const normalizeFastSearchTopK = (value: unknown) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return String(FAST_SEARCH_TOP_K_RECOMMENDED);
+  return String(Math.min(FAST_SEARCH_TOP_K_MAX, Math.max(1, Math.trunc(parsed))));
 };
 
 const syncModelForProvider = (currentModel: string, nextProvider: ModelProvider | null) => {
@@ -169,6 +192,8 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   const queryClient = useQueryClient();
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamAbortRef = useRef<AbortController | null>(null);
+  const streamingAnswerBufferRef = useRef('');
+  const streamingAnswerFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [layoutState, setLayoutState] = useState<SkillConsoleLayoutState>(() => readSkillConsoleLayoutState(skillId));
   const [isCompactLayout, setIsCompactLayout] = useState(() => (
@@ -208,7 +233,44 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   const [chatAlert, setChatAlert] = useState<AlertState | null>(null);
   const [saveFeedback, setSaveFeedback] = useState<SaveFeedback | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(skill.updated_at);
+
+  const [searchMode, setSearchMode] = useState<'deep_research' | 'fast_search'>('deep_research');
+  const [fastSearchTopK, setFastSearchTopK] = useState('');
+
   const storedWorkspace = resolveStoredWorkspace();
+
+  const clearStreamingAnswerFlushTimer = useCallback(() => {
+    if (streamingAnswerFlushTimerRef.current === null) return;
+    clearTimeout(streamingAnswerFlushTimerRef.current);
+    streamingAnswerFlushTimerRef.current = null;
+  }, []);
+
+  const flushStreamingAnswerBuffer = useCallback(() => {
+    clearStreamingAnswerFlushTimer();
+    const bufferedDelta = streamingAnswerBufferRef.current;
+    if (!bufferedDelta) return;
+    streamingAnswerBufferRef.current = '';
+    setStreamingAnswer((current) => `${current}${bufferedDelta}`);
+  }, [clearStreamingAnswerFlushTimer]);
+
+  const scheduleStreamingAnswerFlush = useCallback(() => {
+    if (streamingAnswerFlushTimerRef.current !== null) return;
+    streamingAnswerFlushTimerRef.current = setTimeout(() => {
+      streamingAnswerFlushTimerRef.current = null;
+      flushStreamingAnswerBuffer();
+    }, STREAMING_ANSWER_FLUSH_INTERVAL_MS);
+  }, [flushStreamingAnswerBuffer]);
+
+  const enqueueStreamingAnswerDelta = useCallback((delta: string) => {
+    if (!delta) return;
+    streamingAnswerBufferRef.current += delta;
+    scheduleStreamingAnswerFlush();
+  }, [scheduleStreamingAnswerFlush]);
+
+  const resetStreamingAnswerBuffer = useCallback(() => {
+    clearStreamingAnswerFlushTimer();
+    streamingAnswerBufferRef.current = '';
+  }, [clearStreamingAnswerFlushTimer]);
 
   const updateLayoutState = (nextValue: Partial<SkillConsoleLayoutState>) => {
     setLayoutState((current) => ({ ...current, ...nextValue }));
@@ -225,6 +287,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     setMaxContextPages('');
     setMaxContextTokens('');
     setRerankMode('');
+    setFastSearchTopK('');
     setTemperature('');
   };
 
@@ -277,9 +340,10 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
 
   useEffect(
     () => () => {
+      flushStreamingAnswerBuffer();
       streamAbortRef.current?.abort();
     },
-    [],
+    [flushStreamingAnswerBuffer],
   );
 
   useEffect(() => {
@@ -353,6 +417,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   const effectiveMaxContextPages = maxContextPages || (skillRetrievalDefaults.max_context_pages ? String(skillRetrievalDefaults.max_context_pages) : '');
   const effectiveMaxContextTokens = maxContextTokens || (skillRetrievalDefaults.max_context_tokens ? String(skillRetrievalDefaults.max_context_tokens) : '');
   const effectiveRerankMode = rerankMode || (typeof skillRetrievalDefaults.rerank_mode === 'string' ? skillRetrievalDefaults.rerank_mode : 'auto');
+  const effectiveFastSearchTopK = fastSearchTopK || normalizeFastSearchTopK(skillRetrievalDefaults.node_top_k);
   const effectiveTemperature = temperature || (
     skillGenerationDefaults.temperature !== undefined && skillGenerationDefaults.temperature !== null
       ? String(skillGenerationDefaults.temperature)
@@ -368,6 +433,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   const savedMaxContextPages = skillRetrievalDefaults.max_context_pages ? String(skillRetrievalDefaults.max_context_pages) : '';
   const savedMaxContextTokens = skillRetrievalDefaults.max_context_tokens ? String(skillRetrievalDefaults.max_context_tokens) : '';
   const savedRerankMode = typeof skillRetrievalDefaults.rerank_mode === 'string' ? skillRetrievalDefaults.rerank_mode : 'auto';
+  const savedFastSearchTopK = normalizeFastSearchTopK(skillRetrievalDefaults.node_top_k);
   const savedTemperature = (
     skillGenerationDefaults.temperature !== undefined && skillGenerationDefaults.temperature !== null
       ? String(skillGenerationDefaults.temperature)
@@ -390,6 +456,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     effectiveMaxContextPages !== savedMaxContextPages ||
     effectiveMaxContextTokens !== savedMaxContextTokens ||
     effectiveRerankMode !== savedRerankMode ||
+    effectiveFastSearchTopK !== savedFastSearchTopK ||
     effectiveTemperature !== savedTemperature
   );
 
@@ -445,6 +512,17 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     enabled: Boolean(skillId && effectiveSessionId),
   });
 
+  useEffect(() => {
+    if (!completedStreamRun || isStreaming) return;
+    const hasPersistedAssistantMessage = sessionMessages.some((message) => (
+      message.role === 'assistant' &&
+      (message.run_id === completedStreamRun.id || message.content === completedStreamRun.answer)
+    ));
+    if (!hasPersistedAssistantMessage) return;
+    setPendingQuestion(null);
+    if (streamingAnswer) setStreamingAnswer('');
+  }, [completedStreamRun, isStreaming, sessionMessages, streamingAnswer]);
+
   const history = useMemo<HistoryItem[]>(() => {
     const runsById = new Map(filteredRuns.map((run) => [run.id, run]));
     const base = sessionMessages.map((message: ChatMessage) => ({
@@ -491,6 +569,72 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     };
   }, [activeExecutionContext, activeObservationRunId, activeStatus, observationSnapshotData, streamingAnswer, streamingObservations]);
 
+  const conversationHistoryContent = useMemo(() => (
+    <>
+      {history.length === 0 ? (
+        <div className="empty-state min-h-[420px]">
+          <TextQuote size={22} className="text-blue-600" />
+          <p className="text-base font-medium text-slate-900">开始对话</p>
+          <p className="text-sm text-slate-500">先从历史栏创建会话，再基于此 Skill 保存的知识上下文提问。</p>
+        </div>
+      ) : (
+        history.map((message, index) => (
+          <div
+            key={`${message.role}-${index}`}
+            className={`rounded-[28px] border px-5 py-4 ${message.role === 'assistant' ? 'border-white/85 bg-white/82' : 'border-white/70 bg-white/56'}`}
+          >
+            <div className="mb-3 flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/82 text-blue-600">
+                {message.role === 'assistant' ? <Bot size={18} /> : <User size={18} />}
+              </div>
+              <div>
+                <p className="text-sm font-medium text-slate-900">{message.role === 'assistant' ? '助手' : '用户'}</p>
+                {resolveHistoryItemTimestamp(message) && <p className="text-sm text-slate-500">{formatDateTime(resolveHistoryItemTimestamp(message))}</p>}
+              </div>
+            </div>
+            {message.role === 'assistant' ? (
+              <AnswerContent content={message.content} />
+            ) : (
+              <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">{message.content}</div>
+            )}
+            {message.role === 'assistant' && message.run?.answer_with_marker && (
+              <details className="mt-4 rounded-[20px] border border-white/70 bg-white/60 p-4">
+                <summary className="cursor-pointer text-sm font-medium text-slate-700">带引用标记的原始回答</summary>
+                <pre className="mt-3 overflow-auto whitespace-pre-wrap text-xs leading-6 text-slate-600">{message.run.answer_with_marker}</pre>
+              </details>
+            )}
+          </div>
+        ))
+      )}
+
+      {isStreaming && !streamingAnswer && (
+        <div className="rounded-[28px] border border-white/80 bg-white/80 px-5 py-4">
+          <div className="mb-3 flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-blue-600">
+              <Bot size={18} />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-slate-900">助手</p>
+              <p className="text-sm text-slate-500">
+                {streamingStatus === 'retrieving'
+                  ? '正在从知识库检索…'
+                  : streamingStatus === 'answering'
+                    ? '正在生成回答…'
+                    : streamingStatus === 'queued'
+                      ? '已排队，等待执行资源…'
+                      : '运行中…'}
+              </p>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="h-3 w-3/4 rounded-full bg-slate-200" />
+            <div className="h-3 w-2/3 rounded-full bg-slate-200" />
+          </div>
+        </div>
+      )}
+    </>
+  ), [history, isStreaming, streamingAnswer, streamingStatus]);
+
   const createSessionMutation = useMutation({
     mutationFn: (title: string) => chatApi.createSkillSession(skillId, { title }),
     onSuccess: (session) => {
@@ -505,8 +649,8 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     },
     onError: (error: unknown) => {
       setChatAlert({
-        title: 'Failed to create session',
-        message: getErrorMessage(error, 'Failed to create session'),
+        title: '创建会话失败',
+        message: getErrorMessage(error, '创建会话失败'),
         allowRetry: false,
       });
     },
@@ -515,7 +659,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   const saveSkillMutation = useMutation({
     mutationFn: async () => {
       if (!draftProviderId) {
-        throw new Error('Legacy unbound skills must bind a workspace-available provider before they can be saved again.');
+        throw new Error('旧版未绑定 Skill 必须先绑定一个当前工作区可用的 Provider，才能再次保存。');
       }
       return skillsApi.update(skill.id, {
         name: draftName,
@@ -537,6 +681,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
           top_k: Number(effectiveTopK || 5),
           selection_mode: effectiveSelectionMode,
           rerank_mode: effectiveRerankMode,
+          node_top_k: Number(effectiveFastSearchTopK || FAST_SEARCH_TOP_K_RECOMMENDED),
           ...(effectiveMaxContextPages.trim() ? { max_context_pages: Number(effectiveMaxContextPages) } : {}),
           ...(effectiveMaxContextTokens.trim() ? { max_context_tokens: Number(effectiveMaxContextTokens) } : {}),
         },
@@ -550,15 +695,15 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       applySavedSkillState(updatedSkill);
       setSaveFeedback({
         tone: 'success',
-        title: 'Skill saved',
-        message: 'Saved defaults updated. New provider/model settings now apply to future saved runs.',
+        title: 'Skill 已保存',
+        message: '默认配置已更新。新的 Provider、模型和检索设置会用于后续已保存配置运行。',
       });
     },
     onError: (error: unknown) => {
       setSaveFeedback({
         tone: 'danger',
-        title: 'Save failed',
-        message: getErrorMessage(error, 'Failed to save skill'),
+        title: '保存失败',
+        message: getErrorMessage(error, '保存 Skill 失败'),
       });
     },
   });
@@ -566,11 +711,13 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   const runSkillMutation = useMutation({
     mutationFn: async ({ q, isDraft }: { q: string; isDraft: boolean }) => {
       const resolvedModel = isDraft ? (draftModel || draftResolvedProvider?.default_model || '') : savedConfigModel;
-      if (!resolvedModel) throw new Error('No model resolved for this skill');
+      if (!resolvedModel) throw new Error('该 Skill 未解析到可用模型');
       const retrieval_config = {
         top_k: Number(effectiveTopK || 5),
         selection_mode: effectiveSelectionMode,
         rerank_mode: effectiveRerankMode,
+        retrieval_mode: searchMode === 'fast_search' ? 'fast' : 'deep_research',
+        ...(searchMode === 'fast_search' ? { node_top_k: Number(effectiveFastSearchTopK || FAST_SEARCH_TOP_K_RECOMMENDED) } : {}),
         ...(effectiveMaxContextPages.trim() ? { max_context_pages: Number(effectiveMaxContextPages) } : {}),
         ...(effectiveMaxContextTokens.trim() ? { max_context_tokens: Number(effectiveMaxContextTokens) } : {}),
       };
@@ -620,12 +767,13 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
             ));
           },
           onAnswerDelta: ({ delta }) => {
-            setStreamingAnswer((current) => `${current}${delta}`);
+            enqueueStreamingAnswerDelta(delta);
           },
         },
       );
     },
     onMutate: ({ q }) => {
+      resetStreamingAnswerBuffer();
       setLastQuestion(q);
       setPendingQuestion(q);
       setIsStreaming(true);
@@ -638,9 +786,9 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       setStreamingObservations([]);
     },
     onSuccess: (run) => {
+      flushStreamingAnswerBuffer();
       streamAbortRef.current = null;
       setCompletedStreamRun(run);
-      setPendingQuestion(null);
       setIsStreaming(false);
       setQuestion('');
       setChatAlert(null);
@@ -652,7 +800,6 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
         }, { replace: true });
       }
       setNewSessionTitle('');
-      setStreamingAnswer('');
       setStreamingRunId(null);
       setStreamingStatus(null);
       setStreamingExecutionContext(run.execution_context || null);
@@ -663,21 +810,23 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       queryClient.invalidateQueries({ queryKey: ['skill-chat-sessions', skillId] });
     },
     onError: (error: unknown, { q }) => {
+      flushStreamingAnswerBuffer();
+      const isAbortError = error instanceof DOMException && error.name === 'AbortError';
       streamAbortRef.current = null;
       setPendingQuestion(null);
       setIsStreaming(false);
       setQuestion(q);
-      setStreamingAnswer('');
+      if (isAbortError) setStreamingAnswer('');
       setStreamingRunId(null);
       setStreamingStatus(null);
       setStreamingExecutionContext(null);
       setStreamingObservations([]);
-      if (error instanceof DOMException && error.name === 'AbortError') {
+      if (isAbortError) {
         setChatAlert(null);
       } else {
         setChatAlert({
-          title: 'Skill run failed',
-          message: humanizeSkillRunError(getErrorMessage(error, 'Skill run failed')),
+          title: 'Skill 运行失败',
+          message: humanizeSkillRunError(getErrorMessage(error, 'Skill 运行失败')),
           ...(isApiClientError(error) ? { code: error.code, requestId: error.requestId } : {}),
           allowRetry: true,
         });
@@ -715,6 +864,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   const handleRun = (isDraft: boolean) => {
     const trimmedQuestion = question.trim();
     if (!trimmedQuestion || isStreaming) return;
+
     if (isDraft && !draftResolvedProvider) return;
     if (isDraft && draftModelMismatch) return;
     if (!isDraft && savedRunModelMismatch) return;
@@ -730,7 +880,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
             value={newSessionTitle}
             onChange={(event) => setNewSessionTitle(event.target.value)}
             className="field flex-1"
-            placeholder="Create skill session"
+            placeholder="创建 Skill 会话"
           />
           <button
             type="button"
@@ -757,10 +907,10 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
           >
             <div className="space-y-2">
               <p className="font-medium text-slate-900">{session.title}</p>
-              <p className="line-clamp-2 text-sm text-slate-500">{latestRun?.question || 'No questions yet'}</p>
+              <p className="line-clamp-2 text-sm text-slate-500">{latestRun?.question || '还没有问题'}</p>
             </div>
             <div className="text-right text-sm text-slate-500">
-              <p>{runCount} runs</p>
+              <p>{runCount} 次运行</p>
               <p>{formatDateTime(session.updated_at)}</p>
             </div>
           </button>
@@ -769,8 +919,8 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
 
       {sessionSummaries.length === 0 && (
         <div className="empty-state min-h-[220px]">
-          <p className="text-base font-medium text-slate-900">No session history for this skill</p>
-          <p className="text-sm text-slate-500">Create a new session to keep future runs grouped in the history rail.</p>
+          <p className="text-base font-medium text-slate-900">此 Skill 暂无会话历史</p>
+          <p className="text-sm text-slate-500">新建会话后，后续运行会按会话归档到左侧历史栏。</p>
         </div>
       )}
     </div>
@@ -780,13 +930,13 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold text-slate-900">Saved skill defaults</h3>
+          <h3 className="text-sm font-semibold text-slate-900">Skill 默认配置</h3>
           <p className="mt-1 text-sm text-slate-500">
-            Provider, model, knowledge base, and system prompt are persisted on the skill. Draft KB changes still apply only after save.
+            Provider、模型、知识库和系统提示词会保存到 Skill。知识库草稿变更需要保存后才会生效。
           </p>
           {lastSavedAt && (
             <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">
-              Last saved {formatRelativeTime(lastSavedAt)} · {formatDateTime(lastSavedAt)}
+              上次保存 {formatRelativeTime(lastSavedAt)} · {formatDateTime(lastSavedAt)}
             </p>
           )}
         </div>
@@ -801,7 +951,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
               className="btn-secondary text-slate-500"
             >
               <Undo size={14} />
-              <span>Revert</span>
+              <span>还原</span>
             </button>
             <button
               type="button"
@@ -810,7 +960,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
               className="btn-primary"
             >
               {saveSkillMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-              <span>{saveSkillMutation.isPending ? 'Saving…' : 'Save skill'}</span>
+              <span>{saveSkillMutation.isPending ? '保存中…' : '保存 Skill'}</span>
             </button>
           </div>
         )}
@@ -823,41 +973,41 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       )}
 
       <div className="rounded-[24px] border border-white/75 bg-white/58 p-4">
-        <p className="text-sm font-medium text-slate-900">Resolved provider chain</p>
+        <p className="text-sm font-medium text-slate-900">Provider 解析链路</p>
         <div className="mt-3 space-y-2 text-sm text-slate-500">
-          <p>Saved skill provider: {skillProvider ? `${skillProvider.name} (${describeProviderOwnership(skillProvider)})` : 'Not bound on this skill'}</p>
-          <p>Workspace default provider: {workspaceDefaultProvider ? `${workspaceDefaultProvider.name} (${describeProviderOwnership(workspaceDefaultProvider)})` : 'Not configured'}</p>
-          <p>Shared default provider: {tenantDefaultProvider ? `${tenantDefaultProvider.name} (${describeProviderOwnership(tenantDefaultProvider)})` : 'Not configured or not available here'}</p>
-          <p>System default provider: backend-only hidden fallback</p>
+          <p>Skill 已保存 Provider：{skillProvider ? `${skillProvider.name} (${describeProviderOwnership(skillProvider)})` : '此 Skill 未绑定'}</p>
+          <p>工作区默认 Provider：{workspaceDefaultProvider ? `${workspaceDefaultProvider.name} (${describeProviderOwnership(workspaceDefaultProvider)})` : '未配置'}</p>
+          <p>共享默认 Provider：{tenantDefaultProvider ? `${tenantDefaultProvider.name} (${describeProviderOwnership(tenantDefaultProvider)})` : '未配置或当前不可用'}</p>
+          <p>系统默认 Provider：仅后端可见的隐藏回退</p>
         </div>
       </div>
 
       {isLegacyUnboundSkill && !draftProviderId && (
-        <InlineAlert tone="warning" title="Legacy unbound skill">
-          This skill does not have a saved provider yet. You can still inspect and test it, but saving now requires binding one workspace-available provider explicitly.
+        <InlineAlert tone="warning" title="旧版未绑定 Skill">
+          这个 Skill 还没有保存 Provider。你仍然可以查看和测试它，但现在保存时必须显式绑定一个当前工作区可用的 Provider。
         </InlineAlert>
       )}
 
       {providers.length === 0 && (
         <InlineAlert
           tone="warning"
-          title="No provider is available in this workspace"
+          title="当前工作区没有可用 Provider"
           action={(
             <div className="flex gap-2">
               <Link to="/workspace" className="btn-secondary">
-                <span>Workspace settings</span>
+                <span>工作区设置</span>
               </Link>
               <Link to="/providers" className="btn-secondary">
-                <span>Provider hub</span>
+                <span>Provider 管理</span>
               </Link>
             </div>
           )}
         >
-          Share a tenant-owned provider to this workspace, import a shared provider into the workspace, or set a workspace default provider before saving this skill.
+          保存 Skill 前，请先把租户 Provider 共享到当前工作区、导入共享 Provider，或设置工作区默认 Provider。
         </InlineAlert>
       )}
 
-      <Field label="Skill Name">
+      <Field label="Skill 名称">
         <input
           value={draftName}
           onChange={(event) => markDraftEdited(setDraftName)(event.target.value)}
@@ -865,7 +1015,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
         />
       </Field>
 
-      <Field label="System prompt" required>
+      <Field label="系统提示词" required>
         <textarea
           value={draftSystemPrompt}
           onChange={(event) => markDraftEdited(setDraftSystemPrompt)(event.target.value)}
@@ -874,13 +1024,13 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
         />
       </Field>
 
-      <Field label="Knowledge Base" hint="Only one knowledge base can be bound today. Draft KB changes do not affect runs until you save.">
+      <Field label="知识库" hint="当前只能绑定一个知识库。知识库草稿变更需要保存后才会影响运行。">
         <select
           value={draftKnowledgeBaseId || ''}
           onChange={(event) => markDraftEdited(setDraftKnowledgeBaseId)(event.target.value || null)}
           className="field"
         >
-          <option value="">No Knowledge Base bound</option>
+          <option value="">未绑定知识库</option>
           {knowledgeBases.map((kb) => (
             <option key={kb.id} value={kb.id}>
               {kb.name}
@@ -888,39 +1038,39 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
           ))}
         </select>
         {skill.knowledge_base_id !== draftKnowledgeBaseId && (
-          <p className="mt-1 text-xs text-amber-600">Knowledge Base changes stay draft-only until you save the skill.</p>
+          <p className="mt-1 text-xs text-amber-600">知识库变更在保存 Skill 前只作为草稿保留。</p>
         )}
       </Field>
 
-      <Field label="Provider" hint="This is saved on the skill. Only providers available in the current workspace appear here. System fallback is not selectable.">
+      <Field label="Provider" hint="该配置会保存到 Skill。这里只显示当前工作区可用的 Provider；系统回退不可手动选择。">
         <select value={draftProviderId} onChange={(event) => handleDraftProviderChange(event.target.value)} className="field">
           <option value="" disabled>
-            {isLegacyUnboundSkill ? 'Select a provider to bind this skill' : 'Select a provider'}
+            {isLegacyUnboundSkill ? '选择 Provider 并绑定到 Skill' : '选择 Provider'}
           </option>
           {selectableProviders.map((provider) => (
             <option key={provider.id} value={provider.id}>
-              {provider.name} · {provider.scope === 'workspace' ? 'workspace-owned' : provider.is_default ? 'shared default' : 'shared'}
+              {provider.name} · {provider.scope === 'workspace' ? '工作区自有' : provider.is_default ? '共享默认' : '共享'}
             </option>
           ))}
         </select>
         <p className="mt-1 text-xs text-slate-500">
-          Saved config resolution if left unbound today: {draftResolvedProvider?.name || 'Backend system default'}
+          如今天仍未绑定，已保存配置会解析为：{draftResolvedProvider?.name || '后端系统默认'}
         </p>
         {draftResolvedProvider && (
           <p className="mt-1 text-xs text-slate-500">
-            Selected provider: {describeProviderOwnership(draftResolvedProvider)} · {describeProviderAvailability(draftResolvedProvider)}
+            当前 Provider：{describeProviderOwnership(draftResolvedProvider)} · {describeProviderAvailability(draftResolvedProvider)}
           </p>
         )}
         {!selectableProviders.length && (
           <p className="mt-1 text-xs text-amber-600">
-            This list is empty because no provider has been made available to the current workspace yet.
+            当前工作区还没有可用 Provider，所以列表为空。
           </p>
         )}
       </Field>
 
       <Field
-        label="Model"
-        hint={draftResolvedProvider ? `Default model: ${draftResolvedProvider.default_model}` : 'Select a provider first to get provider-aware model suggestions.'}
+        label="模型"
+        hint={draftResolvedProvider ? `默认模型：${draftResolvedProvider.default_model}` : '请先选择 Provider，系统会根据 Provider 给出可用模型建议。'}
       >
         <div className="space-y-3">
           {draftModelOptions.length > 0 ? (
@@ -929,13 +1079,13 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
               onChange={(event) => handleDraftModelSelectChange(event.target.value)}
               className="field"
             >
-              <option value="" disabled>Select a model</option>
+              <option value="" disabled>选择模型</option>
               {draftModelOptions.map((model) => (
                 <option key={model} value={model}>
-                  {model}{model === draftResolvedProvider?.default_model ? ' (default)' : ''}
+                  {model}{model === draftResolvedProvider?.default_model ? '（默认）' : ''}
                 </option>
               ))}
-              <option value={CUSTOM_MODEL_VALUE}>Custom model…</option>
+              <option value={CUSTOM_MODEL_VALUE}>自定义模型…</option>
             </select>
           ) : null}
           {(draftModelOptions.length === 0 || draftModelSelectValue === CUSTOM_MODEL_VALUE) && (
@@ -943,7 +1093,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
               value={draftModel}
               onChange={(event) => markDraftEdited(setDraftModel)(event.target.value)}
               className="field"
-              placeholder={draftResolvedProvider?.default_model || 'Enter model name'}
+              placeholder={draftResolvedProvider?.default_model || '输入模型名称'}
             />
           )}
         </div>
@@ -964,7 +1114,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       <div className="rounded-[24px] border border-white/75 bg-white/58 p-4">
         <div className="mb-4">
           <p className="text-sm font-medium text-slate-900">检索与生成默认配置</p>
-          <p className="mt-1 text-sm text-slate-500">这里的值会立即用于下一次运行；点击“Save skill”后，这些值也会保存为该 skill 的默认配置。Provider 仍然通过上面的已保存 provider 进行管理。</p>
+          <p className="mt-1 text-sm text-slate-500">这里的值会立即用于下一次运行；点击“保存 Skill”后，这些值也会保存为该 Skill 的默认配置。Provider 仍然通过上面的已保存 Provider 管理。</p>
         </div>
 
         <div className="grid gap-4 xl:grid-cols-2">
@@ -983,9 +1133,9 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
               onChange={(event) => setIncludeAssistantMessages(event.target.checked)}
               disabled={!effectiveIncludeHistory}
             />
-            <span>在上述历史中包含之前的 assistant 回复</span>
+            <span>在上述历史中包含之前的最终模型回复</span>
           </label>
-          <Field label="历史最大用户轮数" hint="按最近的用户轮次统计。只有在上方开启后，匹配的 assistant 回复才会一起带入。">
+          <Field label="历史最大用户轮数" hint="按最近的用户轮次统计。只有用户问题和最终模型回复会进入下一轮上下文，中间检索过程和遥测不会带入。">
             <input type="number" min="1" value={effectiveHistoryTurnLimit} onChange={(event) => setHistoryTurnLimit(event.target.value)} className="field" />
           </Field>
           <Field label="历史 Token 预算" hint="本次运行中可带入聊天历史的大致 token 上限。">
@@ -993,6 +1143,16 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
           </Field>
           <Field label="检索段落数" hint="在生成答案前，最多从目录/大纲中选出的候选段落数量。">
             <input type="number" min="1" value={effectiveTopK} onChange={(event) => setTopK(event.target.value)} className="field" />
+          </Field>
+          <Field label="Fast Search 节点数" hint="Fast Search 模式下召回的正文节点数。推荐 3，最大 10；每个节点可能对应一整个章节正文。">
+            <input
+              type="number"
+              min="1"
+              max={FAST_SEARCH_TOP_K_MAX}
+              value={effectiveFastSearchTopK}
+              onChange={(event) => markDraftEdited(setFastSearchTopK)(normalizeFastSearchTopK(event.target.value))}
+              className="field"
+            />
           </Field>
           <Field
             label="段落选择方式"
@@ -1009,8 +1169,8 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
           <Field label="回答上下文最大 PDF 页数" hint="可选。限制最终回答阶段最多带入多少页 PDF 内容。">
             <input type="number" min="1" value={effectiveMaxContextPages} onChange={(event) => setMaxContextPages(event.target.value)} className="field" placeholder="可选" />
           </Field>
-          <Field label="回答上下文最大摘录 Token 数" hint="可选。限制段落选择后带入回答上下文的摘录 token 总量。">
-            <input type="number" min="1" value={effectiveMaxContextTokens} onChange={(event) => setMaxContextTokens(event.target.value)} className="field" placeholder="可选" />
+          <Field label="回答上下文最大摘录 Token 数" hint={`可选。留空表示不设上限；如需限制，推荐 ${RECOMMENDED_CONTEXT_TOKEN_BUDGET}。`}>
+            <input type="number" min="1" value={effectiveMaxContextTokens} onChange={(event) => setMaxContextTokens(event.target.value)} className="field" placeholder={`可选，推荐 ${RECOMMENDED_CONTEXT_TOKEN_BUDGET}`} />
           </Field>
           <Field
             label="Rerank 模式"
@@ -1023,8 +1183,8 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
             <select value={effectiveRerankMode} onChange={(event) => setRerankMode(event.target.value)} className="field">
               <option value="auto">自动</option>
               <option value="off">关闭</option>
-              <option value="provider">Provider rerank</option>
-              <option value="system">系统 rerank</option>
+              <option value="provider">Provider 重排</option>
+              <option value="system">系统重排</option>
             </select>
           </Field>
         </div>
@@ -1039,37 +1199,62 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   const runtimeTabContent = (
     <div className="space-y-5">
       <div className="grid grid-cols-2 gap-3">
-        <KeyMetric label="Session" value={selectedSession?.title || 'No session'} />
-        <KeyMetric label="Model" value={activeExecutionContext.model?.resolved_model || savedConfigModel || 'N/A'} />
-        <KeyMetric label="Provider" value={activeExecutionContext.provider?.name || savedRunProvider?.name || 'Backend system default'} />
-        <KeyMetric label="Provider source" value={formatResolutionSource(activeExecutionContext.provider?.resolution_source)} />
-        <KeyMetric label="Citations" value={displayRun?.citations.length ?? 0} />
+        <KeyMetric label="会话" value={selectedSession?.title || '未选择会话'} />
+        <KeyMetric label="模型" value={activeExecutionContext.model?.resolved_model || savedConfigModel || 'N/A'} />
+        <KeyMetric label="Provider" value={activeExecutionContext.provider?.name || savedRunProvider?.name || '后端系统默认'} />
+        <KeyMetric label="Provider 来源" value={formatResolutionSource(activeExecutionContext.provider?.resolution_source)} />
+        <KeyMetric label="引用" value={displayRun?.citations.length ?? 0} />
       </div>
 
       {boundKnowledgeBase ? (
         <div className="surface-soft p-4">
-          <p className="metric-label">Knowledge Base</p>
+          <p className="metric-label">知识库</p>
           <p className="mt-2 font-medium text-slate-900">{boundKnowledgeBase.name}</p>
         </div>
       ) : skillDocuments.length > 0 ? (
         <div className="surface-soft p-4">
-          <p className="metric-label">Legacy Target Document</p>
-          <p className="mt-2 font-medium text-slate-900">{skillDocuments.length} document(s) bound</p>
+          <p className="metric-label">旧版目标文档</p>
+          <p className="mt-2 font-medium text-slate-900">已绑定 {skillDocuments.length} 份文档</p>
         </div>
       ) : null}
 
       {(displayRun || activeStatus || activeExecutionContext.retrieval?.query || activeExecutionContext.model?.resolved_model) ? (
         <>
           <div className="grid grid-cols-2 gap-3">
-            <KeyMetric label="Latency" value={displayRun?.metrics.total_ms ? `${displayRun.metrics.total_ms} ms` : 'N/A'} />
-            <KeyMetric label="Tokens" value={displayRun?.metrics.total_tokens ?? 'N/A'} />
-            <KeyMetric label="Retrieved sections" value={displayRun ? (displayRun.metrics.selected_section_count ?? displayRun.selected_sections.length) : 'Pending'} />
-            <KeyMetric label="History used" value={activeExecutionContext.conversation?.history_used ? 'Yes' : 'No'} />
+            <KeyMetric
+              label="总耗时"
+              value={formatMillisecondsAsSeconds(displayRun?.metrics.total_ms)}
+              hint="后端口径：检索耗时 + 回答生成阶段，不含排队。"
+            />
+            <KeyMetric
+              label="首 token 等待"
+              value={formatMillisecondsAsSeconds(displayRun?.metrics.ttft_ms)}
+              hint="从进入回答生成阶段到收到首个可见 token；不是从 run 开始计时。"
+            />
+            <KeyMetric label="检索耗时" value={formatMillisecondsAsSeconds(displayRun?.metrics.retrieve_ms)} />
+            <KeyMetric
+              label="生成阶段耗时"
+              value={formatMillisecondsAsSeconds(displayRun?.metrics.answer_ms)}
+              hint="从进入回答阶段到流式回答结束；首 token 等待包含在这里。"
+            />
+            <KeyMetric
+              label="Provider 首 token"
+              value={formatMillisecondsAsSeconds(displayRun?.metrics.provider_ttft_ms)}
+              hint="从实际发起 Provider stream 请求到首个可见 token。"
+            />
+            <KeyMetric
+              label="调用前开销"
+              value={formatMillisecondsAsSeconds(displayRun?.metrics.answer_pre_provider_ms)}
+              hint="进入回答阶段后、本地构造并发起 Provider 请求前的开销。"
+            />
+            <KeyMetric label="Token 用量" value={displayRun?.metrics.total_tokens ?? 'N/A'} hint={formatTokenBreakdown(displayRun?.metrics)} />
+            <KeyMetric label="已选段落" value={displayRun ? (displayRun.metrics.selected_section_count ?? displayRun.selected_sections.length) : '等待中'} />
+            <KeyMetric label="使用历史" value={activeExecutionContext.conversation?.history_used ? '是' : '否'} />
           </div>
 
           {activeStatus && (
             <div className="surface-soft p-4">
-              <p className="metric-label">Run status</p>
+              <p className="metric-label">运行状态</p>
               <div className="mt-2 flex items-center gap-2">
                 <StatusBadge tone={activeStatus === 'completed' ? 'success' : activeStatus === 'failed' ? 'danger' : activeStatus === 'cancelled' ? 'warning' : 'accent'}>
                   {activeStatus}
@@ -1080,7 +1265,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
               </div>
               {displayRun?.cancel_requested && (
                 <p className="mt-2 text-xs text-amber-600">
-                  Cancel requested{displayRun.cancel_reason ? `: ${displayRun.cancel_reason}` : ''}
+                  已请求取消{displayRun.cancel_reason ? `：${displayRun.cancel_reason}` : ''}
                 </p>
               )}
               {displayRun?.last_error && activeStatus === 'failed' && (
@@ -1090,7 +1275,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
           )}
 
           {activeExecutionContext.retrieval?.warnings && activeExecutionContext.retrieval.warnings.length > 0 && (
-            <InlineAlert tone="warning" title="Retrieval adjusted during run">
+            <InlineAlert tone="warning" title="运行中已调整检索">
               <div className="space-y-1">
                 {activeExecutionContext.retrieval.warnings.map((warning, index) => (
                   <p key={`${warning}-${index}`}>{warning}</p>
@@ -1101,22 +1286,22 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
 
           {(activeExecutionContext.retrieval?.query || activeExecutionContext.retrieval?.rewritten_query) && (
             <div className="surface-soft p-4">
-              <p className="metric-label">Retrieval query</p>
+              <p className="metric-label">检索问题</p>
               <p className="mt-2 text-sm text-slate-700">{activeExecutionContext.retrieval?.query || 'N/A'}</p>
               {activeExecutionContext.retrieval?.rewrite_applied && activeExecutionContext.retrieval?.rewritten_query && (
-                <p className="mt-2 text-xs text-slate-500">Rewritten query: {activeExecutionContext.retrieval.rewritten_query}</p>
+                <p className="mt-2 text-xs text-slate-500">改写后问题：{activeExecutionContext.retrieval.rewritten_query}</p>
               )}
             </div>
           )}
 
           {displayRun?.citations.length ? (
             <div className="space-y-3">
-              <p className="text-sm font-semibold text-slate-900">Citations</p>
+              <p className="text-sm font-semibold text-slate-900">引用</p>
               {displayRun.citations.map((citation, index) => (
                 <div key={`${citation.document_id || 'citation'}-${index}`} className="surface-soft p-4">
-                  <p className="font-medium text-slate-900">{citation.title || citation.document_id || 'Untitled citation'}</p>
+                  <p className="font-medium text-slate-900">{citation.title || citation.document_id || '未命名引用'}</p>
                   <p className="mt-2 text-sm text-slate-500">
-                    {citation.page_start || citation.page_end ? formatPageRange(citation.page_start, citation.page_end) : 'Page range unavailable'}
+                    {citation.page_start || citation.page_end ? formatPageRange(citation.page_start, citation.page_end) : '页码范围不可用'}
                   </p>
                 </div>
               ))}
@@ -1125,15 +1310,15 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
 
           <RunObservationTimeline
             snapshot={activeObservationSnapshot}
-            title="Execution timeline"
-            emptyTitle="No runtime telemetry yet"
-            emptyDescription="Run the skill to see live backend steps, rerank decisions, and model I/O here."
+            title="执行时间线"
+            emptyTitle="暂无运行遥测"
+            emptyDescription="运行 Skill 后，这里会显示后端步骤、重排决策和模型输入输出。"
           />
         </>
       ) : (
         <div className="empty-state min-h-[220px]">
-          <p className="text-base font-medium text-slate-900">No runtime telemetry yet</p>
-          <p className="text-sm text-slate-500">Run the skill to see resolved provider/model details and citations here.</p>
+          <p className="text-base font-medium text-slate-900">暂无运行遥测</p>
+          <p className="text-sm text-slate-500">运行 Skill 后，这里会显示解析后的 Provider、模型和引用信息。</p>
         </div>
       )}
     </div>
@@ -1145,12 +1330,12 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
         <div className="flex min-w-0 items-center gap-3">
           <Link to="/skills" className="btn-secondary">
             <ArrowLeft size={16} />
-            <span>Back to skills</span>
+            <span>返回 Skills</span>
           </Link>
           <div className="min-w-0">
             <h2 className="truncate text-[28px] font-semibold tracking-[-0.03em] text-slate-900">{skill.name}</h2>
             <p className="truncate text-sm text-slate-500">
-              {selectedSession?.title || 'No session selected'}
+              {selectedSession?.title || '未选择会话'}
               {boundKnowledgeBase ? ` · ${boundKnowledgeBase.name}` : ''}
             </p>
           </div>
@@ -1166,7 +1351,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
             )}
           >
             {isCompactLayout || !layoutState.historyOpen ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
-            <span>History</span>
+            <span>历史</span>
           </button>
           <button
             type="button"
@@ -1178,9 +1363,9 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
             )}
           >
             {isCompactLayout || !layoutState.inspectorOpen ? <PanelRightOpen size={16} /> : <PanelRightClose size={16} />}
-            <span>Inspector</span>
+            <span>设置</span>
           </button>
-          <button type="button" className="icon-button" onClick={() => setActionsOpen(true)} aria-label="Open skill actions">
+          <button type="button" className="icon-button" onClick={() => setActionsOpen(true)} aria-label="打开 Skill 操作">
             <MoreHorizontal size={16} />
           </button>
         </div>
@@ -1189,7 +1374,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       <div className="skill-console-shell">
         {!isCompactLayout && (
           layoutState.historyOpen ? (
-            <GlassPanel className="skill-console-rail" title="History" subtitle="Sessions and recent questions for this skill only.">
+            <GlassPanel className="skill-console-rail" title="历史" subtitle="仅显示此 Skill 的会话和最近问题。">
               {historyPanelContent}
             </GlassPanel>
           ) : (
@@ -1198,14 +1383,14 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
                 type="button"
                 className="skill-console-rail-trigger"
                 onClick={() => updateLayoutState({ historyOpen: true })}
-                aria-label="Expand history"
+                aria-label="展开历史"
               >
                 <div className="flex h-12 w-12 items-center justify-center rounded-[22px] bg-white/82 text-blue-600">
                   <History size={18} />
                 </div>
                 <div className="space-y-4">
-                  <p className="skill-console-rail-label">History</p>
-                  <p className="text-xs font-medium text-slate-500">{sessionSummaries.length} sessions</p>
+                  <p className="skill-console-rail-label">历史</p>
+                  <p className="text-xs font-medium text-slate-500">{sessionSummaries.length} 个会话</p>
                 </div>
                 <PanelLeftOpen size={18} className="text-slate-400" />
               </button>
@@ -1214,8 +1399,19 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
         )}
 
         <div className="skill-console-stage">
-          <GlassPanel title="Chat" subtitle={selectedSession?.title || 'Create or pick a session to keep work grouped under this skill.'}>
+          <GlassPanel title="对话" subtitle={selectedSession?.title || '创建或选择一个会话，将本 Skill 的运行归档到同一组。'}>
             <div className="space-y-4">
+              <div className="flex items-center gap-4 border-b border-slate-200/60 pb-4 mb-2">
+                <SegmentedControl
+                  value={searchMode}
+                  onChange={(value) => setSearchMode(value as 'deep_research' | 'fast_search')}
+                  items={[
+                    { value: 'deep_research', label: 'DeepResearch' },
+                    { value: 'fast_search', label: 'Fast Search' },
+                  ]}
+                />
+              </div>
+
               {chatAlert && (
                 <InlineAlert
                   tone="danger"
@@ -1229,7 +1425,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
                         onClick={() => lastQuestion && runSkillMutation.mutate({ q: lastQuestion, isDraft: lastRunWasDraft })}
                       >
                         <RefreshCcw size={16} />
-                        <span>Retry</span>
+                        <span>重试</span>
                       </button>
                     ) : undefined
                   }
@@ -1238,83 +1434,23 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
                     <p>{chatAlert.message}</p>
                     {(chatAlert.code || chatAlert.requestId) && (
                       <p className="text-xs text-slate-400">
-                        {chatAlert.code && <span>Code: {chatAlert.code}</span>}
-                        {chatAlert.requestId && <span> · Request ID: {chatAlert.requestId}</span>}
+                        {chatAlert.code && <span>错误码：{chatAlert.code}</span>}
+                        {chatAlert.requestId && <span> · 请求 ID：{chatAlert.requestId}</span>}
                       </p>
                     )}
                     <p className="text-sm text-slate-500">
-                      Provider: {activeExecutionContext.provider?.name || savedRunProvider?.name || 'Backend system default'} ·
-                      {' '}Model: {activeExecutionContext.model?.resolved_model || savedConfigModel || 'N/A'}
+                      Provider：{activeExecutionContext.provider?.name || savedRunProvider?.name || '后端系统默认'} ·
+                      {' '}模型：{activeExecutionContext.model?.resolved_model || savedConfigModel || 'N/A'}
                     </p>
                     <p className="text-sm text-slate-500">
-                      Resolved via: {formatResolutionSource(activeExecutionContext.provider?.resolution_source)}
+                      解析来源：{formatResolutionSource(activeExecutionContext.provider?.resolution_source)}
                     </p>
                   </div>
                 </InlineAlert>
               )}
 
               <div ref={scrollRef} className="scroll-area max-h-[620px] space-y-4 overflow-auto pr-1">
-                {history.length === 0 ? (
-                  <div className="empty-state min-h-[420px]">
-                    <TextQuote size={22} className="text-blue-600" />
-                    <p className="text-base font-medium text-slate-900">Start a conversation</p>
-                    <p className="text-sm text-slate-500">Create a session from the history rail, then ask a question against this skill&apos;s saved knowledge context.</p>
-                  </div>
-                ) : (
-                  history.map((message, index) => (
-                    <div
-                      key={`${message.role}-${index}`}
-                      className={`rounded-[28px] border px-5 py-4 ${message.role === 'assistant' ? 'border-white/85 bg-white/82' : 'border-white/70 bg-white/56'}`}
-                    >
-                      <div className="mb-3 flex items-center gap-3">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/82 text-blue-600">
-                          {message.role === 'assistant' ? <Bot size={18} /> : <User size={18} />}
-                        </div>
-                        <div>
-                          <p className="text-sm font-medium text-slate-900">{message.role === 'assistant' ? 'Assistant' : 'Operator'}</p>
-                          {resolveHistoryItemTimestamp(message) && <p className="text-sm text-slate-500">{formatDateTime(resolveHistoryItemTimestamp(message))}</p>}
-                        </div>
-                      </div>
-                      {message.role === 'assistant' ? (
-                        <AnswerContent content={message.content} />
-                      ) : (
-                        <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">{message.content}</div>
-                      )}
-                      {message.role === 'assistant' && message.run?.answer_with_marker && (
-                        <details className="mt-4 rounded-[20px] border border-white/70 bg-white/60 p-4">
-                          <summary className="cursor-pointer text-sm font-medium text-slate-700">Raw answer with citation marker payload</summary>
-                          <pre className="mt-3 overflow-auto whitespace-pre-wrap text-xs leading-6 text-slate-600">{message.run.answer_with_marker}</pre>
-                        </details>
-                      )}
-                    </div>
-                  ))
-                )}
-
-                {isStreaming && !streamingAnswer && (
-                  <div className="rounded-[28px] border border-white/80 bg-white/80 px-5 py-4">
-                    <div className="mb-3 flex items-center gap-3">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-blue-600">
-                        <Bot size={18} />
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-slate-900">Assistant</p>
-                        <p className="text-sm text-slate-500">
-                          {streamingStatus === 'retrieving'
-                            ? 'Retrieving from knowledge base…'
-                            : streamingStatus === 'answering'
-                              ? 'Generating answer…'
-                              : streamingStatus === 'queued'
-                                ? 'Queued — waiting for execution slot…'
-                                : 'Running…'}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <div className="h-3 w-3/4 rounded-full bg-slate-200" />
-                      <div className="h-3 w-2/3 rounded-full bg-slate-200" />
-                    </div>
-                  </div>
-                )}
+                {conversationHistoryContent}
               </div>
 
               <form
@@ -1329,7 +1465,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
                     value={question}
                     onChange={(event) => setQuestion(event.target.value)}
                     className="field min-h-[108px] flex-1 resize-none border-0 bg-transparent p-0 shadow-none focus:shadow-none"
-                    placeholder="Ask a question through this skill…"
+                    placeholder={searchMode === 'fast_search' ? '输入一个需要快速正文召回的问题…' : '通过此 Skill 提问…'}
                     disabled={isStreaming}
                   />
                   {isStreaming ? (
@@ -1344,11 +1480,11 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
                       }}
                     >
                       <Square size={16} />
-                      <span>Cancel</span>
+                      <span>取消</span>
                     </button>
                   ) : (
                     <div className="flex flex-col gap-2 self-end max-md:self-stretch">
-                      {isConfigDirty && (
+                      {isConfigDirty && searchMode === 'deep_research' && (
                         <button
                           type="button"
                           className="btn-secondary"
@@ -1356,16 +1492,20 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
                           disabled={!question.trim() || isStreaming || draftModelMismatch}
                         >
                           <Bot size={16} />
-                          <span>Test with draft</span>
+                          <span>用草稿测试</span>
                         </button>
                       )}
                       <button
                         type="submit"
                         className="btn-primary w-full justify-center"
-                        disabled={!question.trim() || isStreaming || savedRunModelMismatch}
+                        disabled={
+                          !question.trim() ||
+                          isStreaming ||
+                          savedRunModelMismatch
+                        }
                       >
                         <Send size={16} />
-                        <span>{isConfigDirty ? 'Send (Saved config)' : 'Send'}</span>
+                        <span>{isConfigDirty ? '发送（已保存配置）' : '发送'}</span>
                       </button>
                     </div>
                   )}
@@ -1379,15 +1519,15 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
           layoutState.inspectorOpen ? (
             <GlassPanel
               className="skill-console-rail skill-console-rail-right"
-              title="Inspector"
-              subtitle="Saved skill defaults and runtime data stay separated in tabs."
+              title="设置"
+              subtitle="已保存默认配置和运行数据分开查看。"
               actions={(
                 <SegmentedControl
                   value={layoutState.inspectorTab}
                   onChange={(value) => updateLayoutState({ inspectorTab: value as SkillConsoleLayoutState['inspectorTab'] })}
                   items={[
-                    { value: 'settings', label: 'Settings' },
-                    { value: 'runtime', label: 'Runtime' },
+                    { value: 'settings', label: '设置' },
+                    { value: 'runtime', label: '运行' },
                   ]}
                 />
               )}
@@ -1400,14 +1540,14 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
                 type="button"
                 className="skill-console-rail-trigger"
                 onClick={() => updateLayoutState({ inspectorOpen: true })}
-                aria-label="Expand inspector"
+                aria-label="展开设置"
               >
                 <div className="flex h-12 w-12 items-center justify-center rounded-[22px] bg-white/82 text-blue-600">
                   <SlidersHorizontal size={18} />
                 </div>
                 <div className="space-y-4">
-                  <p className="skill-console-rail-label">Inspector</p>
-                  <p className="text-xs font-medium text-slate-500">{layoutState.inspectorTab === 'settings' ? 'Saved config' : 'Runtime data'}</p>
+                  <p className="skill-console-rail-label">设置</p>
+                  <p className="text-xs font-medium text-slate-500">{layoutState.inspectorTab === 'settings' ? '已保存配置' : '运行数据'}</p>
                 </div>
                 <PanelRightOpen size={18} className="text-slate-400" />
               </button>
@@ -1421,8 +1561,8 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
         onClose={() => setHistoryDrawerOpen(false)}
         side="left"
         widthClassName="w-[520px]"
-        title="History"
-        description="Sessions and recent questions for this skill only."
+        title="历史"
+        description="仅显示此 Skill 的会话和最近问题。"
       >
         {historyPanelContent}
       </ExpertDrawer>
@@ -1432,16 +1572,16 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
         onClose={() => setInspectorDrawerOpen(false)}
         side="right"
         widthClassName="w-[560px]"
-        title="Inspector"
-        description="Saved defaults and runtime data are separated into tabs."
+        title="设置"
+        description="已保存默认配置和运行数据分开查看。"
       >
         <div className="space-y-4">
           <SegmentedControl
             value={layoutState.inspectorTab}
             onChange={(value) => updateLayoutState({ inspectorTab: value as SkillConsoleLayoutState['inspectorTab'] })}
             items={[
-              { value: 'settings', label: 'Settings' },
-              { value: 'runtime', label: 'Runtime' },
+              { value: 'settings', label: '设置' },
+              { value: 'runtime', label: '运行' },
             ]}
           />
           {layoutState.inspectorTab === 'settings' ? settingsTabContent : runtimeTabContent}
@@ -1459,8 +1599,8 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
             setLastSavedAt(updatedSkill.updated_at);
             setSaveFeedback({
               tone: 'success',
-              title: 'Skill updated',
-              message: 'Saved skill metadata changed.',
+              title: 'Skill 已更新',
+              message: 'Skill 元数据已变更。',
             });
           }}
           onDeleted={() => navigate('/skills')}
@@ -1485,11 +1625,11 @@ export const SkillChatPage: React.FC = () => {
   if (skillQuery.isLoading) {
     return (
       <div className="space-y-8">
-        <SectionToolbar title="Skill console" description="Loading saved configuration and session history." />
-        <GlassPanel title="Loading skill" subtitle="Fetching the current skill configuration.">
+        <SectionToolbar title="Skill 控制台" description="正在加载已保存配置和会话历史。" />
+        <GlassPanel title="正在加载 Skill" subtitle="正在获取当前 Skill 配置。">
           <div className="empty-state min-h-[320px]">
             <Loader2 size={28} className="animate-spin text-blue-600" />
-            <p className="text-base font-medium text-slate-900">Loading skill…</p>
+            <p className="text-base font-medium text-slate-900">正在加载 Skill…</p>
           </div>
         </GlassPanel>
       </div>
@@ -1499,14 +1639,14 @@ export const SkillChatPage: React.FC = () => {
   if (skillQuery.error || !skillQuery.data) {
     return (
       <div className="space-y-8">
-        <SectionToolbar title="Skill console" description="This skill route could not be resolved." />
-        <GlassPanel title="Missing skill" subtitle="The requested skill was not found or could not be loaded.">
+        <SectionToolbar title="Skill 控制台" description="无法解析这个 Skill 路由。" />
+        <GlassPanel title="Skill 不存在" subtitle="请求的 Skill 不存在或加载失败。">
           <div className="empty-state min-h-[320px]">
-            <p className="text-base font-medium text-slate-900">Skill not found</p>
-            {skillQuery.error && <p className="text-sm text-slate-500">{getErrorMessage(skillQuery.error, 'Failed to load skill')}</p>}
+            <p className="text-base font-medium text-slate-900">未找到 Skill</p>
+            {skillQuery.error && <p className="text-sm text-slate-500">{getErrorMessage(skillQuery.error, '加载 Skill 失败')}</p>}
             <Link to="/skills" className="btn-primary">
               <ArrowLeft size={16} />
-              <span>Back to skills</span>
+              <span>返回 Skills</span>
             </Link>
           </div>
         </GlassPanel>

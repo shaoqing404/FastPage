@@ -36,7 +36,10 @@ Required runtime settings:
 - `SECRET_KEY`
 - `DATABASE_URL=mysql+pymysql://<user>:<pass>@<mysql-host>:3306/pageindex`
 - `TASK_QUEUE_BACKEND=redis`
-- `REDIS_URL=redis://:<redis-password>@<redis-host>:6379/1`
+- `REDIS_HOST=<redis-host>`
+- `REDIS_PORT=6379`
+- `REDIS_PASSWORD=<redis-password>`
+- `REDIS_DB=1`
 - `STORAGE_BACKEND=minio`
 - `MINIO_ENDPOINT=<minio-host>:9000`
 - `MINIO_ACCESS_KEY=<access-key>`
@@ -57,6 +60,8 @@ Demo defaults in `docker/.env.example` intentionally use:
 - `pageindex_service123` for Redis password
 - `pageindex_service123` for MinIO access key and secret key
 - `pageindex_service123` for `ADMIN_PASSWORD`
+
+Redis and ES connections use split fields by default (`REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` / `REDIS_DB`, `ROUTING_NODE_ES_HOST` / `ROUTING_NODE_ES_PORT` / etc.). The legacy compound `REDIS_URL` and `ROUTING_NODE_ES_URL` fields are still accepted as overrides.
 
 These values are only for:
 
@@ -125,8 +130,8 @@ Minimal configuration:
   `DATABASE_URL=sqlite:////app/data/app.db`
 - `STORAGE_BACKEND=local`
 - `TASK_QUEUE_BACKEND=local`
-- `REDIS_URL=`
 - `MINIO_*=` empty
+- Redis / ES fields are unused when backend is `local`
 - `LLM_BASE_URL`
 - `LLM_API_KEY`
 

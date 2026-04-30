@@ -5,6 +5,7 @@ from .workspace_invite import WorkspaceInvite
 from .tenant_membership import TenantMembership
 from .user import User
 from .document import Document, DocumentVersion
+from .document_routing_node import DocumentRoutingNode
 from .knowledge_base import KnowledgeBase, KnowledgeBaseDocument
 from .parse_job import ParseJob
 from .chat_skill import ChatSkill, ChatSkillDocument
@@ -27,6 +28,7 @@ __all__ = [
     "User",
     "Document",
     "DocumentVersion",
+    "DocumentRoutingNode",
     "KnowledgeBase",
     "KnowledgeBaseDocument",
     "ParseJob",

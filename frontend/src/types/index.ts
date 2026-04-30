@@ -772,6 +772,14 @@ export interface ChatRunMetrics extends Record<string, unknown> {
   total_ms?: number;
   wall_clock_ms?: number;
   ttft_ms?: number;
+  answer_pre_provider_ms?: number;
+  provider_stream_open_ms?: number;
+  provider_first_chunk_ms?: number;
+  provider_ttft_ms?: number;
+  provider_first_delta_after_first_chunk_ms?: number;
+  provider_stream_ms?: number;
+  first_delta_to_stream_end_ms?: number;
+  heartbeat_drain_ms?: number;
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;

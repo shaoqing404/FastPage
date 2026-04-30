@@ -31,6 +31,7 @@ class ComplianceRetrievalConfig(BaseModel):
     rerank_mode: Literal["auto", "off", "provider", "system"] = "auto"
     max_context_pages: int | None = 20
     max_context_tokens: int | None = 12000
+    manual_gate_mode: str | None = None
 
 
 class ComplianceGenerationConfig(BaseModel):

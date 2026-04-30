@@ -24,6 +24,7 @@ import { SkillsPage } from '../pages/SkillsPage';
 import { WorkspaceAdminPage } from '../pages/WorkspaceAdminPage';
 import { WorkspaceCreatePage } from '../pages/WorkspaceCreatePage';
 import { WorkspaceInviteAcceptPage } from '../pages/WorkspaceInviteAcceptPage';
+import { FastSearchPage } from '../pages/FastSearchPage';
 import { resolveStoredUser } from '../lib/api/client';
 
 const BASENAME = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') || '/';
@@ -101,6 +102,7 @@ export const App: React.FC = () => (
           <Route path="documents" element={<DocumentsPage />} />
           <Route path="skills" element={<SkillsPage />} />
           <Route path="skills/:skillId" element={<SkillChatPage />} />
+          <Route path="search" element={<FastSearchPage />} />
           <Route path="chat" element={<Navigate to="/skills" replace />} />
           <Route path="chat/skills/:skillId" element={<LegacySkillChatRedirect />} />
           <Route path="runs" element={<ActivityPage />} />

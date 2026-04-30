@@ -1,3 +1,4 @@
+import copy
 import json
 import shutil
 import tempfile
@@ -9,6 +10,8 @@ from urllib.parse import urlparse
 from fastapi import UploadFile
 
 from app.core.config import get_settings
+from app.models.routing_asset_contract import normalize_routing_index_payload
+from pageindex.utils import ensure_run_reuse_cache
 
 
 settings = get_settings()
@@ -21,6 +24,9 @@ def _normalize_prefix(prefix: str) -> str:
 
 class BaseArtifactStorage:
     def save_upload(self, file: UploadFile, *, tenant_id: str, document_id: str, version_id: str, filename: str) -> str:
+        raise NotImplementedError
+
+    def save_file_path(self, source_path: Path, *, tenant_id: str, document_id: str, version_id: str, filename: str) -> str:
         raise NotImplementedError
 
     def write_json(self, data: Any, *, tenant_id: str, object_path: str) -> str:
@@ -69,6 +75,12 @@ class LocalArtifactStorage(BaseArtifactStorage):
         target_path.parent.mkdir(parents=True, exist_ok=True)
         with target_path.open("wb") as out:
             shutil.copyfileobj(file.file, out)
+        return str(target_path)
+
+    def save_file_path(self, source_path: Path, *, tenant_id: str, document_id: str, version_id: str, filename: str) -> str:
+        target_path = self.version_dir(tenant_id, document_id, version_id) / filename
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source_path, target_path)
         return str(target_path)
 
     def write_json(self, data: Any, *, tenant_id: str, object_path: str) -> str:
@@ -134,6 +146,12 @@ class MinioArtifactStorage(BaseArtifactStorage):
             temp_path.unlink(missing_ok=True)
         return f"minio://{self.bucket}/{key}"
 
+    def save_file_path(self, source_path: Path, *, tenant_id: str, document_id: str, version_id: str, filename: str) -> str:
+        object_path = f"documents/{document_id}/versions/{version_id}/{filename}"
+        key = self._key(tenant_id, object_path)
+        self.client.fput_object(self.bucket, key, str(source_path))
+        return f"minio://{self.bucket}/{key}"
+
     def write_json(self, data: Any, *, tenant_id: str, object_path: str) -> str:
         key = self._key(tenant_id, object_path)
         payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
@@ -173,6 +191,24 @@ class MinioArtifactStorage(BaseArtifactStorage):
 
     @contextmanager
     def local_path(self, uri: str) -> Iterator[Path]:
+        cache = ensure_run_reuse_cache()
+        if cache is not None:
+            def load_temp_path() -> Path:
+                bucket, key = self._parse_uri(uri)
+                suffix = Path(key).suffix
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp:
+                    temp_path = Path(temp.name)
+                try:
+                    self.client.fget_object(bucket, key, str(temp_path))
+                except Exception:
+                    temp_path.unlink(missing_ok=True)
+                    raise
+                cache.register_temp_path(temp_path)
+                return temp_path
+
+            yield cache.load_once("minio_local_path", uri, load_temp_path)
+            return
+
         bucket, key = self._parse_uri(uri)
         suffix = Path(key).suffix
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp:
@@ -211,11 +247,32 @@ def save_uploaded_pdf(file: UploadFile, *, tenant_id: str, document_id: str, ver
     )
 
 
+def copy_source_pdf_to_version(*, source_uri: str, tenant_id: str, document_id: str, version_id: str) -> str:
+    backend = _get_storage_backend()
+    with backend.local_path(source_uri) as source_path:
+        return backend.save_file_path(
+            source_path,
+            tenant_id=tenant_id,
+            document_id=document_id,
+            version_id=version_id,
+            filename="source.pdf",
+        )
+
+
 def write_document_structure(*, tenant_id: str, document_id: str, version_id: str, data: Any) -> str:
     return _get_storage_backend().write_json(
         data,
         tenant_id=tenant_id,
         object_path=f"documents/{document_id}/versions/{version_id}/structure.json",
+    )
+
+
+def write_document_routing_index(*, tenant_id: str, document_id: str, version_id: str, data: Any) -> str:
+    normalized = normalize_routing_index_payload(data)
+    return _get_storage_backend().write_json(
+        normalized,
+        tenant_id=tenant_id,
+        object_path=f"documents/{document_id}/versions/{version_id}/routing_index.json",
     )
 
 
@@ -236,7 +293,19 @@ def get_trace_uri_for_run(tenant_id: str, skill_id: str, run_id: str) -> str:
 
 
 def read_json_artifact(uri: str) -> Any:
-    return _get_storage_backend().read_json(uri)
+    cache = ensure_run_reuse_cache()
+    if cache is None:
+        return _get_storage_backend().read_json(uri)
+
+    def load_json() -> Any:
+        return _get_storage_backend().read_json(uri)
+
+    data = cache.load_once("json_artifact", uri, load_json)
+    return copy.deepcopy(data)
+
+
+def read_document_routing_index(uri: str) -> dict[str, Any]:
+    return normalize_routing_index_payload(read_json_artifact(uri))
 
 
 def artifact_exists(uri: str) -> bool:

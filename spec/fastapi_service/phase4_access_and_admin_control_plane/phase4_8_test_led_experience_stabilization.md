@@ -277,6 +277,6 @@ What remains outside the `Phase 4.8` gate and is now carried by `Phase 4.9` / pa
 
 Therefore the current required next step is:
 
-1. clear the frontend build blockers
-2. rerun the real local validation chain
-3. update the final closeout decision in [`phase4_closeout_status.md`](phase4_closeout_status.md)
+1. keep `Phase 4.8` closed
+2. treat the remaining runtime / observability rerun and artifact refresh as `Phase 4.9` / parent-stage work
+3. update the final closeout decision in [`phase4_closeout_status.md`](phase4_closeout_status.md) after the broader rerun lands

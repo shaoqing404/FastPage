@@ -102,13 +102,16 @@ export const DocumentsPage: React.FC = () => {
 
   const reparseMutation = useMutation({
     mutationFn: ({ documentId, versionId }: { documentId: string; versionId?: string }) =>
-      documentsApi.reparse(documentId, versionId),
+      documentsApi.rebuild(documentId, versionId),
     onSuccess: () => {
       setDocumentError('');
       queryClient.invalidateQueries({ queryKey: ['documents'] });
+      queryClient.invalidateQueries({ queryKey: ['knowledge-bases'] });
+      queryClient.invalidateQueries({ queryKey: ['versions'] });
+      queryClient.invalidateQueries({ queryKey: ['structure'] });
       queryClient.invalidateQueries({ queryKey: ['all-jobs'] });
     },
-    onError: (error: unknown) => setDocumentError(getErrorMessage(error, 'Reparse request failed')),
+    onError: (error: unknown) => setDocumentError(getErrorMessage(error, '重建请求失败')),
   });
 
   const restoreMutation = useMutation({
@@ -263,7 +266,7 @@ export const DocumentsPage: React.FC = () => {
           </div>
         </GlassPanel>
 
-        <GlassPanel title={selectedDoc?.display_name || 'Document inspector'} subtitle="Metadata, versions, KB membership, and control actions.">
+        <GlassPanel title={selectedDoc?.display_name || '文档检查'} subtitle="查看元数据、版本、知识库归属，并基于当前手册生成重建版本。">
           {selectedDoc ? (
             <div className="space-y-6">
               {selectedDocJob && (
@@ -370,28 +373,33 @@ export const DocumentsPage: React.FC = () => {
                 {shareSuccess && <InlineAlert tone="success" title="Shared">{shareSuccess}</InlineAlert>}
               </div>
 
-              <div className="flex flex-wrap gap-3">
-                <button type="button" className="btn-secondary" onClick={() => setVersionDrawerOpen(true)}>
-                  <History size={16} />
-                  <span>Version history</span>
-                </button>
-                <button type="button" className="btn-secondary" onClick={() => setStructureDrawerOpen(true)} disabled={!selectedDoc.active_version_id}>
-                  <Eye size={16} />
-                  <span>View structure</span>
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => selectedDoc.active_version_id && reparseMutation.mutate({ documentId: selectedDoc.id, versionId: selectedDoc.active_version_id })}
-                  disabled={!selectedDoc.active_version_id || reparseMutation.isPending}
-                >
-                  <RefreshCcw size={16} />
-                  <span>Reparse active version</span>
-                </button>
-                <button type="button" className="btn-ghost text-red-600" onClick={() => deleteMutation.mutate(selectedDoc.id)}>
-                  <Trash2 size={16} />
-                  <span>Delete document</span>
-                </button>
+              <div className="space-y-3">
+                <div className="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3 text-sm text-blue-800">
+                  重建会基于当前激活版本创建一个新版本，重新解析页面/章节文本，并生成新的 ES 文本索引。
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  <button type="button" className="btn-secondary" onClick={() => setVersionDrawerOpen(true)}>
+                    <History size={16} />
+                    <span>版本历史</span>
+                  </button>
+                  <button type="button" className="btn-secondary" onClick={() => setStructureDrawerOpen(true)} disabled={!selectedDoc.active_version_id}>
+                    <Eye size={16} />
+                    <span>查看结构</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => reparseMutation.mutate({ documentId: selectedDoc.id, versionId: selectedDoc.active_version_id || undefined })}
+                    disabled={reparseMutation.isPending}
+                  >
+                    {reparseMutation.isPending ? <Loader2 size={16} className="animate-spin" /> : <RefreshCcw size={16} />}
+                    <span>{reparseMutation.isPending ? '正在重建…' : '重建为新版本'}</span>
+                  </button>
+                  <button type="button" className="btn-ghost text-red-600" onClick={() => deleteMutation.mutate(selectedDoc.id)}>
+                    <Trash2 size={16} />
+                    <span>删除文档</span>
+                  </button>
+                </div>
               </div>
             </div>
           ) : (

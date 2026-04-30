@@ -3,7 +3,7 @@ import os
 import sys
 import unittest
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 sys.modules.setdefault("litellm", MagicMock())
@@ -141,15 +141,19 @@ class TestChatContextCleanup(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, ErrorCode.PROVIDER_MODEL_UNSUPPORTED)
 
+    @patch("app.services.chat_service.record_run_observation_event", new_callable=AsyncMock)
     @patch("app.services.chat_service.wait_for_chat_run_terminal")
     @patch("app.services.chat_service._create_and_enqueue_run")
     def test_create_chat_run_waits_with_principal_tenant(
         self,
         mock_create_and_enqueue_run,
         mock_wait_for_chat_run_terminal,
+        mock_record_run_observation_event,
     ):
         db = MagicMock()
         queued_run = MagicMock(id="run_1")
+        queued_run.tenant_id = "tenant_target"
+        queued_run.workspace_id = "ws_target"
         mock_create_and_enqueue_run.return_value = queued_run
         mock_wait_for_chat_run_terminal.return_value = queued_run
 
@@ -170,6 +174,7 @@ class TestChatContextCleanup(unittest.TestCase):
         _, kwargs = mock_wait_for_chat_run_terminal.call_args
         self.assertEqual(kwargs["tenant_id"], "tenant_target")
         self.assertEqual(kwargs["run_id"], "run_1")
+        self.assertGreaterEqual(mock_record_run_observation_event.await_count, 1)
 
     def test_serialize_run_converts_terminal_timestamps_to_iso_strings(self):
         created_at = datetime(2026, 4, 16, 16, 0, 0)

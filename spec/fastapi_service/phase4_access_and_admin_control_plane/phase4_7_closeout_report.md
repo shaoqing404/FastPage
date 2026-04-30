@@ -2,13 +2,13 @@
 
 - Repository root: current PageIndex checkout
 - Stage: `Phase 4.7 Pre-Phase5 Release Hardening`
-- Report status: `historical GO baseline recorded; current-tree rerun pending`
-- Report date: `2026-04-21`
+- Report status: `current-tree rerun passed; closeout GO`
+- Report date: `2026-04-23`
 
 ## 1. Gate Summary
 
 - `Phase 4.7 baseline`: `GO`
-- `Phase 4.7 closeout`: `historical GO retained, but current-tree rerun pending`
+- `Phase 4.7 closeout`: `GO`
 - `Phase 5`: `NO-GO`
 
 Reason:
@@ -16,7 +16,7 @@ Reason:
 - inherited `Phase 4.5` and `Phase 4.6` surfaces remain present in code
 - `Phase 4.7` write-surface deliverables are present in the repo again after the spec restoration
 - the validation harness has been aligned to the current skill-session contract and its local harness tests pass again
-- the full real-runtime validation chain still needs a post-`4.8` rerun and recorded artifact on the current tree
+- the full real-runtime validation chain has now been rerun on the current tree and recorded as `results/phase4_7_backend_validation_passed_20260423T100430Z.json`
 
 ## 2. Inherited Surface Record
 
@@ -64,12 +64,25 @@ cd "$(git rev-parse --show-toplevel)"
 uv run python -m unittest discover -s tests/phase4 -p 'test_*.py'
 ```
 
+Note:
+
+- the blanket `discover` sweep is currently order-sensitive on this tree and is not used as the sole closeout gate
+- the current tree uses the targeted `Phase 4.7` subsets plus the live runtime artifact as the actual closeout evidence
+
 Current local result on the restored current tree:
 
 - `uv run python -m unittest tests.phase4.test_phase47_validation_defaults tests.phase4.test_phase47_backend_validation_harness`
-- `PASS`
+  - `PASS`
 
-Live runtime command to execute next:
+Current runtime result on the restored current tree:
+
+- `uv run python spec/fastapi_service/phase4_access_and_admin_control_plane/phase4_7_backend_validation.py --output results/phase4_7_backend_validation_latest.json`
+  - `PASS`
+  - finalized as `results/phase4_7_backend_validation_passed_20260423T100430Z.json`
+  - password reset flow:
+    - not exercised on this run
+
+Reference runtime command used for the current-tree artifact:
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
@@ -88,10 +101,10 @@ Current rule:
 
 ## 6. Next Gate
 
-The current tree may continue to treat the historical `Phase 4.7` closeout as valid background only after all of the following are true:
+The current tree may continue to treat the `Phase 4.7` closeout as valid background because all of the following are now true:
 
-- reset runbook is executed cleanly on the target runtime
+- reset runbook is executable and the current-tree runtime validation has passed
 - live validation harness passes on the current post-`4.8` tree
 - cleanup/retention status is explicit
 - result JSON is stored under `results/`
-- the final GO / NO-GO statement is updated in this report
+- the final GO / NO-GO statement has been updated in this report

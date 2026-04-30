@@ -34,6 +34,10 @@ export const documentsApi = {
     const { data } = await apiClient.post<ParseJob>(`/documents/${id}/reparse`, { version_id, model });
     return data;
   },
+  rebuild: async (id: string, version_id?: string, model?: string): Promise<ParseJob> => {
+    const { data } = await apiClient.post<ParseJob>(`/documents/${id}/rebuild`, { version_id, model });
+    return data;
+  },
   restore: async (id: string, version_id: string): Promise<DocumentRestoreResponse> => {
     const { data } = await apiClient.post<DocumentRestoreResponse>(`/documents/${id}/versions/${version_id}/restore`);
     return data;

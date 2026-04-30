@@ -33,6 +33,12 @@ class Settings:
     # ── Database ────────────────────────────────────────────────────────────
     database_mode: str
     database_url: str
+    db_pool_pre_ping: bool
+    db_pool_recycle_seconds: int
+    db_pool_timeout_seconds: int
+    db_pool_size: int
+    db_max_overflow: int
+    run_migrations_on_startup: bool
 
     # ── CORS ────────────────────────────────────────────────────────────────
     cors_allow_origins: list[str]
@@ -50,6 +56,10 @@ class Settings:
     # ── Task queue ──────────────────────────────────────────────────────────
     task_queue_backend: str
     redis_url: str
+    redis_host: str
+    redis_port: int
+    redis_password: str
+    redis_db: int
     queue_name_parse: str
     queue_name_chat: str
     queue_name_compliance: str
@@ -77,8 +87,10 @@ class Settings:
     compliance_run_lease_timeout_seconds: int
     compliance_run_queue_retry_delay_ms: int
 
-    # ── Retrieval / rerank ──────────────────────────────────────────────────
+    # ── Retrieval / rerank / embedding ──────────────────────────────────────
     retrieval_max_concurrency: int
+    retrieval_manual_gate_mode: str
+    retrieval_manual_gate_chat_live_enabled: bool
     run_max_manuals: int
     run_step_max_retries: int
     run_step_retry_base_ms: int
@@ -87,6 +99,25 @@ class Settings:
     system_rerank_api_key: str
     system_rerank_model: str
     system_rerank_provider_type: str
+    system_embedding_enabled: bool
+    system_embedding_base_url: str
+    system_embedding_api_key: str
+    system_embedding_model: str
+    system_embedding_provider_type: str
+    routing_node_es_enabled: bool
+    routing_node_es_url: str
+    routing_node_es_host: str
+    routing_node_es_port: int
+    routing_node_es_user: str
+    routing_node_es_password: str
+    routing_node_es_use_ssl: bool
+    routing_node_es_index_prefix: str
+    deepresearch_runtime_pdf_fallback_enabled: bool
+
+    # ── Routing asset build hooks ───────────────────────────────────────────
+    routing_route_docs_build_mode: str
+    routing_synthetic_queries_build_mode: str
+    routing_embeddings_build_mode: str
 
     # ── Runtime observability ───────────────────────────────────────────────
     observation_text_max_chars: int
@@ -107,6 +138,21 @@ def _env_text(name: str) -> str | None:
         return None
     stripped = value.strip()
     return stripped or None
+
+
+def _env_first(names: tuple[str, ...], default: str) -> str:
+    for name in names:
+        value = _env_text(name)
+        if value is not None:
+            return value
+    return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = _env_text(name)
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
 
 
 def _infer_database_mode_from_url(database_url: str) -> str:
@@ -229,6 +275,45 @@ def get_settings() -> Settings:
         "PROVIDER_URL_ALLOW_PRIVATE_NETS", _private_default
     ).lower() in {"1", "true", "yes", "on"}
 
+    # ── Redis URL (built from split fields; explicit REDIS_URL wins) ────────
+    _explicit_redis_url = os.getenv("REDIS_URL")
+    if _explicit_redis_url is not None and _explicit_redis_url.strip():
+        redis_url = _explicit_redis_url.strip()
+    else:
+        _redis_host = os.getenv("REDIS_HOST", "127.0.0.1")
+        _redis_port = os.getenv("REDIS_PORT", "6379")
+        _redis_password = os.getenv("REDIS_PASSWORD", "")
+        _redis_db = os.getenv("REDIS_DB", "0")
+        if _redis_password:
+            redis_url = f"redis://:{quote_plus(_redis_password)}@{_redis_host}:{_redis_port}/{_redis_db}"
+        else:
+            redis_url = f"redis://{_redis_host}:{_redis_port}/{_redis_db}"
+    redis_host = os.getenv("REDIS_HOST", "127.0.0.1")
+    redis_port = int(os.getenv("REDIS_PORT", "6379"))
+    redis_password = os.getenv("REDIS_PASSWORD", "")
+    redis_db = int(os.getenv("REDIS_DB", "0"))
+
+    # ── ES URL (built from split fields; explicit ROUTING_NODE_ES_URL wins) ─
+    _explicit_es_url = os.getenv("ROUTING_NODE_ES_URL")
+    if _explicit_es_url is not None and _explicit_es_url.strip():
+        routing_node_es_url = _explicit_es_url.strip()
+    else:
+        _es_host = os.getenv("ROUTING_NODE_ES_HOST", "127.0.0.1")
+        _es_port = os.getenv("ROUTING_NODE_ES_PORT", "9200")
+        _es_user = os.getenv("ROUTING_NODE_ES_USER", "")
+        _es_password = os.getenv("ROUTING_NODE_ES_PASSWORD", "")
+        _es_ssl = os.getenv("ROUTING_NODE_ES_USE_SSL", "false").lower() in {"1", "true", "yes", "on"}
+        _scheme = "https" if _es_ssl else "http"
+        if _es_user and _es_password:
+            routing_node_es_url = f"{_scheme}://{quote_plus(_es_user)}:{quote_plus(_es_password)}@{_es_host}:{_es_port}"
+        else:
+            routing_node_es_url = f"{_scheme}://{_es_host}:{_es_port}"
+    routing_node_es_host = os.getenv("ROUTING_NODE_ES_HOST", "127.0.0.1")
+    routing_node_es_port = int(os.getenv("ROUTING_NODE_ES_PORT", "9200"))
+    routing_node_es_user = os.getenv("ROUTING_NODE_ES_USER", "")
+    routing_node_es_password = os.getenv("ROUTING_NODE_ES_PASSWORD", "")
+    routing_node_es_use_ssl = os.getenv("ROUTING_NODE_ES_USE_SSL", "false").lower() in {"1", "true", "yes", "on"}
+
     settings = Settings(
         app_name="PageIndex Service",
         app_env=app_env,
@@ -240,6 +325,12 @@ def get_settings() -> Settings:
         llm_api_key=os.getenv("LLM_API_KEY", os.getenv("OPENAI_API_KEY", "")),
         database_mode=database_mode,
         database_url=database_url,
+        db_pool_pre_ping=_env_bool("DB_POOL_PRE_PING", True),
+        db_pool_recycle_seconds=int(os.getenv("DB_POOL_RECYCLE_SECONDS", "1800")),
+        db_pool_timeout_seconds=int(os.getenv("DB_POOL_TIMEOUT_SECONDS", "5")),
+        db_pool_size=int(os.getenv("DB_POOL_SIZE", "3")),
+        db_max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "2")),
+        run_migrations_on_startup=_env_bool("RUN_MIGRATIONS_ON_STARTUP", True),
         cors_allow_origins=cors_allow_origins,
         cors_allow_origin_regex=cors_allow_origin_regex,
         storage_backend=os.getenv("STORAGE_BACKEND", "local"),
@@ -250,7 +341,11 @@ def get_settings() -> Settings:
         minio_bucket=os.getenv("MINIO_BUCKET", ""),
         minio_prefix_path=os.getenv("MINIO_PREFIX_PATH", ""),
         minio_secure=os.getenv("MINIO_SECURE", "false").lower() in {"1", "true", "yes", "on"},
-        redis_url=os.getenv("REDIS_URL", ""),
+        redis_url=redis_url,
+        redis_host=redis_host,
+        redis_port=redis_port,
+        redis_password=redis_password,
+        redis_db=redis_db,
         queue_name_parse=os.getenv("QUEUE_NAME_PARSE", "pageindex:parse"),
         queue_name_chat=os.getenv("QUEUE_NAME_CHAT", "pageindex:chat"),
         queue_name_compliance=os.getenv("QUEUE_NAME_COMPLIANCE", "pageindex:compliance"),
@@ -277,6 +372,13 @@ def get_settings() -> Settings:
         compliance_run_lease_timeout_seconds=int(os.getenv("COMPLIANCE_RUN_LEASE_TIMEOUT_SECONDS", "120")),
         compliance_run_queue_retry_delay_ms=int(os.getenv("COMPLIANCE_RUN_QUEUE_RETRY_DELAY_MS", "500")),
         retrieval_max_concurrency=int(os.getenv("RETRIEVAL_MAX_CONCURRENCY", "8")),
+        retrieval_manual_gate_mode=_env_first(
+            ("RETRIEVAL_MANUAL_GATE_MODE",),
+            "off",
+        ),
+        retrieval_manual_gate_chat_live_enabled=(
+            os.getenv("RETRIEVAL_MANUAL_GATE_CHAT_LIVE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+        ),
         run_max_manuals=int(os.getenv("RUN_MAX_MANUALS", "20")),
         run_step_max_retries=int(os.getenv("RUN_STEP_MAX_RETRIES", "2")),
         run_step_retry_base_ms=int(os.getenv("RUN_STEP_RETRY_BASE_MS", "500")),
@@ -285,6 +387,34 @@ def get_settings() -> Settings:
         system_rerank_api_key=os.getenv("SYSTEM_RERANK_API_KEY", ""),
         system_rerank_model=os.getenv("SYSTEM_RERANK_MODEL", ""),
         system_rerank_provider_type=os.getenv("SYSTEM_RERANK_PROVIDER_TYPE", "openai_compatible"),
+        system_embedding_enabled=os.getenv("SYSTEM_EMBEDDING_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
+        system_embedding_base_url=os.getenv("SYSTEM_EMBEDDING_BASE_URL", ""),
+        system_embedding_api_key=os.getenv("SYSTEM_EMBEDDING_API_KEY", ""),
+        system_embedding_model=os.getenv("SYSTEM_EMBEDDING_MODEL", ""),
+        system_embedding_provider_type=os.getenv("SYSTEM_EMBEDDING_PROVIDER_TYPE", "openai_compatible"),
+        routing_node_es_enabled=os.getenv("ROUTING_NODE_ES_ENABLED", "false").lower() in {"1", "true", "yes", "on"},
+        routing_node_es_url=routing_node_es_url,
+        routing_node_es_host=routing_node_es_host,
+        routing_node_es_port=routing_node_es_port,
+        routing_node_es_user=routing_node_es_user,
+        routing_node_es_password=routing_node_es_password,
+        routing_node_es_use_ssl=routing_node_es_use_ssl,
+        routing_node_es_index_prefix=os.getenv("ROUTING_NODE_ES_INDEX_PREFIX", "pageindex-node-embeddings"),
+        deepresearch_runtime_pdf_fallback_enabled=(
+            os.getenv("DEEPRESEARCH_RUNTIME_PDF_FALLBACK_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+        ),
+        routing_route_docs_build_mode=_env_first(
+            ("ROUTING_ROUTE_DOCS_BUILD_MODE", "ROUTING_ROUTE_DOC_BUILD_MODE"),
+            "disabled",
+        ),
+        routing_synthetic_queries_build_mode=_env_first(
+            ("ROUTING_SYNTHETIC_QUERIES_BUILD_MODE",),
+            "disabled",
+        ),
+        routing_embeddings_build_mode=_env_first(
+            ("ROUTING_EMBEDDINGS_BUILD_MODE",),
+            "disabled",
+        ),
         observation_text_max_chars=int(os.getenv("OBSERVATION_TEXT_MAX_CHARS", "12000")),
         max_upload_bytes=int(os.getenv("MAX_UPLOAD_BYTES", "2147483648")),  # 2 GB
         provider_url_allow_private_nets=provider_url_allow_private,

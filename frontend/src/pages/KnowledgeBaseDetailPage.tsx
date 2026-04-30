@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   ChevronRight,
   Loader2,
+  RefreshCcw,
   Save,
   Settings2,
   Trash2,
@@ -63,6 +64,9 @@ export const KnowledgeBaseDetailPage: React.FC = () => {
   const [metadataError, setMetadataError] = useState('');
   const [metadataSuccess, setMetadataSuccess] = useState('');
   const [membershipError, setMembershipError] = useState('');
+  const [rebuildError, setRebuildError] = useState('');
+  const [rebuildSuccess, setRebuildSuccess] = useState('');
+  const [rebuildingDocumentId, setRebuildingDocumentId] = useState<string | null>(null);
 
   // Upload state
   const [uploadPending, setUploadPending] = useState(false);
@@ -94,6 +98,16 @@ export const KnowledgeBaseDetailPage: React.FC = () => {
       if (existingIndex === -1) return [updatedKnowledgeBase, ...current];
       return current.map((item) => (item.id === updatedKnowledgeBase.id ? updatedKnowledgeBase : item));
     });
+  };
+
+  const invalidateRebuildQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ['documents'] });
+    queryClient.invalidateQueries({ queryKey: ['document-versions'] });
+    queryClient.invalidateQueries({ queryKey: ['versions'] });
+    queryClient.invalidateQueries({ queryKey: ['structure'] });
+    queryClient.invalidateQueries({ queryKey: ['knowledge-base', kbId] });
+    queryClient.invalidateQueries({ queryKey: ['knowledge-bases'] });
+    queryClient.invalidateQueries({ queryKey: ['all-jobs'] });
   };
 
   // Metadata update
@@ -129,6 +143,30 @@ export const KnowledgeBaseDetailPage: React.FC = () => {
       navigate('/knowledge-bases', { replace: true });
     },
     onError: (e: unknown) => setMetadataError(getErrorMessage(e, 'Failed to delete Knowledge Base')),
+  });
+
+  const rebuildDocumentMutation = useMutation({
+    mutationFn: ({
+      documentId,
+      versionId,
+    }: {
+      documentId: string;
+      versionId?: string;
+      displayName: string;
+    }) => documentsApi.rebuild(documentId, versionId),
+    onMutate: ({ documentId }) => {
+      setRebuildError('');
+      setRebuildSuccess('');
+      setRebuildingDocumentId(documentId);
+    },
+    onSuccess: (_job, variables) => {
+      setRebuildError('');
+      setRebuildSuccess(`${variables.displayName} 已提交重建任务。`);
+      invalidateRebuildQueries();
+      setTimeout(() => setRebuildSuccess(''), 3000);
+    },
+    onError: (e: unknown) => setRebuildError(getErrorMessage(e, '重建文档失败')),
+    onSettled: () => setRebuildingDocumentId(null),
   });
 
   // Upload file directly to KB
@@ -203,6 +241,18 @@ export const KnowledgeBaseDetailPage: React.FC = () => {
         sort_order: m.sort_order,
       })),
     );
+  };
+
+  const resolveMemberDocument = (documentId: string) =>
+    documents.find((candidate) => candidate.id === documentId) || null;
+
+  const handleRebuildMemberDocument = (item: KnowledgeBaseDocumentBinding) => {
+    const document = resolveMemberDocument(item.document_id);
+    rebuildDocumentMutation.mutate({
+      documentId: item.document_id,
+      versionId: document?.active_version_id || undefined,
+      displayName: document?.display_name || item.document_display_name || item.document_id,
+    });
   };
 
   if (!kbId) return null;
@@ -326,6 +376,51 @@ export const KnowledgeBaseDetailPage: React.FC = () => {
                     onMembershipChange={handleMembershipChange}
                     onSave={handleSaveMembership}
                   />
+                )}
+
+                {effectiveMembership.length > 0 && (
+                  <div className="mt-6 space-y-3 border-t border-slate-200/70 pt-5">
+                    <div>
+                      <p className="text-sm font-medium text-slate-900">重建成员文档索引</p>
+                      <p className="text-sm text-slate-500">
+                        对单个成员文档基于当前激活版本创建新版本，刷新页面与章节文本，并生成新的 ES 文本索引。
+                      </p>
+                    </div>
+
+                    {rebuildError && <InlineAlert tone="danger" title="重建失败">{rebuildError}</InlineAlert>}
+                    {rebuildSuccess && <InlineAlert tone="success" title="重建已提交">{rebuildSuccess}</InlineAlert>}
+
+                    <div className="space-y-2">
+                      {effectiveMembership.map((item) => {
+                        const document = resolveMemberDocument(item.document_id);
+                        const displayName = document?.display_name || item.document_display_name || item.document_id;
+                        const activeVersionId = document?.active_version_id || null;
+                        const isRebuilding = rebuildingDocumentId === item.document_id;
+
+                        return (
+                          <div key={item.document_id} className="surface-soft flex flex-wrap items-center justify-between gap-3 p-4">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium text-slate-900">{displayName}</p>
+                              <p className="text-xs text-slate-500">
+                                {activeVersionId
+                                  ? `当前版本 ${activeVersionId.slice(0, 8)}`
+                                  : '未读取到版本 ID，将由后端解析当前激活版本'}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              disabled={!editable || rebuildDocumentMutation.isPending}
+                              onClick={() => handleRebuildMemberDocument(item)}
+                            >
+                              {isRebuilding ? <Loader2 size={16} className="animate-spin" /> : <RefreshCcw size={16} />}
+                              <span>{isRebuilding ? '正在重建…' : '重建为新版本'}</span>
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 )}
               </GlassPanel>
             </div>

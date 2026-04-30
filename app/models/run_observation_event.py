@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects import mysql
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -18,5 +19,5 @@ class RunObservationEvent(Base):
     event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     step: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     status: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
-    payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    payload_json: Mapped[str] = mapped_column(Text().with_variant(mysql.LONGTEXT(), "mysql"), nullable=False, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)

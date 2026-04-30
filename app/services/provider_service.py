@@ -33,6 +33,18 @@ RERANK_MODEL_KEYWORDS = (
     "jina-reranker",
     "cohere-rerank",
 )
+EMBEDDING_MODEL_KEYWORDS = (
+    "embedding",
+    "text-embedding",
+    "jina-embeddings",
+    "nomic-embed",
+    "mxbai-embed",
+    "multilingual-e5",
+    "all-minilm",
+    "voyage-",
+    "gte-",
+    "e5-",
+)
 
 
 def normalize_rerank_provider_type(provider_type: str | None, base_url: str | None) -> str | None:
@@ -144,14 +156,29 @@ def _is_rerank_model_name(model_name: str | None) -> bool:
     return any(keyword in lowered for keyword in RERANK_MODEL_KEYWORDS)
 
 
+def _is_embedding_model_name(model_name: str | None) -> bool:
+    lowered = str(model_name or "").strip().lower()
+    if not lowered:
+        return False
+    if any(keyword in lowered for keyword in RERANK_MODEL_KEYWORDS):
+        return False
+    return any(
+        keyword in lowered or lowered.startswith(keyword)
+        for keyword in EMBEDDING_MODEL_KEYWORDS
+    )
+
+
 def classify_provider_capabilities(default_model: str | None, supported_models: list[str] | None) -> dict:
     models = _normalize_model_candidates(default_model, supported_models)
     rerank_models = [model for model in models if _is_rerank_model_name(model)]
-    chat_models = [model for model in models if model not in rerank_models]
+    embedding_models = [model for model in models if model not in rerank_models and _is_embedding_model_name(model)]
+    chat_models = [model for model in models if model not in rerank_models and model not in embedding_models]
     return {
         "chat_models": chat_models,
         "rerank_models": rerank_models,
+        "embedding_models": embedding_models,
         "default_rerank_model": rerank_models[0] if rerank_models else None,
+        "default_embedding_model": embedding_models[0] if embedding_models else None,
     }
 
 
@@ -816,11 +843,7 @@ def resolve_provider_config(
         "extra_headers": {},
         "resolution_source": "system_default_provider",
         "scope": PROVIDER_SCOPE_SYSTEM,
-        "capabilities": {
-            "chat_models": [],
-            "rerank_models": [],
-            "default_rerank_model": None,
-        },
+        "capabilities": classify_provider_capabilities(None, None),
     }
 
 
@@ -841,6 +864,24 @@ def resolve_system_rerank_config() -> dict:
         "base_url": settings.system_rerank_base_url,
         "api_key": settings.system_rerank_api_key,
         "model": settings.system_rerank_model,
+        "source": "system" if enabled else "disabled",
+    }
+
+
+def resolve_system_embedding_config() -> dict:
+    # Disabled by default; this is a dark contract for later routing/build work.
+    enabled = bool(
+        settings.system_embedding_enabled
+        and settings.system_embedding_base_url
+        and settings.system_embedding_api_key
+        and settings.system_embedding_model
+    )
+    return {
+        "enabled": enabled,
+        "provider_type": settings.system_embedding_provider_type,
+        "base_url": settings.system_embedding_base_url,
+        "api_key": settings.system_embedding_api_key,
+        "model": settings.system_embedding_model,
         "source": "system" if enabled else "disabled",
     }
 
@@ -910,4 +951,86 @@ def resolve_rerank_config(
         "base_url": None,
         "api_key": None,
         "provider_type": None,
+    }
+
+
+def resolve_embedding_config(
+    *,
+    provider_config: dict,
+    embedding_mode: str | None,
+) -> dict:
+    # IE-1 exposes embedding as a dark contract only. Callers must opt in with
+    # "auto", "provider", or "system"; omitted/blank mode stays disabled.
+    raw_mode = str(embedding_mode).strip().lower() if embedding_mode is not None else None
+    normalized_mode = raw_mode or "off"
+    if not normalized_mode:
+        normalized_mode = "off"
+    invalid_mode = normalized_mode not in {"auto", "off", "provider", "system"}
+    if invalid_mode:
+        normalized_mode = "off"
+    provider_capabilities = dict(provider_config.get("capabilities") or {})
+    provider_embedding_models = list(provider_capabilities.get("embedding_models") or [])
+    system_config = resolve_system_embedding_config()
+
+    if normalized_mode == "off":
+        return {
+            "enabled": False,
+            "requested_mode": normalized_mode,
+            "resolved_mode": "off",
+            "provider_source": None,
+            "model": None,
+            "base_url": None,
+            "api_key": None,
+            "provider_type": None,
+            "fallback_reason": "invalid_mode_disabled" if invalid_mode else "disabled_by_flag",
+        }
+
+    if normalized_mode in {"auto", "provider"} and provider_embedding_models:
+        provider_type = provider_config.get("provider_type")
+        resolved_model = normalize_execution_model(
+            provider_type,
+            provider_capabilities.get("default_embedding_model") or provider_embedding_models[0],
+        )
+        return {
+            "enabled": True,
+            "requested_mode": normalized_mode,
+            "resolved_mode": "provider",
+            "provider_source": "provider",
+            "model": resolved_model,
+            "base_url": provider_config.get("base_url"),
+            "api_key": provider_config.get("api_key"),
+            "provider_type": provider_type,
+            "fallback_reason": None,
+        }
+
+    if normalized_mode in {"auto", "system"} and system_config["enabled"]:
+        provider_type = system_config["provider_type"]
+        return {
+            "enabled": True,
+            "requested_mode": normalized_mode,
+            "resolved_mode": "system",
+            "provider_source": "system",
+            "model": normalize_execution_model(provider_type, system_config["model"]),
+            "base_url": system_config["base_url"],
+            "api_key": system_config["api_key"],
+            "provider_type": provider_type,
+            "fallback_reason": "provider_embedding_unavailable" if normalized_mode == "auto" else None,
+        }
+
+    if normalized_mode == "provider":
+        fallback_reason = "provider_embedding_unavailable"
+    elif normalized_mode == "system":
+        fallback_reason = "system_embedding_unavailable"
+    else:
+        fallback_reason = "no_embedding_provider_available"
+    return {
+        "enabled": False,
+        "requested_mode": normalized_mode,
+        "resolved_mode": "fallback_none" if normalized_mode == "auto" else normalized_mode,
+        "provider_source": None,
+        "model": None,
+        "base_url": None,
+        "api_key": None,
+        "provider_type": None,
+        "fallback_reason": fallback_reason,
     }

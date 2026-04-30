@@ -7,6 +7,7 @@ requires-python = ">=3.10,<3.13"
 dependencies = [
     "alembic==1.14.1",
     "cryptography==45.0.4",
+    "elasticsearch>=8.0,<9.0",
     "fastapi==0.115.12",
     "litellm==1.82.0",
     "minio==7.2.15",
