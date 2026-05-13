@@ -1,0 +1,56 @@
+# Stage 1: Builder for ARM64 using uv for fast compilation
+FROM --platform=linux/arm64 python:3.12-slim AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_SYSTEM_PYTHON=1
+
+WORKDIR /app
+
+# Install extensive build dependencies that are often required on ARM64
+# (e.g. for cryptography, PyPDF, or other C-extensions if no wheel exists)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        curl \
+        gcc \
+        g++ \
+        libffi-dev \
+        libssl-dev \
+        pkg-config \
+        python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv from the official image
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+COPY requirements.txt /app/requirements.txt
+
+# Create a virtual environment and install dependencies fast
+RUN uv venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+RUN uv pip install -r /app/requirements.txt
+
+# Stage 2: Runtime for ARM64
+FROM --platform=linux/arm64 python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /app
+
+# Install runtime dependencies
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/venv /opt/venv
+
+COPY . /app
+
+EXPOSE 22223
+
+# The command expects to be overridden by docker-compose or run arguments
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "22223"]

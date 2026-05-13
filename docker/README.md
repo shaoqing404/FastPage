@@ -211,3 +211,45 @@ VITE_API_BASE_URL=http://127.0.0.1:22223/api/v1 npm run dev
 - do not expose raw uvicorn directly to the public internet
 - use a reverse proxy for TLS and request-size enforcement
 - align reverse-proxy body-size limits with `MAX_UPLOAD_BYTES`
+
+## ARM64 Dedicated Build & External Connections
+
+If you are running on an ARM64 architecture (like Mac M-series chips or AWS Graviton) and wish to build the image locally, we provide a dedicated `Dockerfile.arm64`. It includes advanced build toolchains (`gcc`, `libffi-dev`, etc.) to compile any missing C-extensions and uses `uv` for blazing fast dependency installation.
+
+### 1. Building the ARM64 Image locally
+
+Run the following command from the project root:
+
+```bash
+cd docker
+docker build -t pageindex-service-api:arm64 -f Dockerfile.arm64 ..
+```
+
+*(Note: The frontend does not need a special Dockerfile; `Dockerfile.frontend` uses the official Node image which natively supports ARM64).*
+
+### 2. Connect to Existing Components using Local Docker
+
+If you want to start *only* the `pageindex-service` using your local Docker and connect it to your external/existing infrastructure (MySQL, Redis, MinIO, ES), you should use **Mode 2 (Standalone Mode)**.
+
+**Step 1:** Configure the connection details in `docker/.env`:
+```env
+DATABASE_MODE=mysql
+MYSQL_HOST=192.168.1.100  # Replace with your actual MySQL IP
+REDIS_HOST=192.168.1.101  # Replace with your actual Redis IP
+# ... configure MinIO and Elasticsearch similarly
+```
+
+**Step 2:** Start the API and Frontend pointing to your existing components. If you built the custom `arm64` image above, you can run it directly:
+
+```bash
+# Using raw Docker Run (Connecting to external databases):
+docker run -d --name pageindex-api \
+  --env-file docker/.env \
+  -p 22223:22223 \
+  -v $(pwd)/data:/app/data \
+  pageindex-service-api:arm64 \
+  /app/docker/docker-entrypoint.sh
+
+# Or simply use the Compose Standalone file:
+PAGEINDEX_COMPOSE_PROFILE=standalone bash docker/start.sh
+```
