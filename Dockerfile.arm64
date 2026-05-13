@@ -1,0 +1,39 @@
+# Use a multi-platform base image that supports ARM64 natively
+FROM python:3.12-slim
+
+# Set environment variables for Python and uv
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+
+# Set the working directory
+WORKDIR /app
+
+# Install system dependencies (including uv)
+# We use the official uv installer for the fastest and most reliable ARM64 setup
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Add uv to the PATH
+ENV PATH="/root/.local/bin/:$PATH"
+
+# Copy dependency files first to leverage Docker layer caching
+COPY requirements.txt /app/
+
+# Install dependencies using uv (much faster than pip)
+# --system flag installs into the system python, which is fine in a container
+RUN uv pip install --system -r requirements.txt
+
+# Copy the rest of the application code
+COPY . /app
+
+# Expose the application port
+EXPOSE 22223
+
+# Use uvicorn to run the app
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "22223"]
