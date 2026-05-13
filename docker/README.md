@@ -22,6 +22,7 @@ Recommended deployment mode:
 - `mysql`
 - `redis`
 - `minio`
+- `elasticsearch`
 - `api`
 
 This is the recommended production-style deployment shape. The API container launches the worker process internally.
@@ -29,89 +30,79 @@ This is the recommended production-style deployment shape. The API container lau
 Required runtime settings:
 
 - `APP_ENV=prod` or `APP_ENV=dev`
-- `API_HOST`
-- `API_PORT`
-- `ADMIN_USERNAME`
-- `ADMIN_PASSWORD`
-- `SECRET_KEY`
-- `DATABASE_URL=mysql+pymysql://<user>:<pass>@<mysql-host>:3306/pageindex`
+- `LLM_API_KEY` (must be set in .env)
+- `DATABASE_MODE=mysql`
 - `TASK_QUEUE_BACKEND=redis`
-- `REDIS_HOST=<redis-host>`
-- `REDIS_PORT=6379`
-- `REDIS_PASSWORD=<redis-password>`
-- `REDIS_DB=1`
 - `STORAGE_BACKEND=minio`
-- `MINIO_ENDPOINT=<minio-host>:9000`
-- `MINIO_ACCESS_KEY=<access-key>`
-- `MINIO_SECRET_KEY=<secret-key>`
-- `MINIO_BUCKET=pageindex`
-- `MINIO_PREFIX_PATH=`
-- `MINIO_SECURE=false` or `true`
-- `LLM_BASE_URL`
-- `LLM_API_KEY`
-- `CHAT_RUN_REQUEST_TIMEOUT_SECONDS`
-- `CHAT_RUN_LEASE_TIMEOUT_SECONDS`
-- `CHAT_RUN_QUEUE_RETRY_DELAY_MS`
-- `CORS_ALLOW_ORIGINS`
-
-Demo defaults in `docker/.env.example` intentionally use:
-
-- `pageindex_service123` for MySQL passwords
-- `pageindex_service123` for Redis password
-- `pageindex_service123` for MinIO access key and secret key
-- `pageindex_service123` for `ADMIN_PASSWORD`
-
-Redis and ES connections use split fields by default (`REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` / `REDIS_DB`, `ROUTING_NODE_ES_HOST` / `ROUTING_NODE_ES_PORT` / etc.). The legacy compound `REDIS_URL` and `ROUTING_NODE_ES_URL` fields are still accepted as overrides.
-
-These values are only for:
-
-- local demo
-- test compose
-- documentation examples
-
-Production requirements:
-
-- replace every demo password with a strong random value
-- generate a dedicated long random `SECRET_KEY`
-- do not use `pageindex_service123` as a production `SECRET_KEY`
+- `ROUTING_NODE_ES_ENABLED=true`
 
 ### Complete Mode Startup Order
 
-1. Start MySQL, Redis, and MinIO.
-2. Configure `docker/.env`.
-3. Execute `alembic upgrade head`.
-4. Start the API container.
-5. The API container starts the worker process internally.
-6. Then access the frontend or API.
-
-Compose entrypoint:
-
-```bash
-cd docker
-cp .env.example .env
-docker compose --profile full up -d --build
-docker compose --profile full exec api alembic upgrade head
-```
-
-The API container runs migrations on startup. The `alembic upgrade head` line is only needed if you want to rerun them manually.
+1. Configure `docker/.env` (start by copying from `.env.example`).
+2. Start infrastructure and API using the helper script.
+3. The API container automatically executes `alembic upgrade head` on startup.
+4. Access the frontend or API once the healthchecks pass.
 
 Helper script:
 
 ```bash
 cd docker
 cp .env.example .env
+# Edit .env to set your LLM_API_KEY and other settings
 PAGEINDEX_COMPOSE_PROFILE=full bash start.sh
-docker compose --profile full exec api alembic upgrade head
 ```
 
-Important notes:
+## Mode 2: Standalone Mode (Connecting to External Infrastructure)
 
-- the worker process is only started when `TASK_QUEUE_BACKEND=redis`
-- if the API is exposed beyond localhost, `API_HOST=0.0.0.0` must be paired with a reverse proxy and TLS
-- reverse-proxy upload size must be aligned with `MAX_UPLOAD_BYTES`
-- `STORAGE_BACKEND=minio` stores artifacts in MinIO keys such as `tenants/<tenant_id>/...`
+This mode is used when you want to run only the PageIndex-Service (API + Frontend) and connect it to your existing MySQL, Redis, Elasticsearch, and MinIO instances.
 
-## Mode 2: Minimal Startup Mode
+### 1. Configuration
+
+Edit `docker/.env` and update the following connection details to point to your external services:
+
+```env
+# Database (MySQL)
+DATABASE_MODE=mysql
+MYSQL_HOST=your-mysql-host
+MYSQL_PORT=3306
+MYSQL_DATABASE=pageindex
+MYSQL_USER=pageindex
+MYSQL_PASSWORD=your-password
+
+# Task Queue (Redis)
+TASK_QUEUE_BACKEND=redis
+REDIS_HOST=your-redis-host
+REDIS_PORT=6379
+REDIS_PASSWORD=your-password
+
+# Search (Elasticsearch)
+ROUTING_NODE_ES_ENABLED=true
+ROUTING_NODE_ES_HOST=your-es-host
+ROUTING_NODE_ES_PORT=9200
+
+# Object Storage (MinIO/S3)
+STORAGE_BACKEND=minio
+MINIO_ENDPOINT=your-minio-host:9000
+MINIO_ACCESS_KEY=your-access-key
+MINIO_SECRET_KEY=your-secret-key
+```
+
+### 2. Startup
+
+Run the service using the standalone compose file:
+
+```bash
+cd docker
+# This starts ONLY the api and frontend containers
+PAGEINDEX_COMPOSE_PROFILE=standalone bash start.sh
+```
+
+### 3. Architecture Note
+
+In this mode, the `api` container still runs the internal background worker processes. The `frontend` container (Nginx) provides the UI and proxies `/api` requests to the `api` container internally.
+
+## Mode 3: Minimal Startup Mode (SQLite)
+
 
 Goal:
 
@@ -200,7 +191,13 @@ If you run `docker/docker-entrypoint.sh` directly, pass `local` explicitly to st
 
 ## Frontend
 
-The frontend is not bundled into the Docker stack. Run it separately from `frontend/`:
+The frontend is now fully integrated into the Docker stack via a dedicated Nginx container (`pageindex-service-frontend`).
+
+- **Multi-stage build:** The frontend is compiled (`npm run build`) in a Node.js stage, and the static assets are then copied to a lightweight Nginx Alpine image.
+- **Reverse Proxy:** Nginx serves the static SPA files and transparently proxies all requests starting with `/api/` to the backend `api` container on port `22223`.
+- **Configuration:** You do not need to configure complex CORS or absolute backend URLs. Ensure `VITE_API_BASE_URL=/api/v1` in `frontend/.env` (or let it inherit the default), and access the web UI via the port defined by `FRONTEND_PORT` (default `5173`) in `docker/.env`.
+
+If you prefer to run the frontend independently for development, you can still do so:
 
 ```bash
 cd frontend

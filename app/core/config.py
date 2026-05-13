@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 
 ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(ROOT / ".env")
+load_dotenv(ROOT / "docker" / ".env")
 
 DATABASE_MODE_SQLITE = "sqlite"
 DATABASE_MODE_MYSQL = "mysql"
@@ -432,5 +432,5 @@ def get_settings() -> Settings:
 def default_llm_model() -> str:
     settings = get_settings()
     if "dashscope" in settings.llm_base_url.lower():
-        return "openai/qwen-plus"
+        return "qwen3.6-plus"
     return "gpt-4o-2024-11-20"

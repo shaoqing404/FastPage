@@ -7,4 +7,12 @@ const base = process.env.PAGEINDEX_BASE_PATH || '/'
 export default defineConfig({
   base,
   plugins: [react()],
+  server: {
+    proxy: {
+      '/api/v1': {
+        target: 'http://127.0.0.1:22223',
+        changeOrigin: true,
+      }
+    }
+  }
 })

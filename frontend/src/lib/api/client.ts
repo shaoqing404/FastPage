@@ -17,7 +17,7 @@ import type {
 const BASENAME = (import.meta.env.BASE_URL || '/').replace(/\/$/, '') || '/';
 const browserOriginApiBase =
   typeof window !== 'undefined'
-    ? `${window.location.protocol}//${window.location.hostname}:22223/api/v1`
+    ? '/api/v1'
     : 'http://localhost:22223/api/v1';
 
 const isLoopbackHostname = (hostname: string) => hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
@@ -235,7 +235,13 @@ export const resolveAppPath = (path: string) => {
 
 export const resolveApiUrl = (path: string) => {
   const baseUrl = API_BASE_URL.endsWith('/') ? API_BASE_URL : `${API_BASE_URL}/`;
-  return new URL(path.replace(/^\//, ''), baseUrl).toString();
+  const cleanPath = path.replace(/^\//, '');
+
+  if (baseUrl.startsWith('http://') || baseUrl.startsWith('https://')) {
+    return new URL(cleanPath, baseUrl).toString();
+  }
+
+  return `${baseUrl}${cleanPath}`;
 };
 
 const dispatchSessionChange = () => {
