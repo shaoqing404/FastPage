@@ -29,6 +29,7 @@ class Settings:
     # ── LLM ─────────────────────────────────────────────────────────────────
     llm_base_url: str
     llm_api_key: str
+    llm_model: str
 
     # ── Database ────────────────────────────────────────────────────────────
     database_mode: str
@@ -323,6 +324,7 @@ def get_settings() -> Settings:
         data_dir=data_dir,
         llm_base_url=os.getenv("LLM_BASE_URL", os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")),
         llm_api_key=os.getenv("LLM_API_KEY", os.getenv("OPENAI_API_KEY", "")),
+        llm_model=os.getenv("LLM_MODEL", ""),
         database_mode=database_mode,
         database_url=database_url,
         db_pool_pre_ping=_env_bool("DB_POOL_PRE_PING", True),
@@ -430,7 +432,27 @@ def get_settings() -> Settings:
 
 
 def default_llm_model() -> str:
+    """Return the configured LLM model name, with sensible per-provider defaults.
+
+    Priority:
+    1. LLM_MODEL env var (explicit, always wins)
+    2. Provider-specific default inferred from LLM_BASE_URL
+    3. Generic OpenAI default
+
+    For LiteLLM + OpenAI-compatible providers (DashScope, etc.) the model name
+    MUST carry the ``openai/`` prefix so LiteLLM routes via the OpenAI adapter.
+    """
     settings = get_settings()
+    if settings.llm_model:
+        # Honour explicit config.  Ensure openai/ prefix for openai-compatible
+        # endpoints (DashScope, Azure-OpenAI-compatible, etc.) so LiteLLM does
+        # not fall back to its native-provider routing which may reject the name.
+        model = settings.llm_model
+        if "dashscope" in settings.llm_base_url.lower() and not model.startswith("openai/"):
+            model = f"openai/{model}"
+        return model
     if "dashscope" in settings.llm_base_url.lower():
+        # Default DashScope model — confirmed available via /v1/models (2026-05-14).
+        # Override with LLM_MODEL=openai/<model-id> in .env to switch models.
         return "openai/qwen3.6-plus"
     return "gpt-4o-2024-11-20"

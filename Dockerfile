@@ -14,8 +14,29 @@ COPY requirements.txt /app/requirements.txt
 RUN pip install --upgrade pip \
     && pip install -r /app/requirements.txt
 
+# ── Pre-warm tiktoken encoding files into the image ─────────────────────────
+# litellm.token_counter() internally calls tiktoken, which downloads encoding
+# files from openaipublic.blob.core.windows.net on first use. We pre-download
+# them here so the runtime container never needs outbound internet access.
+ENV TIKTOKEN_CACHE_DIR=/root/.tiktoken
+RUN python -c "
+import tiktoken, sys
+
+encodings = ['cl100k_base', 'o200k_base', 'p50k_base']
+for name in encodings:
+    try:
+        enc = tiktoken.get_encoding(name)
+        n = len(enc.encode('hello world tiktoken warmup test 你好'))
+        print(f'  OK  {name}  ({n} tokens for smoke-test string)', flush=True)
+    except Exception as e:
+        print(f'  FAIL {name}: {e}', file=sys.stderr, flush=True)
+        sys.exit(1)
+print('tiktoken warm-up complete.', flush=True)
+"
+
 COPY . /app
 
 EXPOSE 22223
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "22223"]
+

@@ -408,6 +408,7 @@ def _run_worker_process() -> None:
 
 def main() -> None:
     _configure_logging()
+    init_llm()
     if settings.task_queue_backend != "redis":
         raise RuntimeError("worker requires TASK_QUEUE_BACKEND=redis")
     if not settings.redis_url:

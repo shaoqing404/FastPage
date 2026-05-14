@@ -164,9 +164,24 @@ def is_fatal_llm_model_error(error) -> bool:
     return any(pattern in text for pattern in _FATAL_LLM_MODEL_ERROR_PATTERNS)
 
 def count_tokens(text, model=None):
+    """Count tokens with an offline-safe fallback.
+
+    litellm.token_counter() calls tiktoken internally. If the encoding file
+    is unavailable (e.g., corrupted cache, misconfigured TIKTOKEN_CACHE_DIR),
+    fall back to a character-length estimate rather than crashing the parse job.
+    Tiktoken files are pre-baked into the Docker image so this path should
+    rarely trigger in production.
+    """
     if not text:
         return 0
-    return litellm.token_counter(model=model, text=text)
+    try:
+        return litellm.token_counter(model=model, text=text)
+    except Exception:
+        # CJK-mixed text: ~3 chars per token is a reasonable approximation.
+        logging.getLogger(__name__).warning(
+            "token_counter failed (tiktoken unavailable?), using char-length fallback"
+        )
+        return max(1, len(text) // 3)
 
 
 def _json_safe(value):
