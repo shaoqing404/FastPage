@@ -25,9 +25,9 @@ for arg in "$@"; do
 done
 
 echo "==> Running database migrations..."
-alembic upgrade head
+python -m alembic upgrade head
 
-UVICORN_CMD=(uvicorn app.main:app --host "${API_HOST:-0.0.0.0}" --port "${API_PORT:-22223}")
+UVICORN_CMD=(python -m uvicorn app.main:app --host "${API_HOST:-0.0.0.0}" --port "${API_PORT:-22223}")
 if [[ "${UVICORN_RELOAD}" == "true" ]]; then
     UVICORN_CMD+=(--reload)
 fi

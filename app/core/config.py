@@ -432,5 +432,5 @@ def get_settings() -> Settings:
 def default_llm_model() -> str:
     settings = get_settings()
     if "dashscope" in settings.llm_base_url.lower():
-        return "qwen3.6-plus"
+        return "openai/qwen3.6-plus"
     return "gpt-4o-2024-11-20"

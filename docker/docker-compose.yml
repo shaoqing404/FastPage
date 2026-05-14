@@ -79,7 +79,7 @@ services:
     profiles: ["full"]
     build:
       context: ..
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/Dockerfile.arm64
     image: pageindex-service-api:local
     env_file:
       - .env
@@ -124,7 +124,7 @@ services:
     profiles: ["local"]
     build:
       context: ..
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/Dockerfile.arm64
     image: pageindex-service-api:local
     env_file:
       - .env

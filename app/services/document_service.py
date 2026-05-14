@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import AppError, ErrorCode
 from app.core.principal import Principal
-from app.models import ChatMessage, ChatRun, ChatSkillDocument, Document, DocumentVersion, KnowledgeBaseDocument, ParseJob, Workspace
+from app.models import ChatMessage, ChatRun, ChatSkillDocument, Document, DocumentRoutingNode, DocumentVersion, KnowledgeBaseDocument, ParseJob, Workspace
 from app.services.storage_service import copy_source_pdf_to_version, delete_document_tree, save_uploaded_pdf
 
 
@@ -218,6 +218,7 @@ def delete_document(db: Session, principal: Principal, document_id: str) -> None
     db.query(ParseJob).filter(ParseJob.tenant_id == principal.tenant_id, ParseJob.document_id == document.id).delete(synchronize_session=False)
     db.query(ChatSkillDocument).filter(ChatSkillDocument.document_id == document.id).delete(synchronize_session=False)
     db.query(KnowledgeBaseDocument).filter(KnowledgeBaseDocument.document_id == document.id).delete(synchronize_session=False)
+    db.query(DocumentRoutingNode).filter(DocumentRoutingNode.document_id == document.id).delete(synchronize_session=False)
     db.flush()
     db.query(DocumentVersion).filter(DocumentVersion.document_id == document.id).delete()
     db.delete(document)
