@@ -46,6 +46,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup() -> None:
+    init_llm()
     init_db()
 
 
