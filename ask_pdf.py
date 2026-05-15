@@ -67,7 +67,7 @@ def find_default_pdf() -> Path | None:
     pdfs = sorted(ROOT.glob("*.pdf"))
     if len(pdfs) == 1:
         return pdfs[0]
-    manual_pdf = ROOT / "《运行手册》（第1版）.pdf"
+    manual_pdf = ROOT / "operations_manual_v1.pdf"
     if manual_pdf.exists():
         return manual_pdf
     return None

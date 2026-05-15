@@ -26,8 +26,8 @@ except Exception:  # pragma: no cover - fallback for project env
 
 ROOT = Path(__file__).resolve().parents[2]
 RESULTS_DIR = ROOT / "results"
-PDF_PATH = ROOT / "《运行手册》（第1版）.pdf"
-STRUCTURE_PATH = RESULTS_DIR / "《运行手册》（第1版）_structure.json"
+PDF_PATH = ROOT / "operations_manual_v1.pdf"
+STRUCTURE_PATH = RESULTS_DIR / "operations_manual_v1_structure.json"
 QUESTIONS_PATH = RESULTS_DIR / "questions.json"
 RAW_RESULTS_PATH = RESULTS_DIR / "raw_results.json"
 EVALUATION_RESULTS_PATH = RESULTS_DIR / "evaluation_results.json"
@@ -219,7 +219,7 @@ def clean_lines(page_text: str) -> list[str]:
         line = normalize_text(raw_line)
         if is_noise_line(line):
             continue
-        if line in {"运行手册", "附录", "飞行运行", "运行政策", "运行管理机构及职责"}:
+        if line in {"附录", "飞行运行", "运行政策", "运行管理机构及职责"}:
             continue
         lines.append(line)
     return lines
@@ -571,8 +571,8 @@ def build_curated_candidates(page_texts: list[str]) -> list[Candidate]:
         cursor += 1
 
     # Chapter 1.5 record retention table
-    set_chapter("1.0 运行手册和记录管理", 24)
-    section = "1.0 运行手册和记录管理 1.5 运行记录管理"
+    set_chapter("1.0 记录管理", 24)
+    section = "1.0 记录管理 1.5 运行记录管理"
     add(
         f"根据 {section}，AOC 与飞机的语音通信记录保存多久？",
         "30 天",

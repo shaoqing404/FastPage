@@ -91,7 +91,7 @@ def _load_candidate_records(engine: Engine, *, sample_limit: int) -> list[dict[s
             dv.created_at
         ORDER BY
             CASE
-                WHEN d.source_filename LIKE '%运行手册%' THEN 0
+                WHEN d.source_filename LIKE '%operations_manual%' THEN 0
                 WHEN d.source_filename LIKE '%Guide%' THEN 1
                 WHEN d.source_filename LIKE '%manual%' THEN 2
                 WHEN d.source_filename LIKE '%mineru%' THEN 3

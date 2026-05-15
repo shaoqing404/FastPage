@@ -140,7 +140,7 @@ All 15 eligible versions are currently missing routing asset rows/path:
 
 | File | Size |
 | --- | ---: |
-| `《运行手册》（第1版）航空公司版本.pdf` | 33M |
+| `operations_manual_v1_main.pdf` | 33M |
 | `mineru.pdf` | 19M |
 | `苹果尴尬的 cod 能力提升训练.pdf` | 6.6M |
 | `DeepSeek_V4(2).pdf` | 4.3M |
@@ -157,8 +157,8 @@ The helper loaded each parsed structure and called `build_routing_index_payload(
 
 | File | Build | node_count | summary_count | missing_summary_count | coverage_ratio | readiness | routing_index_status | Reason |
 | --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- |
-| `《运行手册》（第1版）.pdf` | success | 265 | 0 | 265 | 0.0 | base_nodes ready; optional assets deferred | uploaded | existing routing asset missing |
-| `《运行手册》（第1版）航空公司版本.pdf` | success | 265 | 0 | 265 | 0.0 | base_nodes ready; optional assets deferred | uploaded | existing routing asset missing |
+| `operations_manual_v1.pdf` | success | 265 | 0 | 265 | 0.0 | base_nodes ready; optional assets deferred | uploaded | existing routing asset missing |
+| `operations_manual_v1_main.pdf` | success | 265 | 0 | 265 | 0.0 | base_nodes ready; optional assets deferred | uploaded | existing routing asset missing |
 | `DCS_F-16C_Early_Access_Guide_CN.pdf` | success | 229 | 0 | 229 | 0.0 | base_nodes ready; optional assets deferred | uploaded | existing routing asset missing |
 | `DCS FA-18C Early Access Guide EN.pdf` | success | 404 | 0 | 404 | 0.0 | base_nodes ready; optional assets deferred | uploaded | existing routing asset missing |
 | `mineru.pdf` | success | 37 | 0 | 37 | 0.0 | base_nodes ready; optional assets deferred | uploaded | existing routing asset missing |
@@ -184,7 +184,7 @@ Interpretation:
 
 Idempotency sample:
 
-- File: `《运行手册》（第1版）.pdf`
+- File: `operations_manual_v1.pdf`
 - document_id: `72e28541-ffe7-4c6d-b303-b94f8d61640f`
 - version_id: `623c2d39-9723-4db4-a988-4ec77f661eaf`
 - Mode: DB transaction, no storage write, rollback in `finally`

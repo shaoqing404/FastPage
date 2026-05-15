@@ -201,7 +201,7 @@ def main():
     print(f"  Target ES index: {index_name}")
 
     # ── Closeout #1: 确认 bundle 身份 ─────────────────────────────
-    # B4 Fast Search 目标文档是《运行手册》（第1版），265 nodes。
+    # B4 Fast Search 目标文档 265 nodes。
     # 本次 sync 使用的 bundle 信息如下，供人工确认是否覆盖目标文档。
     manifest_label = manifest.get("node_count", len(nodes))
     bundle_document_id = bundle_key.get("document_id", document_id)

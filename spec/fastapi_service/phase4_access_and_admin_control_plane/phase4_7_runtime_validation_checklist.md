@@ -36,7 +36,7 @@ Allowed fallback PDFs:
 
 - `examples/documents/2023-annual-report-truncated.pdf`
 - `examples/documents/PRML.pdf`
-- `《运行手册》（第1版）.pdf`
+- `operations_manual_v1.pdf`
 
 ## 3. Preflight
 

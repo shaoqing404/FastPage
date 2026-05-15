@@ -35,25 +35,25 @@ from app.services.routing_consumer_service import build_manual_gate_ref, tokeniz
 
 DEFAULT_DOCUMENT_ID = "1bdd7603-5f14-4471-a7c3-d0e2e8f1f360"
 DEFAULT_VERSION_ID = "48ce8816-cf25-47ec-8e30-f8c29d74d713"
-DEFAULT_DOCUMENT_LABEL = "《运行手册》（第1版）.pdf"
+DEFAULT_DOCUMENT_LABEL = "operations_manual_v1.pdf"
 P0_SAMPLES = [
     {
         "cohort_id": "p0:1",
-        "question": "航空公司运行的特殊机场有哪些？",
+        "question": "有哪些特殊机场？",
         "kind": "p0_special_airport_list",
         "exact_node_ids": ["0080"],
-        "expected_answer_summary": "航空公司目前共有5个特殊机场：迪庆/香格里拉、丽江/三义、腾冲/驼峰、大连/周水子、昭通。",
+        "expected_answer_summary": "目前共有5个特殊机场：迪庆/香格里拉、丽江/三义、腾冲/驼峰、大连/周水子、昭通。",
     },
     {
         "cohort_id": "p0:2",
-        "question": "航空公司运行的厦门高崎机场有什么特殊规定？",
+        "question": "厦门高崎机场有什么特殊规定？",
         "kind": "p0_negative_special_airport",
         "exact_node_ids": ["0080"],
         "expected_answer_summary": "负相关问题；手册摘录未包含厦门高崎机场特殊规定，需引用特殊机场清单说明未列入。",
     },
     {
         "cohort_id": "p0:3",
-        "question": "航空公司运行航班能否在雨夜降落高崎机场？",
+        "question": "航班能否在雨夜降落高崎机场？",
         "kind": "p0_expansion_rain_night_landing",
         "exact_node_ids": ["0080", "0184", "0075", "0135", "0078"],
         "expected_answer_summary": "扩选问题；高崎未列入特殊机场，需同时覆盖低能见、着陆最低标准、湿/污染跑道和侧风限制。",
@@ -1210,7 +1210,7 @@ def _parse_top_ks(value: str) -> list[int]:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Real manual cohort node-shadow diagnostics.")
     parser.add_argument("--questions", default=str(ROOT / "results/questions.json"))
-    parser.add_argument("--structure", default=str(ROOT / "results/《运行手册》（第1版）_structure.json"))
+    parser.add_argument("--structure", default=str(ROOT / "results/operations_manual_v1_structure.json"))
     parser.add_argument("--raw-results", default=str(ROOT / "results/raw_results.json"))
     parser.add_argument("--document-id", default=DEFAULT_DOCUMENT_ID)
     parser.add_argument("--version-id", default=DEFAULT_VERSION_ID)

@@ -31,7 +31,7 @@ class TestComplianceSerialization(unittest.TestCase):
             model="openai/qwen3.6-plus",
             status="completed",
             mode="multi_manual_federated",
-            question="航空公司特殊机场相关要求是否在手册中有明确依据",
+            question="特殊机场相关要求是否有明确依据",
             facts_json="{}",
             verdict_policy_json="{}",
             output_config_json="{}",

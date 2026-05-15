@@ -66,7 +66,7 @@ class TestPageIndexNativeRerank(unittest.TestCase):
 
         with patch("urllib.request.urlopen", side_effect=fake_urlopen) as mocked_urlopen:
             ranked, meta = rerank_candidates(
-                "航空公司有多少个特殊机场",
+                "有哪些特殊机场",
                 candidates,
                 "qwen3-vl-rerank",
                 request_options={

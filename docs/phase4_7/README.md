@@ -1,4 +1,4 @@
-# Phase 4.7 运行手册
+# Phase 4.7 Operations Manual
 
 本目录覆盖 `Phase 4.7 / Batch 4.7-A` 到 `Batch 4.7-C` 的后端 hardening 交付，不引入新的产品功能。
 
