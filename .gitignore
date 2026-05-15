@@ -32,3 +32,7 @@ run_eval.py
 scratch_*.py
 frontend/build_log.txt
 frontend/patch-skill-chat.sh
+
+# Phase 5.0 temporary artifacts and specs
+.tmp_phase50*
+spec/
