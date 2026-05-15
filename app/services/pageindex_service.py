@@ -753,7 +753,7 @@ Rules:
 def _is_native_rerank_provider(provider_type: str | None, base_url: str | None) -> bool:
     normalized_provider_type = str(provider_type or "").strip().lower()
     normalized_base_url = str(base_url or "").strip().lower()
-    return normalized_provider_type == "dashscope_rerank" or "/services/rerank/" in normalized_base_url
+    return normalized_provider_type in {"dashscope_rerank", "generic_rerank"} or "/services/rerank/" in normalized_base_url
 
 
 def _build_native_rerank_document(candidate: dict) -> str:
@@ -883,7 +883,20 @@ def rerank_candidates(
         }
 
     options = dict(request_options or {})
-    if _is_native_rerank_provider(options.get("provider_type"), options.get("api_base")):
+    provider_type = str(options.get("provider_type") or "").strip().lower()
+    if _is_native_rerank_provider(provider_type, options.get("api_base")):
+        if provider_type == "generic_rerank":
+            from app.services.adapters.rerank_adapter import rerank_via_adapter
+            return rerank_via_adapter(
+                question,
+                candidates,
+                model,
+                api_base=options["api_base"],
+                api_key=options.get("api_key", ""),
+                extra_headers=options.get("extra_headers"),
+                top_k=top_k,
+                stats_hook=stats_hook,
+            )
         return _rerank_candidates_via_native_api(
             question,
             candidates,

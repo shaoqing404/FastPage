@@ -332,6 +332,25 @@ export const ControlPlanePage: React.FC = () => {
     },
   });
 
+  const [probeEndpointResults, setProbeEndpointResults] = useState<Record<string, { status: string; latency_ms: number | null; error_redacted: string | null }>>({});
+  const [probingEndpoint, setProbingEndpoint] = useState<string | null>(null);
+  const handleProbeEndpoint = async (providerId: string, endpointId: string, capability: string) => {
+    setProbingEndpoint(endpointId);
+    try {
+      const results = await providersApi.probeRuntime(providerId, { capability: capability as 'chat' | 'embedding' | 'rerank' });
+      const match = results.find((r) => r.capability === capability);
+      if (match) {
+        setProbeEndpointResults((prev) => ({ ...prev, [endpointId]: { status: match.status, latency_ms: match.latency_ms, error_redacted: match.error_redacted } }));
+        setProviderError('');
+        setProviderSuccess(`Endpoint probe: ${match.status} (${match.latency_ms ?? '?'}ms)`);
+      }
+    } catch (err) {
+      setProbeEndpointResults((prev) => ({ ...prev, [endpointId]: { status: 'unhealthy', latency_ms: null, error_redacted: getErrorMessage(err, 'Probe failed') } }));
+    } finally {
+      setProbingEndpoint(null);
+    }
+  };
+
   const workspaceDefaultMutation = useMutation({
     mutationFn: (default_provider_id: string | null) => workspacesApi.updateDefaultProvider({ default_provider_id }),
     onSuccess: (updatedWorkspace) => {
@@ -886,6 +905,48 @@ export const ControlPlanePage: React.FC = () => {
                   <InlineAlert tone="default" title="Shared provider lifecycle">
                     Sharing keeps this provider tenant-owned. Importing creates an independent workspace-owned copy that no longer updates automatically with the shared source.
                   </InlineAlert>
+                )}
+
+                {editingProvider.id && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Server size={16} className="text-slate-500" />
+                      <span className="text-sm font-semibold text-slate-700">Capability Endpoints</span>
+                    </div>
+                    {selectedProvider?.endpoints && selectedProvider.endpoints.length > 0 ? (
+                      <div className="space-y-2">
+                        {selectedProvider.endpoints.map((ep) => {
+                          const probeState = probeEndpointResults[ep.id];
+                          const healthColor = ep.health_status === 'healthy' ? 'bg-emerald-500' : ep.health_status === 'unhealthy' ? 'bg-red-500' : 'bg-slate-300';
+                          const currentHealth = probeState?.status === 'healthy' ? 'bg-emerald-500' : probeState?.status === 'unhealthy' ? 'bg-red-500' : healthColor;
+                          return (
+                            <div key={ep.id} className="flex items-center gap-3 rounded-[16px] border border-slate-200 bg-white/70 p-3 text-sm">
+                              <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 uppercase">
+                                {ep.capability}
+                              </span>
+                              <span className="text-slate-500 flex-1 truncate">{ep.model}</span>
+                              <span className={cn('h-2 w-2 rounded-full shrink-0', currentHealth)} title={ep.health_status} />
+                              {ep.last_probe_latency_ms != null && <span className="text-xs text-slate-400">{ep.last_probe_latency_ms}ms</span>}
+                              <button
+                                type="button"
+                                className="btn-secondary text-xs py-1 px-2"
+                                disabled={probingEndpoint === ep.id || !canManageProviders}
+                                onClick={() => handleProbeEndpoint(editingProvider.id!, ep.id, ep.capability)}
+                              >
+                                <Radar size={12} />
+                                <span>{probingEndpoint === ep.id ? '...' : 'Test'}</span>
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slate-500">No capability endpoints configured. Save this provider or run a model probe to auto-populate endpoints.</p>
+                    )}
+                    {probeEndpointResults && Object.values(probeEndpointResults).some((r) => r.error_redacted) && (
+                      <p className="text-xs text-red-600">{Object.values(probeEndpointResults).find((r) => r.error_redacted)?.error_redacted}</p>
+                    )}
+                  </div>
                 )}
 
                 <div className="flex flex-wrap items-center gap-3">

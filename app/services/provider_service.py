@@ -1,5 +1,7 @@
 import json
 import logging
+import re
+import time
 import uuid
 from datetime import datetime
 from urllib import error, request
@@ -13,7 +15,7 @@ from app.core.config import get_settings
 from app.core.crypto import decrypt_text, encrypt_text
 from app.core.errors import AppError, ErrorCode
 from app.core.url_validator import validate_provider_url
-from app.models import ChatRun, ChatSkill, ModelProvider, ProviderWorkspaceShare, Workspace
+from app.models import ChatRun, ChatSkill, ModelProvider, ModelProviderEndpoint, ProviderWorkspaceShare, Workspace
 from app.services.audit_service import emit_audit_event
 
 
@@ -300,6 +302,14 @@ def serialize_provider(
             shared_workspace_ids=shared_workspace_ids,
         ),
         "capabilities": classify_provider_capabilities(provider.default_model, normalized_supported_models),
+        "endpoints": [
+            _serialize_endpoint(ep)
+            for ep in db.scalars(
+                select(ModelProviderEndpoint).where(
+                    ModelProviderEndpoint.provider_id == provider.id,
+                )
+            ).all()
+        ],
         "created_at": provider.created_at,
         "updated_at": provider.updated_at,
     }
@@ -374,6 +384,107 @@ def _replace_provider_shares(db: Session, provider: ModelProvider, shared_worksp
         )
 
 
+def _serialize_endpoint(endpoint: ModelProviderEndpoint) -> dict:
+    return {
+        "id": endpoint.id,
+        "provider_id": endpoint.provider_id,
+        "capability": endpoint.capability,
+        "adapter": endpoint.adapter,
+        "base_url": endpoint.base_url,
+        "model": endpoint.model,
+        "extra_headers": json.loads(endpoint.extra_headers_json or "{}"),
+        "config": json.loads(endpoint.config_json or "{}"),
+        "enabled": endpoint.enabled,
+        "is_default": endpoint.is_default,
+        "health_status": endpoint.health_status,
+        "last_probe_at": endpoint.last_probe_at,
+        "last_probe_latency_ms": endpoint.last_probe_latency_ms,
+        "last_probe_error": endpoint.last_probe_error,
+        "created_at": endpoint.created_at,
+        "updated_at": endpoint.updated_at,
+    }
+
+
+def _endpoint_id(provider_id: str, capability: str) -> str:
+    return f"endpoint_{provider_id}_{capability}"[:64]
+
+
+def _sync_provider_endpoints(
+    db: Session,
+    provider: ModelProvider,
+    endpoints_payload: list | None,
+    *,
+    api_key_from_payload: str | None = None,
+) -> None:
+    if endpoints_payload is None:
+        return
+    now = datetime.utcnow()
+    kept_ids: set[str] = set()
+    for ep_payload in endpoints_payload:
+        ep_capability = getattr(ep_payload, "capability", None)
+        if not ep_capability:
+            continue
+        ep_id = getattr(ep_payload, "id", None)
+        if ep_id:
+            existing = db.get(ModelProviderEndpoint, ep_id)
+            if existing is None or existing.provider_id != provider.id:
+                continue
+        else:
+            existing = db.scalars(
+                select(ModelProviderEndpoint).where(
+                    ModelProviderEndpoint.provider_id == provider.id,
+                    ModelProviderEndpoint.capability == ep_capability,
+                )
+            ).first()
+            if existing is None:
+                _default_adapter = {"chat": "openai_chat", "embedding": "openai_embedding", "rerank": "generic_rerank"}.get(ep_capability, "openai_chat")
+                existing = ModelProviderEndpoint(
+                    id=_endpoint_id(provider.id, ep_capability),
+                    provider_id=provider.id,
+                    capability=ep_capability,
+                    adapter=_default_adapter,
+                    base_url=provider.base_url,
+                    model=provider.default_model,
+                    enabled=True,
+                    is_default=False,
+                    health_status="unknown",
+                )
+        # Update fields from payload
+        for field in ("capability", "adapter", "base_url", "model", "enabled", "is_default"):
+            val = getattr(ep_payload, field, None)
+            if val is not None:
+                setattr(existing, field, val)
+        # Handle api_key: explicit set (including empty to clear)
+        if hasattr(ep_payload, "api_key") and ep_payload.api_key is not None:
+            if ep_payload.api_key.strip():
+                existing.api_key_encrypted = encrypt_text(settings.secret_key, ep_payload.api_key)
+            else:
+                existing.api_key_encrypted = None
+        if hasattr(ep_payload, "extra_headers") and ep_payload.extra_headers is not None:
+            existing.extra_headers_json = json.dumps(ep_payload.extra_headers, ensure_ascii=False)
+        if hasattr(ep_payload, "config") and ep_payload.config is not None:
+            existing.config_json = json.dumps(ep_payload.config, ensure_ascii=False)
+        existing.updated_at = now
+        if existing.created_at is None:
+            existing.created_at = now
+        # If no endpoint-level api_key, inherit from provider
+        if not existing.api_key_encrypted and api_key_from_payload:
+            existing.api_key_encrypted = encrypt_text(settings.secret_key, api_key_from_payload)
+        db.add(existing)
+        db.flush()
+        kept_ids.add(existing.id)
+    # Delete endpoints not in the payload
+    if kept_ids:
+        stale = db.scalars(
+            select(ModelProviderEndpoint).where(
+                ModelProviderEndpoint.provider_id == provider.id,
+                ModelProviderEndpoint.id.notin_(kept_ids),
+            )
+        ).all()
+        for row in stale:
+            db.delete(row)
+
+
 def create_provider(
     db: Session,
     tenant_id: str,
@@ -434,6 +545,8 @@ def create_provider(
     db.flush()
     if scope == PROVIDER_SCOPE_TENANT and share_mode == PROVIDER_SHARE_SELECTED:
         _replace_provider_shares(db, provider, shared_workspace_ids)
+    endpoints_payload = getattr(payload, "endpoints", None) or None
+    _sync_provider_endpoints(db, provider, endpoints_payload, api_key_from_payload=payload.api_key)
     emit_audit_event(
         db,
         tenant_id=tenant_id,
@@ -523,9 +636,11 @@ def update_provider(
         if update_dict.get("is_default") is True:
             _clear_tenant_default_provider(db, tenant_id, keep_provider_id=provider.id)
 
+    endpoints_payload = update_dict.pop("endpoints", None)
     for field, value in update_dict.items():
         setattr(provider, field, value)
     provider.updated_at = datetime.utcnow()
+    _sync_provider_endpoints(db, provider, endpoints_payload, api_key_from_payload=payload.api_key)
     emit_audit_event(
         db,
         tenant_id=tenant_id,
@@ -625,6 +740,7 @@ def delete_provider(db: Session, tenant_id: str, provider_id: str, *, actor_id: 
     if workspace_default_refs:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Provider is still configured as a workspace default")
     db.query(ProviderWorkspaceShare).filter(ProviderWorkspaceShare.provider_id == provider.id).delete(synchronize_session=False)
+    db.query(ModelProviderEndpoint).filter(ModelProviderEndpoint.provider_id == provider.id).delete(synchronize_session=False)
     emit_audit_event(
         db,
         tenant_id=tenant_id,
@@ -670,9 +786,223 @@ def _extract_model_ids(payload: object) -> list[str]:
 
 def _sanitize_upstream_error(raw: str, max_len: int = 200) -> str:
     cleaned = raw.replace("\n", " ").strip()
+    # Strip Bearer tokens
+    cleaned = re.sub(r'Bearer\s+[\w\-\.]+', 'Bearer [REDACTED]', cleaned, flags=re.IGNORECASE)
+    # Strip common API key patterns in JSON bodies
+    cleaned = re.sub(r'"api_key"\s*:\s*"[^"]*"', '"api_key":"[REDACTED]"', cleaned)
+    cleaned = re.sub(r'"api[-_]?key"\s*:\s*"[^"]*"', '"api_key":"[REDACTED]"', cleaned, flags=re.IGNORECASE)
     if len(cleaned) > max_len:
         cleaned = cleaned[:max_len] + "...(truncated)"
     return cleaned
+
+
+def _probe_chat_endpoint(adapter: str, base_url: str, api_key: str, model: str, extra_headers: dict | None = None) -> dict:
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        **(extra_headers or {}),
+    }
+    url = base_url.rstrip("/")
+    if url.endswith("/chat/completions"):
+        url = url[: -len("/chat/completions")]
+    test_payload = json.dumps({
+        "model": model,
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1,
+    }).encode("utf-8")
+    req = request.Request(f"{url}/chat/completions", data=test_payload, headers=headers, method="POST")
+    started = time.perf_counter()
+    with request.urlopen(req, timeout=15) as resp:
+        resp.read()
+    return {"latency_ms": int((time.perf_counter() - started) * 1000)}
+
+
+def _probe_embedding_endpoint(adapter: str, base_url: str, api_key: str, model: str, extra_headers: dict | None = None) -> dict:
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        **(extra_headers or {}),
+    }
+    url = base_url.rstrip("/")
+    if url.endswith("/embeddings"):
+        url = url[: -len("/embeddings")]
+    test_payload = json.dumps({
+        "model": model,
+        "input": ["probe"],
+    }).encode("utf-8")
+    req = request.Request(f"{url}/embeddings", data=test_payload, headers=headers, method="POST")
+    started = time.perf_counter()
+    with request.urlopen(req, timeout=15) as resp:
+        body = json.loads(resp.read().decode("utf-8"))
+    data = body.get("data") if isinstance(body, dict) else None
+    dims = None
+    if isinstance(data, list) and data:
+        emb = data[0].get("embedding") if isinstance(data[0], dict) else None
+        if isinstance(emb, list):
+            dims = len(emb)
+    return {"latency_ms": int((time.perf_counter() - started) * 1000), "dimensions": dims}
+
+
+def _probe_rerank_endpoint(adapter: str, base_url: str, api_key: str, model: str, extra_headers: dict | None = None) -> dict:
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        **(extra_headers or {}),
+    }
+    url = base_url.rstrip("/")
+    if url.endswith("/rerank"):
+        url = url[: -len("/rerank")]
+    test_payload = json.dumps({
+        "model": model,
+        "query": "probe",
+        "documents": ["test document"],
+        "top_n": 1,
+    }).encode("utf-8")
+    req = request.Request(f"{url}/rerank", data=test_payload, headers=headers, method="POST")
+    started = time.perf_counter()
+    with request.urlopen(req, timeout=15) as resp:
+        body = json.loads(resp.read().decode("utf-8"))
+    results = body.get("results") if isinstance(body, dict) else None
+    sample_count = len(results) if isinstance(results, list) else 0
+    return {"latency_ms": int((time.perf_counter() - started) * 1000), "sample_count": sample_count}
+
+
+def _run_endpoint_probe(endpoint: ModelProviderEndpoint, api_key: str) -> dict:
+    extra_headers = json.loads(endpoint.extra_headers_json or "{}")
+    if not isinstance(extra_headers, dict):
+        extra_headers = {}
+    try:
+        if endpoint.capability == "chat":
+            result = _probe_chat_endpoint(endpoint.adapter, endpoint.base_url, api_key, endpoint.model, extra_headers)
+        elif endpoint.capability == "embedding":
+            result = _probe_embedding_endpoint(endpoint.adapter, endpoint.base_url, api_key, endpoint.model, extra_headers)
+        elif endpoint.capability == "rerank":
+            result = _probe_rerank_endpoint(endpoint.adapter, endpoint.base_url, api_key, endpoint.model, extra_headers)
+        else:
+            return {"status": "unhealthy", "error_redacted": f"Unknown capability: {endpoint.capability}"}
+        return {
+            "status": "healthy",
+            "latency_ms": result.get("latency_ms"),
+            "dimensions": result.get("dimensions"),
+            "sample_count": result.get("sample_count"),
+        }
+    except Exception as exc:
+        return {
+            "status": "unhealthy",
+            "latency_ms": None,
+            "error_redacted": _sanitize_upstream_error(str(exc)),
+        }
+
+
+def probe_provider_runtime(
+    db: Session,
+    tenant_id: str,
+    provider_id: str,
+    *,
+    capability: str | None = None,
+    endpoint_id: str | None = None,
+    actor_id: str | None = None,
+    actor_type: str = "user",
+) -> list[dict]:
+    provider = get_provider_or_404(db, tenant_id, provider_id)
+    try:
+        provider_api_key = decrypt_text(settings.secret_key, provider.api_key_encrypted)
+    except InvalidToken:
+        raise HTTPException(status_code=400, detail="Provider secret cannot be decrypted")
+    query = select(ModelProviderEndpoint).where(ModelProviderEndpoint.provider_id == provider_id)
+    if endpoint_id:
+        query = query.where(ModelProviderEndpoint.id == endpoint_id)
+    elif capability:
+        query = query.where(ModelProviderEndpoint.capability == capability)
+    endpoints = db.scalars(query).all()
+    if not endpoints:
+        return []
+    results: list[dict] = []
+    now = datetime.utcnow()
+    for ep in endpoints:
+        ep_api_key = provider_api_key
+        if ep.api_key_encrypted:
+            try:
+                ep_api_key = decrypt_text(settings.secret_key, ep.api_key_encrypted)
+            except InvalidToken:
+                pass
+        probe_result = _run_endpoint_probe(ep, ep_api_key)
+        ep.health_status = probe_result["status"]
+        ep.last_probe_at = now
+        ep.last_probe_latency_ms = probe_result.get("latency_ms")
+        ep.last_probe_error = probe_result.get("error_redacted")
+        ep.updated_at = now
+        results.append({
+            "endpoint_id": ep.id,
+            "capability": ep.capability,
+            "adapter": ep.adapter,
+            "model": ep.model,
+            **probe_result,
+        })
+    emit_audit_event(
+        db, tenant_id=tenant_id, actor_type=actor_type,
+        actor_id=actor_id or "unknown", action="provider.probe_runtime",
+        target_type="provider", target_id=provider.id, result="success",
+        meta={"endpoints_probed": len(results)},
+    )
+    db.commit()
+    return results
+
+
+def probe_draft_runtime(
+    payload,
+    *,
+    capability: str | None = None,
+    endpoint_id: str | None = None,
+) -> list[dict]:
+    endpoints = getattr(payload, "endpoints", None) or []
+    if not endpoints:
+        return []
+    results: list[dict] = []
+    for ep_payload in endpoints:
+        ep_capability = getattr(ep_payload, "capability", None)
+        if not ep_capability:
+            continue
+        if capability and ep_capability != capability:
+            continue
+        if endpoint_id and getattr(ep_payload, "id", None) != endpoint_id:
+            continue
+        # Use endpoint-level key if provided, otherwise draft provider key
+        ep_key = getattr(ep_payload, "api_key", None) or payload.api_key
+        if not ep_key:
+            results.append({
+                "endpoint_id": getattr(ep_payload, "id", None),
+                "capability": ep_capability,
+                "adapter": getattr(ep_payload, "adapter", ""),
+                "model": getattr(ep_payload, "model", ""),
+                "status": "unhealthy",
+                "error_redacted": "No API key provided",
+            })
+            continue
+        ep_headers = getattr(ep_payload, "extra_headers", None) or {}
+        fake_endpoint = ModelProviderEndpoint(
+            id=getattr(ep_payload, "id", "draft"),
+            provider_id="draft",
+            capability=ep_capability,
+            adapter=getattr(ep_payload, "adapter", ""),
+            base_url=getattr(ep_payload, "base_url", ""),
+            model=getattr(ep_payload, "model", ""),
+            api_key_encrypted=encrypt_text(settings.secret_key, ep_key) if ep_key else None,
+            extra_headers_json=json.dumps(ep_headers),
+            config_json=json.dumps(getattr(ep_payload, "config", None) or {}),
+            enabled=True,
+            is_default=False,
+            health_status="unknown",
+        )
+        probe_result = _run_endpoint_probe(fake_endpoint, ep_key)
+        results.append({
+            "endpoint_id": getattr(ep_payload, "id", None),
+            "capability": ep_capability,
+            "adapter": getattr(ep_payload, "adapter", ""),
+            "model": getattr(ep_payload, "model", ""),
+            **probe_result,
+        })
+    return results
 
 
 def probe_provider_models(db: Session, tenant_id: str, provider_id: str, *, actor_id: str | None = None, actor_type: str = "user") -> ModelProvider:
@@ -886,10 +1216,77 @@ def resolve_system_embedding_config() -> dict:
     }
 
 
+def _resolve_endpoint_for_capability(
+    db: Session,
+    provider_config: dict,
+    capability: str,
+    *,
+    tenant_id: str | None = None,
+    workspace_id: str | None = None,
+) -> ModelProviderEndpoint | None:
+    provider_id = provider_config.get("provider_id")
+    if provider_id:
+        endpoint = db.scalars(
+            select(ModelProviderEndpoint).where(
+                ModelProviderEndpoint.provider_id == provider_id,
+                ModelProviderEndpoint.capability == capability,
+                ModelProviderEndpoint.enabled.is_(True),
+            )
+        ).first()
+        if endpoint:
+            return endpoint
+    if tenant_id:
+        provider = resolve_workspace_default_provider(db, tenant_id, workspace_id)
+        if not provider:
+            provider = resolve_tenant_default_provider(db, tenant_id, workspace_id=workspace_id)
+        if provider and provider.id != provider_id:
+            endpoint = db.scalars(
+                select(ModelProviderEndpoint).where(
+                    ModelProviderEndpoint.provider_id == provider.id,
+                    ModelProviderEndpoint.capability == capability,
+                    ModelProviderEndpoint.enabled.is_(True),
+                )
+            ).first()
+            if endpoint:
+                return endpoint
+    return None
+
+
+def _endpoint_config(endpoint: ModelProviderEndpoint, provider_config: dict) -> dict:
+    api_key = provider_config.get("api_key")
+    if endpoint.api_key_encrypted:
+        try:
+            api_key = decrypt_text(settings.secret_key, endpoint.api_key_encrypted)
+        except (InvalidToken, TypeError):
+            pass
+    config = json.loads(endpoint.config_json or "{}")
+    if not isinstance(config, dict):
+        config = {}
+    extra_headers = dict(provider_config.get("extra_headers") or {})
+    endpoint_headers = json.loads(endpoint.extra_headers_json or "{}")
+    if isinstance(endpoint_headers, dict):
+        extra_headers.update(endpoint_headers)
+    return {
+        "enabled": True,
+        "resolved_mode": "provider_endpoint",
+        "provider_source": "provider",
+        "model": endpoint.model,
+        "base_url": endpoint.base_url,
+        "api_key": api_key,
+        "provider_type": endpoint.adapter,
+        "extra_headers": extra_headers,
+        "config": config,
+        "endpoint_id": endpoint.id,
+    }
+
+
 def resolve_rerank_config(
     *,
     provider_config: dict,
     rerank_mode: str | None,
+    db: Session | None = None,
+    tenant_id: str | None = None,
+    workspace_id: str | None = None,
 ) -> dict:
     normalized_mode = str(rerank_mode or "auto").strip().lower()
     if normalized_mode not in {"auto", "off", "provider", "system"}:
@@ -909,6 +1306,16 @@ def resolve_rerank_config(
             "provider_type": None,
         }
 
+    # Phase 5.0: try model_provider_endpoints table first
+    if normalized_mode in {"auto", "provider"} and db is not None:
+        endpoint = _resolve_endpoint_for_capability(
+            db, provider_config, "rerank",
+            tenant_id=tenant_id, workspace_id=workspace_id,
+        )
+        if endpoint is not None:
+            return _endpoint_config(endpoint, provider_config)
+
+    # Legacy path: capabilities JSON field
     if normalized_mode in {"auto", "provider"} and provider_rerank_models:
         provider_type = normalize_rerank_provider_type(
             provider_config.get("provider_type"),
@@ -958,9 +1365,10 @@ def resolve_embedding_config(
     *,
     provider_config: dict,
     embedding_mode: str | None,
+    db: Session | None = None,
+    tenant_id: str | None = None,
+    workspace_id: str | None = None,
 ) -> dict:
-    # IE-1 exposes embedding as a dark contract only. Callers must opt in with
-    # "auto", "provider", or "system"; omitted/blank mode stays disabled.
     raw_mode = str(embedding_mode).strip().lower() if embedding_mode is not None else None
     normalized_mode = raw_mode or "off"
     if not normalized_mode:
@@ -985,6 +1393,19 @@ def resolve_embedding_config(
             "fallback_reason": "invalid_mode_disabled" if invalid_mode else "disabled_by_flag",
         }
 
+    # Phase 5.0: try model_provider_endpoints table first
+    if normalized_mode in {"auto", "provider"} and db is not None:
+        endpoint = _resolve_endpoint_for_capability(
+            db, provider_config, "embedding",
+            tenant_id=tenant_id, workspace_id=workspace_id,
+        )
+        if endpoint is not None:
+            result = _endpoint_config(endpoint, provider_config)
+            result["requested_mode"] = normalized_mode
+            result["fallback_reason"] = None
+            return result
+
+    # Legacy path: capabilities JSON field
     if normalized_mode in {"auto", "provider"} and provider_embedding_models:
         provider_type = provider_config.get("provider_type")
         resolved_model = normalize_execution_model(

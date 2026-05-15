@@ -29,6 +29,7 @@ REPO_OWNED_SCHEMA_TABLES: tuple[str, ...] = (
     "knowledge_base_documents",
     "knowledge_bases",
     "migration_review_items",
+    "model_provider_endpoints",
     "model_providers",
     "provider_workspace_shares",
     "parse_jobs",

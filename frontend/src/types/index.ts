@@ -204,6 +204,36 @@ export interface ApiKeyCreateResponse {
   api_key: string;
 }
 
+export interface ModelProviderEndpoint {
+  id: string;
+  provider_id: string;
+  capability: 'chat' | 'embedding' | 'rerank';
+  adapter: 'openai_chat' | 'openai_embedding' | 'generic_rerank' | 'dashscope_rerank';
+  base_url: string;
+  model: string;
+  extra_headers: Record<string, unknown>;
+  config: Record<string, unknown>;
+  enabled: boolean;
+  is_default: boolean;
+  health_status: 'unknown' | 'healthy' | 'unhealthy';
+  last_probe_at: string | null;
+  last_probe_latency_ms: number | null;
+  last_probe_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProbeRuntimeResult {
+  capability: string;
+  adapter: string;
+  model: string;
+  status: string;
+  latency_ms: number | null;
+  error_redacted: string | null;
+  dimensions: number | null;
+  sample_count: number | null;
+}
+
 export interface ModelProvider {
   id: string;
   tenant_id: string;
@@ -230,6 +260,7 @@ export interface ModelProvider {
     rerank_models: string[];
     default_rerank_model: string | null;
   };
+  endpoints: ModelProviderEndpoint[];
   created_at: string;
   updated_at: string;
 }
