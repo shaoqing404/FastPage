@@ -11,6 +11,7 @@ from typing import Any
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
+from app.core.llm import init_llm
 from app.services.chat_service import mark_orphaned_chat_runs_for_retry, run_chat_run
 from app.services.compliance_service import mark_orphaned_compliance_runs_for_retry, run_compliance_run
 from app.services.parse_service import run_parse_job

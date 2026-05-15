@@ -12,6 +12,7 @@ from app.api.routers import compliance_checks, compliance_runs
 from app.api.routers import workspaces, workspace_invites
 from app.core.bootstrap import init_db
 from app.core.config import get_settings
+from app.core.llm import init_llm
 from app.core.errors import AppError, ErrorCode, error_envelope, status_to_error_code
 from app.core.request_context import RequestIDMiddleware, get_request_id
 
