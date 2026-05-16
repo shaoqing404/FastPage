@@ -20,6 +20,7 @@ from app.services.document_service import get_document_or_404
 from app.services.knowledge_base_service import resolve_ready_knowledge_base_manuals
 from app.services.node_embedding_service import EsNodeDenseSearchBackend
 from app.services.node_shadow_service import COMPLEX_QUERY_PATTERN, build_node_corpora, enrich_node_corpora_with_content, score_node_corpora
+from app.services.adapters.chat_adapter import DirectChatAdapter
 from app.services.pageindex_service import (
     build_answer_with_marker,
     build_context_from_citations_async,
@@ -33,7 +34,7 @@ from app.services.pageindex_service import (
     retrieve_candidates_for_manual_async,
     snapshot_outline_diagnostics,
 )
-from app.services.provider_service import resolve_embedding_config, resolve_provider_config, resolve_rerank_config, validate_provider_model_selection
+from app.services.provider_service import resolve_chat_config, resolve_embedding_config, resolve_provider_config, resolve_rerank_config, validate_provider_model_selection
 from app.services.routing_consumer_service import (
     apply_manual_gate_full_retry,
     build_manual_gate_ref,
@@ -374,6 +375,30 @@ def _extract_usage_from_stream_chunk(chunk) -> dict | None:
             or (int(usage.get("prompt_tokens") or 0) + int(usage.get("completion_tokens") or 0))
         ),
     }
+
+
+def _extract_stream_chunk_fields(chunk) -> tuple[str, str | None, dict | None]:
+    usage = _extract_usage_from_stream_chunk(chunk)
+    choices = chunk.get("choices") if isinstance(chunk, dict) else getattr(chunk, "choices", None)
+    if not choices:
+        return "", None, usage
+    choice = choices[0]
+    if isinstance(choice, dict):
+        finish_reason = choice.get("finish_reason")
+        delta_obj = choice.get("delta") or {}
+        if isinstance(delta_obj, dict):
+            return str(delta_obj.get("content") or ""), finish_reason, usage
+        return "", finish_reason, usage
+    finish_reason = getattr(choice, "finish_reason", None)
+    delta = ""
+    if getattr(choice, "delta", None) is not None:
+        delta = choice.delta.content or ""
+    return delta, finish_reason, usage
+
+
+def _direct_chat_completion_kwargs(completion_kwargs: dict) -> dict:
+    excluded = {"model", "messages", "stream", "api_base", "api_key", "extra_headers"}
+    return {key: value for key, value in completion_kwargs.items() if key not in excluded}
 
 
 def _preview_log_text(text: str | None, *, max_chars: int = RUN_LOG_PROMPT_PREVIEW_CHARS) -> str:
@@ -1763,12 +1788,21 @@ async def run_chat_run(run_id: str) -> None:
             model=run.model,
             subject="Chat run model",
         )
+        chat_config = resolve_chat_config(
+            provider_config=provider_config,
+            db=db,
+            tenant_id=run.tenant_id,
+            workspace_id=run.workspace_id,
+        )
         embedding_mode = retrieval_config.get("embedding_mode")
         if not embedding_mode and retrieval_config.get("retrieval_mode") == CHAT_RETRIEVAL_MODE_FAST:
             embedding_mode = "system"
         embedding_config = resolve_embedding_config(
             provider_config=provider_config,
             embedding_mode=embedding_mode,
+            db=db,
+            tenant_id=run.tenant_id,
+            workspace_id=run.workspace_id,
         )
         embedding_telemetry = embedding_provider_telemetry(
             requested_mode=embedding_mode,
@@ -1781,6 +1815,8 @@ async def run_chat_run(run_id: str) -> None:
             provider_type=provider_config.get("provider_type"),
             provider_name=provider_config.get("name"),
             resolved_model=resolved_model,
+            chat_endpoint_id=chat_config.get("endpoint_id"),
+            chat_endpoint_adapter=chat_config.get("adapter"),
             embedding_resolved_mode=embedding_telemetry.get("resolved_mode"),
             embedding_provider_source=embedding_telemetry.get("provider_source"),
         )
@@ -1880,11 +1916,17 @@ async def run_chat_run(run_id: str) -> None:
             "api_key": provider_config["api_key"],
             "extra_headers": provider_config.get("extra_headers") or {},
         }
+        chat_runtime_config = provider_config if settings.enable_litellm else chat_config
+        chat_runtime_model = (
+            chat_config.get("model")
+            if (not settings.enable_litellm and chat_config.get("endpoint_id"))
+            else resolved_model
+        )
         generation_options = {
             **dict(generation_config or {}),
-            "api_base": provider_config["base_url"],
-            "api_key": provider_config["api_key"],
-            "extra_headers": provider_config.get("extra_headers") or {},
+            "api_base": chat_runtime_config.get("base_url"),
+            "api_key": chat_runtime_config.get("api_key"),
+            "extra_headers": chat_runtime_config.get("extra_headers") or {},
         }
         retrieval_mode = str(
             retrieval_options.pop("retrieval_mode", retrieval_config.get("retrieval_mode") or CHAT_RETRIEVAL_MODE_DEEP_RESEARCH)
@@ -1950,16 +1992,18 @@ async def run_chat_run(run_id: str) -> None:
                 system_prompt=request_config.get("system_prompt") or (skill.system_prompt if skill else None),
                 history_context=history_context or None,
             )
+            completion_model = (
+                str(resolved_model or "").removeprefix("litellm/")
+                if settings.enable_litellm
+                else str(chat_runtime_model or "")
+            )
             completion_kwargs = {
-                "model": resolved_model.removeprefix("litellm/"),
+                "model": completion_model,
                 "messages": [{"role": "user", "content": answer_prompt}],
                 "temperature": generation_options.get("temperature", 0),
                 "stream": True,
                 **generation_options,
             }
-            stream_options = dict(completion_kwargs.get("stream_options") or {})
-            stream_options["include_usage"] = True
-            completion_kwargs["stream_options"] = stream_options
             await _record_chat_step_started(run, "final_answer", {"model": completion_kwargs["model"]})
             answer_attempt = 0
             answer_parts: list[str] = []
@@ -1988,29 +2032,35 @@ async def run_chat_run(run_id: str) -> None:
                             "messages": completion_kwargs["messages"],
                             "temperature": completion_kwargs.get("temperature"),
                             "stream": True,
+                            "runtime": "litellm" if settings.enable_litellm else "direct_chat",
                         },
                     }
                     _log_chat_run_llm_event(run, answer_request_event)
                     try:
                         provider_request_started = time.perf_counter()
-                        response = litellm.completion(**completion_kwargs)
+                        if settings.enable_litellm:
+                            response = litellm.completion(**completion_kwargs)
+                        else:
+                            adapter = DirectChatAdapter(
+                                base_url=str(completion_kwargs.get("api_base") or ""),
+                                api_key=str(completion_kwargs.get("api_key") or ""),
+                                model=str(completion_kwargs.get("model") or ""),
+                                extra_headers=completion_kwargs.get("extra_headers") or {},
+                            )
+                            response = adapter.completion_stream(
+                                completion_kwargs["messages"],
+                                **_direct_chat_completion_kwargs(completion_kwargs),
+                            )
                         provider_response_created = time.perf_counter()
                         for chunk in response:
                             if provider_first_chunk_at is None:
                                 provider_first_chunk_at = time.perf_counter()
                             hot_path_state.maybe_schedule_heartbeat()
                             await hot_path_state.maybe_raise_if_cancel_requested()
-                            chunk_usage = _extract_usage_from_stream_chunk(chunk)
+                            delta, chunk_finish_reason, chunk_usage = _extract_stream_chunk_fields(chunk)
                             if chunk_usage:
                                 streamed_usage = chunk_usage
-                            choices = getattr(chunk, "choices", None)
-                            if not choices:
-                                continue
-                            choice = choices[0]
-                            finish_reason = getattr(choice, "finish_reason", None) or finish_reason
-                            delta = ""
-                            if getattr(choice, "delta", None) is not None:
-                                delta = choice.delta.content or ""
+                            finish_reason = chunk_finish_reason or finish_reason
                             if not delta:
                                 continue
                             if ttft_ms is None:
@@ -2528,7 +2578,13 @@ async def run_chat_run(run_id: str) -> None:
         if str(manual_gate_result.get("fallback_reason") or "").startswith("manual_gate_error:"):
             retrieval_warnings.append("Manual gate shadow failed and fell back to full manuals.")
 
-        rerank_config = resolve_rerank_config(provider_config=provider_config, rerank_mode=rerank_mode)
+        rerank_config = resolve_rerank_config(
+            provider_config=provider_config,
+            rerank_mode=rerank_mode,
+            db=db,
+            tenant_id=run.tenant_id,
+            workspace_id=run.workspace_id,
+        )
         loaded_manuals = list(manual_gate_result["applied_manuals"])
 
         async def run_retrieval_attempt(
@@ -2683,6 +2739,7 @@ async def run_chat_run(run_id: str) -> None:
                             "api_base": rerank_config.get("base_url"),
                             "api_key": rerank_config.get("api_key"),
                             "provider_type": rerank_config.get("provider_type"),
+                            "extra_headers": rerank_config.get("extra_headers") or {},
                         },
                         trace_hook=run_trace_hook,
                         stats_hook=stats_hook,

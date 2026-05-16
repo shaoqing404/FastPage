@@ -2,6 +2,7 @@
 
 import json
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from app.schemas.providers import (
@@ -16,6 +17,8 @@ from app.services.provider_service import (
     _endpoint_config,
     _sanitize_upstream_error,
     _endpoint_id,
+    _sync_provider_endpoints,
+    resolve_chat_config,
 )
 
 
@@ -77,9 +80,67 @@ class TestEndpointConfig(unittest.TestCase):
         self.assertEqual(result["resolved_mode"], "provider_endpoint")
         self.assertEqual(result["model"], "text-embedding-3-small")
         self.assertEqual(result["base_url"], "https://example.com/v1")
+        self.assertEqual(result["adapter"], "openai_embedding")
         self.assertEqual(result["provider_type"], "openai_embedding")
+        self.assertEqual(result["api_key"], "provider-key")
         self.assertEqual(result["config"], {"batch_size": 32})
         self.assertEqual(result["endpoint_id"], "endpoint-1")
+
+    def test_resolve_chat_config_prefers_enabled_endpoint(self):
+        ep = MagicMock()
+        ep.adapter = "openai_chat"
+        ep.base_url = "https://chat.example.com/v1/chat/completions"
+        ep.model = "qwen3.5-35b-a3b"
+        ep.api_key_encrypted = None
+        ep.extra_headers_json = "{}"
+        ep.config_json = "{}"
+        ep.id = "chat-endpoint-1"
+        db = MagicMock()
+        db.scalars.return_value.first.return_value = ep
+
+        result = resolve_chat_config(
+            provider_config={
+                "provider_id": "provider-1",
+                "base_url": "https://provider.example.com/v1",
+                "api_key": "provider-key",
+                "default_model": "openai/provider-default",
+                "extra_headers": {},
+            },
+            db=db,
+            tenant_id="tenant-1",
+            workspace_id="workspace-1",
+        )
+
+        self.assertEqual(result["base_url"], "https://chat.example.com/v1/chat/completions")
+        self.assertEqual(result["model"], "qwen3.5-35b-a3b")
+        self.assertEqual(result["adapter"], "openai_chat")
+        self.assertEqual(result["endpoint_id"], "chat-endpoint-1")
+
+    def test_sync_endpoint_without_key_keeps_dynamic_provider_inheritance(self):
+        db = MagicMock()
+        db.scalars.return_value.first.return_value = None
+        provider = SimpleNamespace(
+            id="provider-1",
+            base_url="https://provider.example.com/v1",
+            default_model="qwen3.5-35b-a3b",
+        )
+        payload = SimpleNamespace(
+            id=None,
+            capability="chat",
+            adapter="openai_chat",
+            base_url="https://chat.example.com/v1/chat/completions",
+            model="qwen3.5-35b-a3b",
+            api_key=None,
+            extra_headers={},
+            config={},
+            enabled=True,
+            is_default=True,
+        )
+
+        _sync_provider_endpoints(db, provider, [payload])
+
+        endpoint = db.add.call_args.args[0]
+        self.assertIsNone(endpoint.api_key_encrypted)
 
 
 class TestProbeSchemas(unittest.TestCase):

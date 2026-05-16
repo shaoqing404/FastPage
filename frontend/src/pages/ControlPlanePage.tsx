@@ -6,10 +6,11 @@ import { Link } from 'react-router-dom';
 import { CopyOnceModal, EmptyState, ExpertDrawer, Field, GlassPanel, InlineAlert, KeyMetric, SectionToolbar, StatusBadge } from '../components/ui/workbench';
 import { authApi } from '../features/auth/api';
 import { providersApi } from '../features/providers/api';
+import type { ProviderEndpointPayload } from '../features/providers/api';
 import { workspacesApi } from '../features/workspaces/api';
 import { resolveStoredWorkspace, resolveStoredWorkspaceMembership, updateStoredWorkspace } from '../lib/api/client';
 import { copyTextToClipboard } from '../lib/clipboard';
-import type { ApiKey, ModelProvider, WorkspaceListItem } from '../types';
+import type { ApiKey, ModelProvider, ProbeRuntimeResult, WorkspaceListItem } from '../types';
 import {
   cn,
   describeProviderAvailability,
@@ -33,7 +34,14 @@ type ProviderDraft = {
   scope: 'tenant' | 'workspace';
   share_mode: 'none' | 'all' | 'selected';
   shared_workspace_ids: string[];
+  endpoints: ProviderEndpointPayload[];
 };
+
+const defaultEndpointDrafts = (): ProviderEndpointPayload[] => [
+  { capability: 'chat', adapter: 'openai_chat', base_url: '', model: '', api_key: '', enabled: true, is_default: true, extra_headers: {}, config: {} },
+  { capability: 'embedding', adapter: 'openai_embedding', base_url: '', model: '', api_key: '', enabled: true, is_default: true, extra_headers: {}, config: {} },
+  { capability: 'rerank', adapter: 'generic_rerank', base_url: '', model: '', api_key: '', enabled: true, is_default: true, extra_headers: {}, config: {} },
+];
 
 const defaultProviderDraft = (): ProviderDraft => ({
   provider_type: 'openai_compatible',
@@ -48,7 +56,64 @@ const defaultProviderDraft = (): ProviderDraft => ({
   scope: 'tenant',
   share_mode: 'all',
   shared_workspace_ids: [],
+  endpoints: defaultEndpointDrafts(),
 });
+
+const endpointKey = (endpoint: ProviderEndpointPayload) => endpoint.id || endpoint.capability;
+
+const endpointPayloadsForSave = (draft: ProviderDraft): ProviderEndpointPayload[] =>
+  draft.endpoints
+    .filter((endpoint) => endpoint.base_url.trim() && endpoint.model.trim())
+    .map((endpoint) => {
+      const payload: ProviderEndpointPayload = {
+        ...(draft.id && endpoint.id ? { id: endpoint.id } : {}),
+        capability: endpoint.capability,
+        adapter: endpoint.adapter,
+        base_url: endpoint.base_url.trim(),
+        model: endpoint.model.trim(),
+        enabled: endpoint.enabled !== false,
+        is_default: endpoint.is_default ?? true,
+        extra_headers: endpoint.extra_headers || {},
+        config: endpoint.config || {},
+      };
+      if (endpoint.api_key?.trim()) payload.api_key = endpoint.api_key.trim();
+      return payload;
+    });
+
+const endpointDraftsFromProvider = (provider: ModelProvider): ProviderEndpointPayload[] => {
+  const byCapability = new Map(provider.endpoints.map((endpoint) => [endpoint.capability, endpoint]));
+  return defaultEndpointDrafts().map((fallback) => {
+    const existing = byCapability.get(fallback.capability);
+    if (!existing) return fallback;
+    return {
+      id: existing.id,
+      capability: existing.capability,
+      adapter: existing.adapter,
+      base_url: existing.base_url,
+      model: existing.model,
+      api_key: '',
+      extra_headers: existing.extra_headers || {},
+      config: existing.config || {},
+      enabled: existing.enabled,
+      is_default: existing.is_default,
+    };
+  });
+};
+
+const endpointHasUnsavedChanges = (endpoint: ProviderEndpointPayload, provider: ModelProvider | null) => {
+  if (!endpoint.id) return true;
+  const saved = provider?.endpoints.find((item) => item.id === endpoint.id);
+  if (!saved) return true;
+  return (
+    endpoint.capability !== saved.capability ||
+    endpoint.adapter !== saved.adapter ||
+    endpoint.base_url !== saved.base_url ||
+    endpoint.model !== saved.model ||
+    (endpoint.enabled !== false) !== saved.enabled ||
+    (endpoint.is_default ?? true) !== saved.is_default ||
+    Boolean(endpoint.api_key?.trim())
+  );
+};
 
 const parseSupportedModels = (defaultModel: string, raw: string) => {
   const values = raw
@@ -249,6 +314,7 @@ export const ControlPlanePage: React.FC = () => {
       const extra_headers = draft.extra_headers_text.trim() ? JSON.parse(draft.extra_headers_text) : {};
       const supported_models = parseSupportedModels(draft.default_model, draft.supported_models_text);
       const shared_workspace_ids = draft.shared_workspace_ids;
+      const endpoints = endpointPayloadsForSave(draft);
       const payload = {
         provider_type: draft.provider_type,
         name: draft.name,
@@ -256,6 +322,7 @@ export const ControlPlanePage: React.FC = () => {
         default_model: draft.default_model,
         supported_models,
         extra_headers,
+        endpoints,
         enabled: draft.enabled,
         is_default: draft.is_default,
         scope: draft.scope,
@@ -332,20 +399,67 @@ export const ControlPlanePage: React.FC = () => {
     },
   });
 
-  const [probeEndpointResults, setProbeEndpointResults] = useState<Record<string, { status: string; latency_ms: number | null; error_redacted: string | null }>>({});
+  const [probeEndpointResults, setProbeEndpointResults] = useState<Record<string, ProbeRuntimeResult>>({});
   const [probingEndpoint, setProbingEndpoint] = useState<string | null>(null);
-  const handleProbeEndpoint = async (providerId: string, endpointId: string, capability: string) => {
-    setProbingEndpoint(endpointId);
+
+  const updateEndpointDraft = (key: string, patch: Partial<ProviderEndpointPayload>) => {
+    setEditingProvider((draft) => ({
+      ...draft,
+      endpoints: draft.endpoints.map((endpoint) => (endpointKey(endpoint) === key ? { ...endpoint, ...patch } : endpoint)),
+    }));
+  };
+
+  const handleProbeEndpoint = async (endpoint: ProviderEndpointPayload) => {
+    const key = endpointKey(endpoint);
+    setProbingEndpoint(key);
     try {
-      const results = await providersApi.probeRuntime(providerId, { capability: capability as 'chat' | 'embedding' | 'rerank' });
-      const match = results.find((r) => r.capability === capability);
+      const useSavedProbe = editingProvider.id && endpoint.id && !endpointHasUnsavedChanges(endpoint, selectedProvider);
+      if (!useSavedProbe && !editingProvider.api_key.trim() && !endpoint.api_key?.trim()) {
+        setProviderSuccess('');
+        setProviderError('Enter a provider or endpoint API key to test unsaved endpoint changes.');
+        setProbeEndpointResults((prev) => ({
+          ...prev,
+          [key]: {
+            capability: endpoint.capability,
+            adapter: endpoint.adapter,
+            model: endpoint.model,
+            status: 'unhealthy',
+            latency_ms: null,
+            error_redacted: 'No API key provided',
+            dimensions: null,
+            sample_count: null,
+          },
+        }));
+        return;
+      }
+      const results = useSavedProbe
+        ? await providersApi.probeRuntime(editingProvider.id!, { endpoint_id: endpoint.id! })
+        : await providersApi.probeRuntimeDraft({
+            provider_type: editingProvider.provider_type as 'openai_compatible' | 'dashscope' | 'deepseek',
+            base_url: editingProvider.base_url,
+            api_key: editingProvider.api_key,
+            endpoints: [endpoint],
+          });
+      const match = results[0];
       if (match) {
-        setProbeEndpointResults((prev) => ({ ...prev, [endpointId]: { status: match.status, latency_ms: match.latency_ms, error_redacted: match.error_redacted } }));
+        setProbeEndpointResults((prev) => ({ ...prev, [key]: match }));
         setProviderError('');
         setProviderSuccess(`Endpoint probe: ${match.status} (${match.latency_ms ?? '?'}ms)`);
       }
     } catch (err) {
-      setProbeEndpointResults((prev) => ({ ...prev, [endpointId]: { status: 'unhealthy', latency_ms: null, error_redacted: getErrorMessage(err, 'Probe failed') } }));
+      setProbeEndpointResults((prev) => ({
+        ...prev,
+        [key]: {
+          capability: endpoint.capability,
+          adapter: endpoint.adapter,
+          model: endpoint.model,
+          status: 'unhealthy',
+          latency_ms: null,
+          error_redacted: getErrorMessage(err, 'Probe failed'),
+          dimensions: null,
+          sample_count: null,
+        },
+      }));
     } finally {
       setProbingEndpoint(null);
     }
@@ -396,6 +510,7 @@ export const ControlPlanePage: React.FC = () => {
       scope: provider.scope === 'workspace' ? 'workspace' : 'tenant',
       share_mode: provider.scope === 'workspace' ? 'none' : provider.share_mode,
       shared_workspace_ids: provider.shared_workspace_ids || [],
+      endpoints: endpointDraftsFromProvider(provider),
     });
     setProviderError('');
     setProviderSuccess('');
@@ -907,47 +1022,92 @@ export const ControlPlanePage: React.FC = () => {
                   </InlineAlert>
                 )}
 
-                {editingProvider.id && (
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-2">
-                      <Server size={16} className="text-slate-500" />
-                      <span className="text-sm font-semibold text-slate-700">Capability Endpoints</span>
-                    </div>
-                    {selectedProvider?.endpoints && selectedProvider.endpoints.length > 0 ? (
-                      <div className="space-y-2">
-                        {selectedProvider.endpoints.map((ep) => {
-                          const probeState = probeEndpointResults[ep.id];
-                          const healthColor = ep.health_status === 'healthy' ? 'bg-emerald-500' : ep.health_status === 'unhealthy' ? 'bg-red-500' : 'bg-slate-300';
-                          const currentHealth = probeState?.status === 'healthy' ? 'bg-emerald-500' : probeState?.status === 'unhealthy' ? 'bg-red-500' : healthColor;
-                          return (
-                            <div key={ep.id} className="flex items-center gap-3 rounded-[16px] border border-slate-200 bg-white/70 p-3 text-sm">
-                              <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 uppercase">
-                                {ep.capability}
-                              </span>
-                              <span className="text-slate-500 flex-1 truncate">{ep.model}</span>
-                              <span className={cn('h-2 w-2 rounded-full shrink-0', currentHealth)} title={ep.health_status} />
-                              {ep.last_probe_latency_ms != null && <span className="text-xs text-slate-400">{ep.last_probe_latency_ms}ms</span>}
-                              <button
-                                type="button"
-                                className="btn-secondary text-xs py-1 px-2"
-                                disabled={probingEndpoint === ep.id || !canManageProviders}
-                                onClick={() => handleProbeEndpoint(editingProvider.id!, ep.id, ep.capability)}
-                              >
-                                <Radar size={12} />
-                                <span>{probingEndpoint === ep.id ? '...' : 'Test'}</span>
-                              </button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <p className="text-xs text-slate-500">No capability endpoints configured. Save this provider or run a model probe to auto-populate endpoints.</p>
-                    )}
-                    {probeEndpointResults && Object.values(probeEndpointResults).some((r) => r.error_redacted) && (
-                      <p className="text-xs text-red-600">{Object.values(probeEndpointResults).find((r) => r.error_redacted)?.error_redacted}</p>
-                    )}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Server size={16} className="text-slate-500" />
+                    <span className="text-sm font-semibold text-slate-700">Capability Endpoints</span>
                   </div>
-                )}
+                  <div className="space-y-3">
+                    {editingProvider.endpoints.map((endpoint) => {
+                      const key = endpointKey(endpoint);
+                      const savedEndpoint = selectedProvider?.endpoints.find((item) => item.id === endpoint.id);
+                      const probeState = probeEndpointResults[key];
+                      const healthStatus = probeState?.status || savedEndpoint?.health_status || 'unknown';
+                      const healthColor = healthStatus === 'healthy' ? 'bg-emerald-500' : healthStatus === 'unhealthy' ? 'bg-red-500' : 'bg-slate-300';
+                      const probeDetail = probeState?.dimensions
+                        ? `${probeState.dimensions} dims`
+                        : probeState?.sample_count != null
+                          ? `${probeState.sample_count} samples`
+                          : null;
+                      return (
+                        <div key={key} className="rounded-[16px] border border-slate-200 bg-white/70 p-3">
+                          <div className="grid gap-3 lg:grid-cols-[110px_150px_minmax(0,1fr)_minmax(160px,1fr)_140px_88px]">
+                            <div>
+                              <p className="text-xs font-semibold uppercase text-slate-500">{endpoint.capability}</p>
+                              <label className="mt-2 flex items-center gap-2 text-xs text-slate-600">
+                                <input
+                                  type="checkbox"
+                                  checked={endpoint.enabled !== false}
+                                  onChange={(event) => updateEndpointDraft(key, { enabled: event.target.checked })}
+                                  disabled={!canManageProviders || selectedProviderReadOnly}
+                                />
+                                enabled
+                              </label>
+                            </div>
+                            <select
+                              className="field"
+                              value={endpoint.adapter}
+                              onChange={(event) => updateEndpointDraft(key, { adapter: event.target.value as ProviderEndpointPayload['adapter'] })}
+                              disabled={!canManageProviders || selectedProviderReadOnly}
+                            >
+                              {endpoint.capability === 'chat' && <option value="openai_chat">openai_chat</option>}
+                              {endpoint.capability === 'embedding' && <option value="openai_embedding">openai_embedding</option>}
+                              {endpoint.capability === 'rerank' && <option value="generic_rerank">generic_rerank</option>}
+                              {endpoint.capability === 'rerank' && <option value="dashscope_rerank">dashscope_rerank</option>}
+                            </select>
+                            <input
+                              className="field min-w-0"
+                              value={endpoint.base_url}
+                              onChange={(event) => updateEndpointDraft(key, { base_url: event.target.value })}
+                              disabled={!canManageProviders || selectedProviderReadOnly}
+                              placeholder={endpoint.capability === 'rerank' ? 'https://host/rerank' : `https://host/v1/${endpoint.capability === 'chat' ? 'chat/completions' : 'embeddings'}`}
+                            />
+                            <input
+                              className="field min-w-0"
+                              value={endpoint.model}
+                              onChange={(event) => updateEndpointDraft(key, { model: event.target.value })}
+                              disabled={!canManageProviders || selectedProviderReadOnly}
+                              placeholder={endpoint.capability === 'chat' ? 'qwen3.5-35b-a3b' : endpoint.capability === 'embedding' ? 'Qwen3-Embedding-8B' : 'bge-reranker-v2-m3'}
+                            />
+                            <input
+                              className="field min-w-0"
+                              value={endpoint.api_key || ''}
+                              onChange={(event) => updateEndpointDraft(key, { api_key: event.target.value })}
+                              disabled={!canManageProviders || selectedProviderReadOnly}
+                              placeholder={endpoint.id ? 'keep saved key' : 'inherit provider key'}
+                            />
+                            <button
+                              type="button"
+                              className="btn-secondary justify-center text-xs"
+                              disabled={probingEndpoint === key || !canManageProviders || !endpoint.base_url.trim() || !endpoint.model.trim()}
+                              onClick={() => handleProbeEndpoint(endpoint)}
+                            >
+                              <Radar size={12} />
+                              <span>{probingEndpoint === key ? '...' : 'Test'}</span>
+                            </button>
+                          </div>
+                          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                            <span className={cn('h-2 w-2 rounded-full', healthColor)} />
+                            <span>{healthStatus}</span>
+                            {(probeState?.latency_ms ?? savedEndpoint?.last_probe_latency_ms) != null && <span>{probeState?.latency_ms ?? savedEndpoint?.last_probe_latency_ms}ms</span>}
+                            {probeDetail && <span>{probeDetail}</span>}
+                            {probeState?.error_redacted && <span className="text-red-600">{probeState.error_redacted}</span>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
 
                 <div className="flex flex-wrap items-center gap-3">
                   <button type="submit" className="btn-primary" disabled={saveProviderMutation.isPending || !canManageProviders || selectedProviderReadOnly}>

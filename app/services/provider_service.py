@@ -413,8 +413,6 @@ def _sync_provider_endpoints(
     db: Session,
     provider: ModelProvider,
     endpoints_payload: list | None,
-    *,
-    api_key_from_payload: str | None = None,
 ) -> None:
     if endpoints_payload is None:
         return
@@ -467,9 +465,6 @@ def _sync_provider_endpoints(
         existing.updated_at = now
         if existing.created_at is None:
             existing.created_at = now
-        # If no endpoint-level api_key, inherit from provider
-        if not existing.api_key_encrypted and api_key_from_payload:
-            existing.api_key_encrypted = encrypt_text(settings.secret_key, api_key_from_payload)
         db.add(existing)
         db.flush()
         kept_ids.add(existing.id)
@@ -546,7 +541,7 @@ def create_provider(
     if scope == PROVIDER_SCOPE_TENANT and share_mode == PROVIDER_SHARE_SELECTED:
         _replace_provider_shares(db, provider, shared_workspace_ids)
     endpoints_payload = getattr(payload, "endpoints", None) or None
-    _sync_provider_endpoints(db, provider, endpoints_payload, api_key_from_payload=payload.api_key)
+    _sync_provider_endpoints(db, provider, endpoints_payload)
     emit_audit_event(
         db,
         tenant_id=tenant_id,
@@ -640,7 +635,7 @@ def update_provider(
     for field, value in update_dict.items():
         setattr(provider, field, value)
     provider.updated_at = datetime.utcnow()
-    _sync_provider_endpoints(db, provider, endpoints_payload, api_key_from_payload=payload.api_key)
+    _sync_provider_endpoints(db, provider, endpoints_payload)
     emit_audit_event(
         db,
         tenant_id=tenant_id,
@@ -1273,10 +1268,44 @@ def _endpoint_config(endpoint: ModelProviderEndpoint, provider_config: dict) -> 
         "model": endpoint.model,
         "base_url": endpoint.base_url,
         "api_key": api_key,
+        "adapter": endpoint.adapter,
         "provider_type": endpoint.adapter,
         "extra_headers": extra_headers,
         "config": config,
         "endpoint_id": endpoint.id,
+    }
+
+
+def resolve_chat_config(
+    *,
+    provider_config: dict,
+    db: Session | None = None,
+    tenant_id: str | None = None,
+    workspace_id: str | None = None,
+) -> dict:
+    if db is not None:
+        endpoint = _resolve_endpoint_for_capability(
+            db,
+            provider_config,
+            "chat",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+        )
+        if endpoint is not None:
+            return _endpoint_config(endpoint, provider_config)
+
+    return {
+        "enabled": True,
+        "resolved_mode": "provider",
+        "provider_source": "provider",
+        "model": provider_config.get("default_model"),
+        "base_url": provider_config.get("base_url"),
+        "api_key": provider_config.get("api_key"),
+        "adapter": "openai_chat",
+        "provider_type": provider_config.get("provider_type"),
+        "extra_headers": provider_config.get("extra_headers") or {},
+        "config": {},
+        "endpoint_id": None,
     }
 
 

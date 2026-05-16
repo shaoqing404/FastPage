@@ -1,7 +1,8 @@
 import { apiClient } from '../../lib/api/client';
-import type { ModelProvider, ModelProviderEndpoint, ProbeRuntimeResult } from '../../types';
+import type { ModelProvider, ProbeRuntimeResult } from '../../types';
 
 export interface ProviderEndpointPayload {
+  id?: string;
   capability: 'chat' | 'embedding' | 'rerank';
   adapter: 'openai_chat' | 'openai_embedding' | 'generic_rerank' | 'dashscope_rerank';
   base_url: string;

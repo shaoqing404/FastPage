@@ -103,6 +103,9 @@ class DirectChatAdapter:
             raise RuntimeError(f"Chat stream failed: {exc.code} {body[:500]}") from exc
 
     def _request_model(self) -> str:
+        for prefix in ("openai/", "litellm/"):
+            if self.model.startswith(prefix):
+                return self.model[len(prefix):]
         return self.model
 
 

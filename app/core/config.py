@@ -30,6 +30,7 @@ class Settings:
     llm_base_url: str
     llm_api_key: str
     llm_model: str
+    enable_litellm: bool
 
     # ── Database ────────────────────────────────────────────────────────────
     database_mode: str
@@ -325,6 +326,7 @@ def get_settings() -> Settings:
         llm_base_url=os.getenv("LLM_BASE_URL", os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")),
         llm_api_key=os.getenv("LLM_API_KEY", os.getenv("OPENAI_API_KEY", "")),
         llm_model=os.getenv("LLM_MODEL", ""),
+        enable_litellm=_env_bool("ENABLE_LITELLM", False),
         database_mode=database_mode,
         database_url=database_url,
         db_pool_pre_ping=_env_bool("DB_POOL_PRE_PING", True),

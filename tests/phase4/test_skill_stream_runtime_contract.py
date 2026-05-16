@@ -456,6 +456,7 @@ class TestSkillStreamRuntimeContract(unittest.TestCase):
         chunks: list,
         publish_side_effect=None,
         interval_side_effect=None,
+        enable_litellm: bool = False,
     ):
         SessionLocal = self._create_fast_run_session(run_id)
         events: list[tuple[str, dict]] = []
@@ -503,6 +504,7 @@ class TestSkillStreamRuntimeContract(unittest.TestCase):
             stack.enter_context(patch("app.services.chat_service._record_chat_observation", side_effect=record_observation))
             stack.enter_context(patch("app.services.chat_service._publish_chat_event", side_effect=publish_event))
             stack.enter_context(patch("app.services.chat_service.close_chat_event_stream", side_effect=close_stream))
+            stack.enter_context(patch("app.services.chat_service.SkillTraceRecorder", return_value=MagicMock()))
             stack.enter_context(patch("app.services.chat_service._run_fast_node_retrieval", return_value=self._fast_retrieval_result()))
             stack.enter_context(
                 patch(
@@ -510,7 +512,13 @@ class TestSkillStreamRuntimeContract(unittest.TestCase):
                     return_value=["<physical_index_938>无成人陪伴儿童：10个。</physical_index_938>"],
                 )
             )
-            stack.enter_context(patch("app.services.chat_service.litellm.completion", return_value=chunks))
+            stack.enter_context(patch.object(__import__("app.services.chat_service", fromlist=["settings"]).settings, "enable_litellm", enable_litellm))
+            if enable_litellm:
+                stack.enter_context(patch("app.services.chat_service.DirectChatAdapter.completion_stream", side_effect=AssertionError("Direct chat should be disabled when ENABLE_LITELLM=true")))
+                stack.enter_context(patch("app.services.chat_service.litellm.completion", return_value=chunks))
+            else:
+                stack.enter_context(patch("app.services.chat_service.litellm.completion", side_effect=AssertionError("LiteLLM should be disabled by default")))
+                stack.enter_context(patch("app.services.chat_service.DirectChatAdapter.completion_stream", return_value=chunks))
             if interval_side_effect:
                 stack.enter_context(patch("app.services.chat_service._chat_stream_interval_seconds", side_effect=interval_side_effect))
 
@@ -538,6 +546,16 @@ class TestSkillStreamRuntimeContract(unittest.TestCase):
         self.assertLess(snapshot.metrics["heartbeat_count"], 300)
         self.assertLess(snapshot.metrics["cancel_check_count"], 300)
         self.assertEqual(len([event for event, _data in events if event == "answer_delta"]), 300)
+
+    def test_enable_litellm_uses_legacy_stream_path(self):
+        snapshot, events, _observations = self._run_fast_case(
+            run_id="run_litellm_rollback",
+            chunks=self._delta_chunks(2),
+            enable_litellm=True,
+        )
+
+        self.assertEqual(snapshot.status, "completed")
+        self.assertEqual(len([event for event, _data in events if event == "answer_delta"]), 2)
 
     def test_final_answer_stream_does_not_observe_every_delta(self):
         snapshot, _events, observations = self._run_fast_case(
@@ -765,12 +783,14 @@ class TestSkillStreamRuntimeContract(unittest.TestCase):
              patch("app.services.chat_service._record_chat_observation", side_effect=no_observation), \
              patch("app.services.chat_service._publish_chat_event", side_effect=publish_event), \
              patch("app.services.chat_service.close_chat_event_stream", side_effect=close_stream), \
+             patch("app.services.chat_service.SkillTraceRecorder", return_value=MagicMock()), \
              patch("app.services.chat_service._run_fast_node_retrieval", return_value=fast_retrieval), \
              patch(
                  "app.services.chat_service.build_context_from_citations_async",
                  return_value=["<physical_index_938>无成人陪伴儿童：10个，其中5（含）-10岁不得超过5个。</physical_index_938>"],
              ), \
-             patch("app.services.chat_service.litellm.completion", return_value=[chunk]):
+             patch("app.services.chat_service.litellm.completion", side_effect=AssertionError("LiteLLM should be disabled by default")), \
+             patch("app.services.chat_service.DirectChatAdapter.completion_stream", return_value=[chunk]):
             asyncio.run(run_chat_run("run_fast"))
 
         with SessionLocal() as db:
