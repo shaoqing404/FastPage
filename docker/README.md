@@ -1,11 +1,14 @@
 # Docker Runtime
 
-This directory supports two clearly separated runtime modes for PageIndex Service:
+This directory defaults to the complete `full` runtime mode for PageIndex Service.
 
-1. `full`: recommended deployment mode with MySQL + Redis + MinIO + API, with the worker launched inside the API container
-2. `local`: minimal startup mode with SQLite + local storage + local task queue + API only
+1. `full`: default and recommended deployment mode with MySQL + Redis + MinIO + Elasticsearch + API + Frontend, with worker processes launched inside the API container
+2. `standalone`: API + Frontend connected to external MySQL / Redis / MinIO or S3 / Elasticsearch
+3. `local`: deprecated SQLite + local storage + local task queue mode, retained only for short-lived development diagnostics and subject to removal
 
 Source startup with Python 3.12 and `uv` remains the recommended development path outside containers.
+
+> **Deprecated:** `PAGEINDEX_COMPOSE_PROFILE=local` is SQLite mode. It is not a supported deployment target for the current mainline runtime and may be removed in a future release. Do not use it for local deployment smoke unless you are explicitly debugging SQLite/local queue behavior.
 
 ## Files
 
@@ -15,9 +18,9 @@ Source startup with Python 3.12 and `uv` remains the recommended development pat
 - `docker/start.sh`
 - `docker/stop.sh`
 
-## Mode 1: Complete Component Mode
+## Mode 1: Complete Component Mode (`full`, Default)
 
-Recommended deployment mode:
+Default and recommended deployment mode:
 
 - `mysql`
 - `redis`
@@ -35,6 +38,8 @@ Required runtime settings:
 - `TASK_QUEUE_BACKEND=redis`
 - `STORAGE_BACKEND=minio`
 - `ROUTING_NODE_ES_ENABLED=true`
+- `DATA_DIR=/var/lib/pageindex/data`
+- `ENABLE_LITELLM=false` by default. Set `ENABLE_LITELLM=true` only to roll back final-answer chat to the legacy LiteLLM path.
 
 ### Complete Mode Startup Order
 
@@ -49,6 +54,12 @@ Helper script:
 cd docker
 cp .env.example .env
 # Edit .env to set your LLM_API_KEY and other settings
+bash start.sh
+```
+
+`PAGEINDEX_COMPOSE_PROFILE` defaults to `full`; setting it explicitly is optional:
+
+```bash
 PAGEINDEX_COMPOSE_PROFILE=full bash start.sh
 ```
 
@@ -101,7 +112,9 @@ PAGEINDEX_COMPOSE_PROFILE=standalone bash start.sh
 
 In this mode, the `api` container still runs the internal background worker processes. The `frontend` container (Nginx) provides the UI and proxies `/api` requests to the `api` container internally.
 
-## Mode 3: Minimal Startup Mode (SQLite)
+## Mode 3: Deprecated Minimal Startup Mode (SQLite)
+
+> **Deprecated:** this is `PAGEINDEX_COMPOSE_PROFILE=local`. It uses SQLite, local filesystem storage, and local in-process queues. It is retained only for short-lived development diagnostics and may be removed in a future release. The default for local Docker deployment is `full`, not `local`.
 
 
 Goal:
@@ -118,7 +131,7 @@ Minimal configuration:
 - `SECRET_KEY=pageindex_service123_local_dev_only_change_me`
 - `DATABASE_URL=sqlite:///./data/app.db`
   Or inside a container:
-  `DATABASE_URL=sqlite:////app/data/app.db`
+  `DATABASE_URL=sqlite:////var/lib/pageindex/data/app.db`
 - `STORAGE_BACKEND=local`
 - `TASK_QUEUE_BACKEND=local`
 - `MINIO_*=` empty
@@ -133,8 +146,9 @@ Behavior in minimal mode:
 - uses local filesystem storage via `app/services/storage_service.py`
 - parse/chat execution does not require Redis worker mode
 - no standalone worker process is needed
-- best for development, self-test, and frontend/API integration
+- only for development diagnostics of SQLite/local queue behavior
 - not suitable for high concurrency or formal production deployment
+- not suitable for current mainline deployment smoke
 
 Source startup example:
 
@@ -246,7 +260,7 @@ REDIS_HOST=192.168.1.101  # Replace with your actual Redis IP
 docker run -d --name pageindex-api \
   --env-file docker/.env \
   -p 22223:22223 \
-  -v $(pwd)/data:/app/data \
+  -v $(pwd)/data:/var/lib/pageindex \
   pageindex-service-api:arm64 \
   /app/docker/docker-entrypoint.sh
 

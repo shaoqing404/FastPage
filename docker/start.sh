@@ -17,6 +17,7 @@ set +a
 
 case "${PROFILE}" in
   full)
+    echo "==> PAGEINDEX_COMPOSE_PROFILE=${PROFILE} (default, recommended): MySQL + Redis + MinIO + Elasticsearch + API + Frontend"
     echo "==> Starting Infrastructure (MySQL, Redis, MinIO, Elasticsearch)..."
     docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile full up -d --build mysql redis minio elasticsearch
 
@@ -28,7 +29,12 @@ case "${PROFILE}" in
     docker compose --env-file "${ENV_FILE}" -f "${SCRIPT_DIR}/docker-compose.standalone.yml" up -d --build
     ;;
   local)
-    docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile local up -d --build api-local
+    cat >&2 <<'EOF'
+WARNING: PAGEINDEX_COMPOSE_PROFILE=local is the deprecated SQLite/local queue/local storage mode.
+It is retained only for short-lived development diagnostics and may be removed in a future release.
+Use the default PAGEINDEX_COMPOSE_PROFILE=full for local deployments unless you are explicitly debugging SQLite mode.
+EOF
+    docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile local up -d --build api-local frontend-local
     ;;
   *)
     echo "Unsupported PAGEINDEX_COMPOSE_PROFILE=${PROFILE}. Use full, standalone, or local." >&2

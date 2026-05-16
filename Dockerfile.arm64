@@ -5,7 +5,11 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/app/.venv \
+    DATA_DIR=/var/lib/pageindex/data \
+    LOG_DIR=/var/log/pageindex \
+    ENABLE_LITELLM=false
 
 # Set the working directory
 WORKDIR /app
@@ -23,17 +27,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PATH="/root/.local/bin/:$PATH"
 
 # Copy dependency files first to leverage Docker layer caching
-COPY requirements.txt /app/
+COPY pyproject.toml uv.lock /app/
 
-# Install dependencies using uv (much faster than pip)
-# --system flag installs into the system python, which is fine in a container
-RUN uv pip install --system -r requirements.txt
+# Install dependencies into the project virtual environment
+RUN uv sync --frozen --no-install-project
+ENV UV_PYTHON=/app/.venv/bin/python
 
 # Copy the rest of the application code
 COPY . /app
+RUN mkdir -p "${DATA_DIR}" "${LOG_DIR}" \
+    && chmod -R 0775 /var/lib/pageindex /var/log/pageindex
 
 # Expose the application port
 EXPOSE 22223
 
-# Use uvicorn to run the app
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "22223"]
+# Use uvicorn to run the app through the project environment
+CMD ["uv", "run", "--no-sync", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "22223"]

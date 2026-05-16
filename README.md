@@ -79,7 +79,7 @@ Recommended production deployment uses the complete component stack:
 - Elasticsearch 8.x as the required B4.2 runtime search index
 - OpenAI-compatible LLM, rerank, and embedding providers
 
-SQLite/local mode exists for development, but it is not the recommended production mode.
+SQLite/local mode is deprecated. It exists only for short-lived development diagnostics of SQLite/local queue behavior and may be removed in a future release. Use the full MySQL/Redis/MinIO/Elasticsearch stack for local deployment smoke and production-style validation.
 
 ## Quick Start
 
@@ -219,19 +219,21 @@ docker compose --profile full exec api alembic upgrade head
 
 ### 5. Start API and workers
 
-Minimal local API mode uses SQLite/local storage/local queue and does not need a standalone worker:
+Deprecated minimal local API mode uses SQLite/local storage/local queue and does not need a standalone worker. It may be removed in a future release and must not be used for deployment smoke:
 
 ```bash
 uv run uvicorn app.main:app --host 127.0.0.1 --port 22223
 ```
 
-Production-style Docker mode uses MySQL, Redis, MinIO, API, and worker processes launched by the API container:
+Default Docker mode uses MySQL, Redis, MinIO, Elasticsearch, API, frontend, and worker processes launched by the API container:
 
 ```bash
 cd docker
 cp .env.example .env
-PAGEINDEX_COMPOSE_PROFILE=full bash start.sh
+bash start.sh
 ```
+
+`PAGEINDEX_COMPOSE_PROFILE` defaults to `full`; only set `PAGEINDEX_COMPOSE_PROFILE=local` when explicitly debugging deprecated SQLite mode.
 
 If you run source services with Redis queues, start the API and worker separately:
 

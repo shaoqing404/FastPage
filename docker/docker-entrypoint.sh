@@ -25,9 +25,15 @@ for arg in "$@"; do
 done
 
 echo "==> Running database migrations..."
-python -m alembic upgrade head
+export ENABLE_LITELLM="${ENABLE_LITELLM:-false}"
+export DATA_DIR="${DATA_DIR:-/var/lib/pageindex/data}"
+export LOG_DIR="${LOG_DIR:-/var/log/pageindex}"
 
-UVICORN_CMD=(python -m uvicorn app.main:app --host "${API_HOST:-0.0.0.0}" --port "${API_PORT:-22223}")
+mkdir -p "${DATA_DIR}" "${LOG_DIR}"
+
+uv run --no-sync python -m alembic upgrade head
+
+UVICORN_CMD=(uv run --no-sync python -m uvicorn app.main:app --host "${API_HOST:-0.0.0.0}" --port "${API_PORT:-22223}")
 if [[ "${UVICORN_RELOAD}" == "true" ]]; then
     UVICORN_CMD+=(--reload)
 fi
@@ -62,7 +68,7 @@ if [[ "${RUNTIME_MODE}" == "full" ]]; then
     echo "==> Mode: Full (MySQL/Redis)"
     echo "==> Starting Worker Node(s) in background (Count controlled by WORKER_PROCESS_COUNT)..."
     export MALLOC_ARENA_MAX=2
-    python -m app.worker &
+    uv run --no-sync python -m app.worker &
     WORKER_PID=$!
 else
     echo "==> Mode: Local (SQLite/Local Queue)"

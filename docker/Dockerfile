@@ -2,18 +2,29 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/app/.venv \
+    PATH="/app/.venv/bin:/root/.local/bin:${PATH}" \
+    DATA_DIR=/var/lib/pageindex/data \
+    LOG_DIR=/var/log/pageindex \
+    ENABLE_LITELLM=false
 
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential curl \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends build-essential ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh
 
-COPY requirements.txt /app/requirements.txt
-RUN pip install --upgrade pip \
-    && pip install -r /app/requirements.txt
+COPY pyproject.toml uv.lock /app/
+RUN uv sync --frozen --no-install-project
+ENV UV_PYTHON=/app/.venv/bin/python
 
 COPY . /app
+RUN mkdir -p "${DATA_DIR}" "${LOG_DIR}" \
+    && chmod -R 0775 /var/lib/pageindex /var/log/pageindex
 
 EXPOSE 22223
+
+CMD ["uv", "run", "--no-sync", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "22223"]
