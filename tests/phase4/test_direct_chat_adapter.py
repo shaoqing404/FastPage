@@ -1,6 +1,7 @@
 import unittest
 
 from app.services.adapters.chat_adapter import DirectChatAdapter
+from app.services.adapters.rerank_adapter import GenericRerankAdapter
 
 
 class TestDirectChatAdapterModelNormalization(unittest.TestCase):
@@ -20,6 +21,26 @@ class TestDirectChatAdapterModelNormalization(unittest.TestCase):
                     model=raw,
                 )
                 self.assertEqual(adapter._request_model(), expected)
+
+    def test_empty_api_key_omits_authorization_header(self):
+        adapter = DirectChatAdapter(
+            base_url="https://example.com/v1",
+            api_key="",
+            model="qwen3.6-plus",
+            extra_headers={"Authorization": "Bearer stale"},
+        )
+        headers = adapter._headers(accept="application/json")
+        self.assertNotIn("Authorization", headers)
+
+    def test_rerank_empty_api_key_omits_authorization_header(self):
+        adapter = GenericRerankAdapter(
+            base_url="https://example.com/v1",
+            api_key="",
+            model="bge-reranker-v2-m3",
+            extra_headers={"Authorization": "Bearer stale"},
+        )
+        headers = adapter._headers()
+        self.assertNotIn("Authorization", headers)
 
 
 if __name__ == "__main__":

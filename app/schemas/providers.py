@@ -59,7 +59,7 @@ class ModelProviderCreate(BaseModel):
     provider_type: ProviderType
     name: str
     base_url: str
-    api_key: str
+    api_key: str | None = ""
     default_model: str
     supported_models: list[str] = Field(default_factory=list)
     extra_headers: dict[str, Any] = Field(default_factory=dict)
@@ -129,7 +129,7 @@ class ProbeRuntimeRequest(BaseModel):
 class ProbeRuntimeDraftRequest(BaseModel):
     provider_type: ProviderType
     base_url: str
-    api_key: str
+    api_key: str | None = ""
     endpoints: list[ModelProviderEndpointCreate] = Field(default_factory=list)
     capability: EndpointCapability | None = None
     endpoint_id: str | None = None

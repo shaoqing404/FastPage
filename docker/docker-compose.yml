@@ -79,7 +79,10 @@ services:
     profiles: ["full"]
     build:
       context: ..
-      dockerfile: docker/Dockerfile.arm64
+      dockerfile: ${API_DOCKERFILE:-docker/Dockerfile}
+      args:
+        UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        TIKTOKEN_PREWARM: ${TIKTOKEN_PREWARM:-true}
     image: pageindex-service-api:local
     env_file:
       - .env
@@ -117,6 +120,8 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.frontend
+      args:
+        NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com/}
     image: pageindex-service-frontend:local
     ports:
       - "${FRONTEND_PORT:-5173}:80"
@@ -128,7 +133,10 @@ services:
     profiles: ["local"]
     build:
       context: ..
-      dockerfile: docker/Dockerfile.arm64
+      dockerfile: ${API_DOCKERFILE:-docker/Dockerfile}
+      args:
+        UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        TIKTOKEN_PREWARM: ${TIKTOKEN_PREWARM:-true}
     image: pageindex-service-api:local
     env_file:
       - .env
@@ -174,6 +182,8 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.frontend
+      args:
+        NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com/}
     image: pageindex-service-frontend:local
     ports:
       - "${FRONTEND_PORT:-5173}:80"

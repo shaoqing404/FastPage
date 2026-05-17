@@ -63,6 +63,46 @@ bash start.sh
 PAGEINDEX_COMPOSE_PROFILE=full bash start.sh
 ```
 
+### Build Architecture And Mirrors
+
+The default `API_DOCKERFILE=docker/Dockerfile` is multi-arch and is the recommended path for both x86_64 (`linux/amd64`) servers and ARM64 (`linux/arm64`) machines:
+
+```bash
+cd docker
+cp .env.example .env
+# Optional for explicit x86 server builds:
+API_DOCKERFILE=docker/Dockerfile docker compose --env-file .env --profile full build api frontend
+```
+
+For ARM64-specific local builds, set:
+
+```env
+API_DOCKERFILE=docker/Dockerfile.arm64
+```
+
+Python dependencies are installed with `uv sync --frozen --no-install-project` into `/app/.venv`; container startup uses `uv run --no-sync ...` so runtime and build use the same project virtual environment. The build defaults to a domestic PyPI mirror and npm mirror:
+
+```env
+UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+NPM_CONFIG_REGISTRY=https://registry.npmmirror.com/
+TIKTOKEN_PREWARM=true
+```
+
+Override these values in `docker/.env` or in the shell when a target network requires a different mirror. Set `TIKTOKEN_PREWARM=false` only when the build network cannot reach tiktoken's upstream encoding blobs; keep it enabled for runtime images that must work without network fetches. No real API keys should be written into Dockerfiles or compose files.
+
+The mirror settings cover Python and npm packages. A cold build still needs access to the base images, Debian apt repositories, and the `uv` installer; for restricted server networks, build in a connected environment first and transfer the saved image tarballs.
+
+To build image tarballs for distribution from a Linux host with BuildKit/buildx:
+
+```bash
+docker buildx build --platform linux/amd64 -f docker/Dockerfile -t pageindex-service-api:amd64 --load ..
+docker buildx build --platform linux/arm64 -f docker/Dockerfile.arm64 -t pageindex-service-api:arm64 --load ..
+docker buildx build --platform linux/amd64 -f docker/Dockerfile.frontend -t pageindex-service-frontend:amd64 --load ..
+docker buildx build --platform linux/arm64 -f docker/Dockerfile.frontend -t pageindex-service-frontend:arm64 --load ..
+docker save -o pageindex-images-amd64.tar pageindex-service-api:amd64 pageindex-service-frontend:amd64 mysql:8.4 redis:7-alpine minio/minio:RELEASE.2025-02-28T09-55-16Z elasticsearch:8.19.15
+docker save -o pageindex-images-arm64.tar pageindex-service-api:arm64 pageindex-service-frontend:arm64 mysql:8.4 redis:7-alpine minio/minio:RELEASE.2025-02-28T09-55-16Z elasticsearch:8.19.15
+```
+
 ## Mode 2: Standalone Mode (Connecting to External Infrastructure)
 
 This mode is used when you want to run only the PageIndex-Service (API + Frontend) and connect it to your existing MySQL, Redis, Elasticsearch, and MinIO instances.
@@ -228,7 +268,7 @@ VITE_API_BASE_URL=http://127.0.0.1:22223/api/v1 npm run dev
 
 ## ARM64 Dedicated Build & External Connections
 
-If you are running on an ARM64 architecture (like Mac M-series chips or AWS Graviton) and wish to build the image locally, we provide a dedicated `Dockerfile.arm64`. It includes advanced build toolchains (`gcc`, `libffi-dev`, etc.) to compile any missing C-extensions and uses `uv` for blazing fast dependency installation.
+If you are running on an ARM64 architecture (like Mac M-series chips or AWS Graviton) and wish to build the image locally, you may use the dedicated `Dockerfile.arm64`. The default `docker/Dockerfile` is still valid for both x86_64 and ARM64.
 
 ### 1. Building the ARM64 Image locally
 

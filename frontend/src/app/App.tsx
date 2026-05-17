@@ -107,8 +107,8 @@ export const App: React.FC = () => (
           <Route path="chat/skills/:skillId" element={<LegacySkillChatRedirect />} />
           <Route path="runs" element={<ActivityPage />} />
           <Route path="activity" element={<Navigate to="/runs" replace />} />
-          <Route path="providers" element={<ControlPlanePage />} />
           <Route path="providers/docs" element={<ProviderDocsPage />} />
+          <Route path="providers/*" element={<ControlPlanePage />} />
           <Route path="control-plane" element={<Navigate to="/providers" replace />} />
           <Route path="metrics" element={<Navigate to="/runs" replace />} />
           <Route path="platform" element={<PlatformAdminRoute><Navigate to="/platform/users" replace /></PlatformAdminRoute>} />

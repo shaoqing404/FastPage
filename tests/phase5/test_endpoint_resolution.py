@@ -17,6 +17,7 @@ from app.services.provider_service import (
     _endpoint_config,
     _sanitize_upstream_error,
     _endpoint_id,
+    _request_headers,
     _sync_provider_endpoints,
     resolve_chat_config,
 )
@@ -59,6 +60,15 @@ class TestEndpointId(unittest.TestCase):
 
 
 class TestEndpointConfig(unittest.TestCase):
+    def test_request_headers_omit_authorization_for_no_auth(self):
+        headers = _request_headers("", extra_headers={"X-Test": "ok", "Authorization": "Bearer stale"})
+        self.assertNotIn("Authorization", headers)
+        self.assertEqual(headers["X-Test"], "ok")
+
+    def test_request_headers_include_authorization_when_key_present(self):
+        headers = _request_headers("sk-test")
+        self.assertEqual(headers["Authorization"], "Bearer sk-test")
+
     def test_returns_expected_keys(self):
         ep = MagicMock()
         ep.adapter = "openai_embedding"
@@ -153,7 +163,7 @@ class TestProbeSchemas(unittest.TestCase):
         req = ProbeRuntimeDraftRequest(
             provider_type="openai_compatible",
             base_url="https://example.com/v1",
-            api_key="sk-test",
+            api_key="",
             endpoints=[
                 ModelProviderEndpointCreate(
                     capability="chat",
@@ -165,6 +175,7 @@ class TestProbeSchemas(unittest.TestCase):
         )
         self.assertEqual(len(req.endpoints), 1)
         self.assertEqual(req.endpoints[0].capability, "chat")
+        self.assertEqual(req.api_key, "")
 
     def test_probe_runtime_result_shape(self):
         result = ProbeRuntimeResult(

@@ -38,6 +38,18 @@ class GenericRerankAdapter:
             return self.base_url
         return f"{self.base_url}/rerank"
 
+    def _headers(self) -> dict:
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            **self.extra_headers,
+        }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        else:
+            headers.pop("Authorization", None)
+        return headers
+
     def rerank(
         self,
         query: str,
@@ -52,12 +64,7 @@ class GenericRerankAdapter:
             "documents": list(documents),
             "top_n": min(top_n, len(documents)),
         }
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            **self.extra_headers,
-        }
+        headers = self._headers()
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(self.endpoint, data=data, headers=headers, method="POST")
         started = time.perf_counter()

@@ -1,11 +1,12 @@
 # Stage 1: Build Frontend (Multi-arch compatible node image)
 FROM node:22-slim AS builder
+ARG NPM_CONFIG_REGISTRY=https://registry.npmmirror.com/
 WORKDIR /frontend
 
 # Install dependencies
 COPY frontend/package*.json ./
-# Use Taobao mirror to prevent ECONNRESET and network timeouts in Docker/WSL
-RUN npm config set registry https://registry.npmmirror.com/
+# Use a configurable npm mirror to reduce ECONNRESET and network timeouts.
+RUN npm config set registry "${NPM_CONFIG_REGISTRY}"
 # Disable progress, fund, audit to prevent OOM/hangs in Docker
 RUN npm install --no-fund --no-audit --no-update-notifier --loglevel=error
 

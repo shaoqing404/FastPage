@@ -18,7 +18,7 @@ export interface ProviderPayload {
   provider_type: string;
   name: string;
   base_url: string;
-  api_key?: string;
+  api_key?: string | null;
   default_model: string;
   supported_models?: string[];
   extra_headers?: Record<string, string>;
@@ -38,7 +38,7 @@ export interface ProbeRuntimeRequest {
 export interface ProbeRuntimeDraftRequest {
   provider_type: string;
   base_url: string;
-  api_key: string;
+  api_key?: string | null;
   endpoints: ProviderEndpointPayload[];
   capability?: 'chat' | 'embedding' | 'rerank';
   endpoint_id?: string;

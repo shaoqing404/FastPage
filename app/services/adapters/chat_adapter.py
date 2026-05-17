@@ -39,6 +39,18 @@ class DirectChatAdapter:
     def endpoint(self) -> str:
         return f"{self.base_url}/chat/completions"
 
+    def _headers(self, *, accept: str) -> dict:
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": accept,
+            **self.extra_headers,
+        }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        else:
+            headers.pop("Authorization", None)
+        return headers
+
     def completion(self, messages: list[dict], **kwargs) -> dict:
         """Non-streaming completion. Returns the full response dict."""
         payload = {
@@ -46,12 +58,7 @@ class DirectChatAdapter:
             "messages": list(messages),
             **kwargs,
         }
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            **self.extra_headers,
-        }
+        headers = self._headers(accept="application/json")
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(self.endpoint, data=data, headers=headers, method="POST")
         started = time.perf_counter()
@@ -77,12 +84,7 @@ class DirectChatAdapter:
             "stream": True,
             **kwargs,
         }
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            "Accept": "text/event-stream",
-            **self.extra_headers,
-        }
+        headers = self._headers(accept="text/event-stream")
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(self.endpoint, data=data, headers=headers, method="POST")
         try:

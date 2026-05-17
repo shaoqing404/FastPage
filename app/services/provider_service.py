@@ -522,7 +522,7 @@ def create_provider(
         provider_type=payload.provider_type,
         name=payload.name,
         base_url=validated_url,
-        api_key_encrypted=encrypt_text(settings.secret_key, payload.api_key),
+        api_key_encrypted=encrypt_text(settings.secret_key, getattr(payload, "api_key", None) or ""),
         default_model=payload.default_model,
         supported_models_json=json.dumps(supported_models, ensure_ascii=False),
         extra_headers_json=json.dumps(payload.extra_headers, ensure_ascii=False),
@@ -595,7 +595,7 @@ def update_provider(
     if not isinstance(current_supported_models, list):
         current_supported_models = []
     if "api_key" in update_dict:
-        provider.api_key_encrypted = encrypt_text(settings.secret_key, update_dict.pop("api_key"))
+        provider.api_key_encrypted = encrypt_text(settings.secret_key, update_dict.pop("api_key") or "")
     if "extra_headers" in update_dict:
         provider.extra_headers_json = json.dumps(update_dict.pop("extra_headers"), ensure_ascii=False)
     next_default_model = update_dict.get("default_model", provider.default_model)
@@ -791,12 +791,21 @@ def _sanitize_upstream_error(raw: str, max_len: int = 200) -> str:
     return cleaned
 
 
-def _probe_chat_endpoint(adapter: str, base_url: str, api_key: str, model: str, extra_headers: dict | None = None) -> dict:
+def _request_headers(api_key: str | None, *, accept: str = "application/json", extra_headers: dict | None = None) -> dict:
     headers = {
-        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
+        "Accept": accept,
         **(extra_headers or {}),
     }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    else:
+        headers.pop("Authorization", None)
+    return headers
+
+
+def _probe_chat_endpoint(adapter: str, base_url: str, api_key: str | None, model: str, extra_headers: dict | None = None) -> dict:
+    headers = _request_headers(api_key, extra_headers=extra_headers)
     url = base_url.rstrip("/")
     if url.endswith("/chat/completions"):
         url = url[: -len("/chat/completions")]
@@ -812,12 +821,8 @@ def _probe_chat_endpoint(adapter: str, base_url: str, api_key: str, model: str, 
     return {"latency_ms": int((time.perf_counter() - started) * 1000)}
 
 
-def _probe_embedding_endpoint(adapter: str, base_url: str, api_key: str, model: str, extra_headers: dict | None = None) -> dict:
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        **(extra_headers or {}),
-    }
+def _probe_embedding_endpoint(adapter: str, base_url: str, api_key: str | None, model: str, extra_headers: dict | None = None) -> dict:
+    headers = _request_headers(api_key, extra_headers=extra_headers)
     url = base_url.rstrip("/")
     if url.endswith("/embeddings"):
         url = url[: -len("/embeddings")]
@@ -838,12 +843,8 @@ def _probe_embedding_endpoint(adapter: str, base_url: str, api_key: str, model: 
     return {"latency_ms": int((time.perf_counter() - started) * 1000), "dimensions": dims}
 
 
-def _probe_rerank_endpoint(adapter: str, base_url: str, api_key: str, model: str, extra_headers: dict | None = None) -> dict:
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        **(extra_headers or {}),
-    }
+def _probe_rerank_endpoint(adapter: str, base_url: str, api_key: str | None, model: str, extra_headers: dict | None = None) -> dict:
+    headers = _request_headers(api_key, extra_headers=extra_headers)
     url = base_url.rstrip("/")
     if url.endswith("/rerank"):
         url = url[: -len("/rerank")]
@@ -862,7 +863,7 @@ def _probe_rerank_endpoint(adapter: str, base_url: str, api_key: str, model: str
     return {"latency_ms": int((time.perf_counter() - started) * 1000), "sample_count": sample_count}
 
 
-def _run_endpoint_probe(endpoint: ModelProviderEndpoint, api_key: str) -> dict:
+def _run_endpoint_probe(endpoint: ModelProviderEndpoint, api_key: str | None) -> dict:
     extra_headers = json.loads(endpoint.extra_headers_json or "{}")
     if not isinstance(extra_headers, dict):
         extra_headers = {}
@@ -962,18 +963,8 @@ def probe_draft_runtime(
             continue
         if endpoint_id and getattr(ep_payload, "id", None) != endpoint_id:
             continue
-        # Use endpoint-level key if provided, otherwise draft provider key
-        ep_key = getattr(ep_payload, "api_key", None) or payload.api_key
-        if not ep_key:
-            results.append({
-                "endpoint_id": getattr(ep_payload, "id", None),
-                "capability": ep_capability,
-                "adapter": getattr(ep_payload, "adapter", ""),
-                "model": getattr(ep_payload, "model", ""),
-                "status": "unhealthy",
-                "error_redacted": "No API key provided",
-            })
-            continue
+        # Use endpoint-level key if provided, otherwise draft provider key. Empty means No auth.
+        ep_key = getattr(ep_payload, "api_key", None) or getattr(payload, "api_key", None) or ""
         ep_headers = getattr(ep_payload, "extra_headers", None) or {}
         fake_endpoint = ModelProviderEndpoint(
             id=getattr(ep_payload, "id", "draft"),
@@ -1010,11 +1001,11 @@ def probe_provider_models(db: Session, tenant_id: str, provider_id: str, *, acto
             detail="Provider secret cannot be decrypted with current SECRET_KEY; recreate or update this provider",
         ) from exc
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Accept": "application/json",
-        **(json.loads(provider.extra_headers_json or "{}")),
-    }
+    headers = _request_headers(
+        api_key,
+        accept="application/json",
+        extra_headers=json.loads(provider.extra_headers_json or "{}"),
+    )
     last_error: str | None = None
     for endpoint in _probe_model_endpoint_candidates(provider.base_url):
         req = request.Request(endpoint, headers=headers, method="GET")
