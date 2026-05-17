@@ -1141,11 +1141,13 @@ def page_index_main(doc, opt=None):
             'structure': structure,
         }
 
-    return asyncio.run(page_index_builder())
+    with llm_request_options_scope(getattr(opt, "request_options", None)):
+        return asyncio.run(page_index_builder())
 
 
 def page_index(doc, model=None, toc_check_page_num=None, max_page_num_each_node=None, max_token_num_each_node=None,
-               if_add_node_id=None, if_add_node_summary=None, if_add_doc_description=None, if_add_node_text=None):
+               if_add_node_id=None, if_add_node_summary=None, if_add_doc_description=None, if_add_node_text=None,
+               request_options=None):
     
     user_opt = {
         arg: value for arg, value in locals().items()

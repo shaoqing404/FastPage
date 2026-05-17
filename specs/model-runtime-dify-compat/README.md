@@ -11,6 +11,8 @@ Phase 5.0: 验收当前 endpoint 抽象
   ↓
 Phase 5.0.1: Stabilize Direct OpenAI Path and Disable LiteLLM
   ↓
+Phase 5.0.3: PageIndex Direct Runtime Closure
+  ↓
 Phase 5.0.2: Provider Center product refactor
   ↓
 Phase 5.1: model-gateway MVP
@@ -26,7 +28,7 @@ Phase 5.5: runtime sandbox
 Phase 5.6: plugin-daemon / marketplace 评估
 ```
 
-当前阶段：**Phase 5.0.1 前置审计**。周一前保留 `DirectOpenAIAdapter` / `DirectChatAdapter` 直连快路径，不把 OpenAI-compatible chat 强行迁移到 model-gateway；优先确认如何从默认主调用链禁用 LiteLLM。
+当前阶段：**Phase 5.0.3 coding**。Phase 5.0.1 已把 SkillChat final answer 默认迁到 `DirectChatAdapter`，但 Docker 验证发现文档解析与 pageindex 原生抽取仍通过 `pageindex.utils.llm_completion()` 触发 LiteLLM。主控已批准 Phase 5.0.3，目标是收口这些剩余 LLM 文本生成与 token counting 热路径。
 
 ## 文档目录
 
@@ -42,6 +44,7 @@ Phase 5.6: plugin-daemon / marketplace 评估
 | 07 | `07_agent_reports/` | 子 agent 调研报告（只读，原始输出） | 🔄 进行中 |
 | 08 | `08_coding_prompts/` | 给 coding agent 的实现提示词 | 📝 Phase 5.0.1 已生成 |
 | 09 | `09_provider_center_skillchat_runtime_product_design.md` | Provider Center / SkillChat / Runtime 的产品边界、模板继承、Embedding Profile 与后续任务拆分 | 📝 草案 |
+| 10 | `10_pageindex_direct_runtime_closure_scope.md` | 文档解析/pageindex 原生抽取链路迁到 Direct runtime 的 Phase 5.0.3 审定规格 | 📝 待主控审定 |
 
 ## 关键约束
 

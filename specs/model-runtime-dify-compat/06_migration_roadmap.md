@@ -13,6 +13,7 @@
 ```text
 Phase 5.0:   验收当前 endpoint 抽象
 Phase 5.0.1: Stabilize Direct OpenAI Path and Disable LiteLLM
+Phase 5.0.3: PageIndex Direct Runtime Closure
 Phase 5.0.2: Provider Center product refactor
 Phase 5.1:   model-gateway MVP
 Phase 5.2:   embedding/rerank adapter 化
@@ -124,6 +125,71 @@ Phase 5.6:   plugin-daemon / marketplace 评估
 4. 测试中大量 patch `litellm`，最小实现应避免引发测试面爆炸。
 5. Compliance 复用 shared provider resolver，但 endpoint lookup 没闭环，且 final answer 仍走 `pageindex.utils.llm_completion()`。周一不主动改 Compliance，但 shared resolver 改动需要跑基本回归，避免破坏其现有 provider 解析。
 
+## Phase 5.0.3 — PageIndex Direct Runtime Closure
+
+### 目标
+
+收口 Phase 5.0.1 留下的 runtime 缺口：文档解析、pageindex 原生抽取、SkillChat 检索阶段的小型 LLM 调用不再默认走 LiteLLM，而是默认进入 Direct OpenAI-compatible runtime。
+
+本阶段以 `10_pageindex_direct_runtime_closure_scope.md` 为审定规格入口。
+
+主控已批准本阶段作为 runtime closure hotfix 推进；实现边界仍限定在 shared LLM helper、pageindex 原生调用和 token counting 收口。
+
+### In Scope
+
+1. `pageindex.utils.llm_completion()` 默认改为 `DirectChatAdapter.completion()`，保留 `ENABLE_LITELLM=true` 回滚。
+2. `pageindex.utils.llm_acompletion()` 默认改为 Direct runtime，保留 `ENABLE_LITELLM=true` 回滚。
+3. 审计并必要时最小修改 `pageindex/page_index.py` 中所有 `llm_completion()` / `llm_acompletion()` 调用点，确保每个文档解析 LLM 阶段默认进入 Direct runtime。
+4. `app/services/pageindex_service.py` 和 `app/services/chat_service.py` 中经 shared helper 触发的 query rewrite、JSON repair、outline selection、LLM fallback rerank 等同步迁移到 Direct 默认路径。
+5. `count_tokens()` / `get_page_tokens()` 从默认链路移除 `litellm.token_counter()`，改成本地 tokenizer 优先、字符估算兜底。
+6. 保留 Direct 请求边界的历史 routing hint strip 策略：只 strip `openai/` 和 `litellm/`，真实 namespace 保留。
+7. 补测试和 Docker smoke 证据，证明同类文档解析任务不再出现 `LiteLLM completion()`。
+
+### Out of Scope
+
+1. 不重写 Provider Center UI。
+2. 不重写 SkillChat 配置页。
+3. 不重写 SkillChat runtime 的 provider template / snapshot 合并逻辑。
+4. 不主动改 Compliance 主链专属逻辑。
+5. 不实现 model-gateway。
+6. 不引入新的厂商 SDK。
+7. 不删除 LiteLLM 依赖。
+8. 不迁移 embedding/rerank adapter 架构。
+9. 不为 embedding 增加 No auth runtime 支持；当前 `OpenAICompatibleEmbeddingClient` 继续要求 api_key 非空。
+10. 不为 rerank 增加 No auth runtime 支持。
+11. 不改 DashScope native rerank helper 的鉴权语义；内网 rerank 不走该 helper。
+12. 不改变数据库 schema。
+
+### 前置依赖
+
+1. Phase 5.0.1 的 `DirectChatAdapter` 已可用于 non-stream completion。
+2. Docker 验证已确认剩余 `LiteLLM completion()` 日志来自 worker 文档解析/pageindex 原生 LLM 调用。
+3. 用户已确认 embedding/rerank No auth 需求本阶段关闭。
+
+### 验收标准
+
+1. `ENABLE_LITELLM=false` 时，文档解析/pageindex 原生抽取链路不再默认调用 `litellm.completion()` 或 `litellm.acompletion()`。
+2. `ENABLE_LITELLM=true` 时，旧 LiteLLM completion 路径可回滚。
+3. `pageindex/page_index.py` 中每个 LLM 调用点已审计并在实现结果中列出。
+4. `count_tokens()` / `get_page_tokens()` 默认不调用 `litellm.token_counter()`。
+5. SkillChat final answer 现有 Direct streaming 行为不回退。
+6. embedding/rerank runtime 行为不因本阶段发生鉴权语义变化。
+7. Compliance 主链没有被主动重写。
+8. 无新增数据库 migration。
+9. 单元测试通过，Docker smoke 有日志证据。
+
+### 回滚方案
+
+1. 设置 `ENABLE_LITELLM=true` 临时恢复旧 LiteLLM completion 路径。
+2. token counting 新路径异常时自动落到字符估算。
+3. 若 Direct runtime 在客户 endpoint 中遇到兼容问题，优先修 provider/base_url/model 配置；必要时临时打开 LiteLLM 回滚。
+
+### 风险
+
+1. `pageindex/page_index.py` 调用层级较深，若只改 shared helper 而不审计调用点，可能遗漏 runtime option 传递。
+2. token counting 数值可能和 LiteLLM token_counter 不完全一致，需要保持保守预算。
+3. Compliance 通过 shared helper 可能自然进入 Direct runtime，因此需要跑基本回归，但不做 Compliance 专属重构。
+
 ## Phase 5.0.2 — Provider Center Product Refactor
 
 ### 目标
@@ -146,7 +212,7 @@ Phase 5.6:   plugin-daemon / marketplace 评估
    - `/providers/rerank`
 3. 每个 provider 能力页用表格承载复杂度，用 modal 或 side panel 创建/编辑。
 4. LLM / embedding / rerank 按能力拆分管理，避免把三能力 endpoint 挤在同一个 provider editor。
-5. 支持 `No auth` / `API key` 两种 auth mode；不做 `Custom headers` auth mode。
+5. LLM/chat 支持 `No auth` / `API key` 两种 auth mode；不做 `Custom headers` auth mode。embedding/rerank No auth runtime 支持已关闭，不进入当前阶段。
 6. 支持普通模式 / 开发者选项。高级参数默认隐藏，但必须有默认值。
 7. 支持模型列表探测：能探测则 dropdown 选择，不能探测则使用 Provider Center 中保存的模型名。
 8. 引入 Provider-owned live fields 与 Skill-owned snapshot fields 的产品边界说明，但不在本阶段重写 SkillChat。
@@ -169,7 +235,7 @@ Phase 5.6:   plugin-daemon / marketplace 评估
 4. Embedding provider 可配置 dimensions / context window，并提示 ES 维度风险。
 5. Rerank provider 可配置默认 `top_n=512`。
 6. LLM provider 默认 `temperature=0.2`、`context_window_tokens=131072`，不把 `max_tokens=131072` 作为 OpenAI 请求参数默认值。
-7. `No auth` endpoint 能保存和 probe，不要求 API key。
+7. LLM/chat `No auth` endpoint 能保存和 probe，不要求 API key；embedding/rerank 仍按当前 runtime 鉴权语义处理。
 8. 页面布局在真实 provider 数量增多时仍保持可扫描、可比较、可操作。
 
 ### 风险

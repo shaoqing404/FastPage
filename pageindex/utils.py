@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace as config
@@ -107,6 +108,7 @@ class RunReuseCache:
 
 
 _run_reuse_cache_var: ContextVar[RunReuseCache | None] = ContextVar("run_reuse_cache", default=None)
+_llm_request_options_var: ContextVar[dict[str, Any] | None] = ContextVar("llm_request_options", default=None)
 
 
 def get_run_reuse_cache() -> RunReuseCache | None:
@@ -145,6 +147,15 @@ def run_reuse_scope() -> Iterator[RunReuseCache]:
         cache.close()
         _run_reuse_cache_var.reset(token)
 
+
+@contextmanager
+def llm_request_options_scope(request_options: dict[str, Any] | None):
+    token = _llm_request_options_var.set(dict(request_options or {}) if request_options else None)
+    try:
+        yield
+    finally:
+        _llm_request_options_var.reset(token)
+
 _FATAL_LLM_MODEL_ERROR_PATTERNS = (
     "model_not_found",
     "model not found",
@@ -156,6 +167,40 @@ _FATAL_LLM_MODEL_ERROR_PATTERNS = (
     "deploymentnotfound",
 )
 
+_DIRECT_RUNTIME_PAYLOAD_EXCLUDED_KEYS = {
+    "model",
+    "messages",
+    "stream",
+    "api_base",
+    "base_url",
+    "api_key",
+    "extra_headers",
+    "timeout",
+    "timeout_seconds",
+    "provider_type",
+    "adapter",
+    "endpoint_id",
+    "endpoint_name",
+    "provider_id",
+    "provider_name",
+    "provider_source",
+    "capability",
+    "db",
+    "tenant_id",
+    "workspace_id",
+    "retrieval_mode",
+    "rerank_mode",
+    "embedding_mode",
+    "selection_mode",
+    "max_context_pages",
+    "max_context_tokens",
+    "context_window",
+    "context_length",
+    "system_prompt",
+}
+
+_TOKEN_COUNTER_FALLBACK_WARNED = False
+
 
 def is_fatal_llm_model_error(error) -> bool:
     text = str(error or "").strip().lower()
@@ -163,25 +208,131 @@ def is_fatal_llm_model_error(error) -> bool:
         return False
     return any(pattern in text for pattern in _FATAL_LLM_MODEL_ERROR_PATTERNS)
 
-def count_tokens(text, model=None):
-    """Count tokens with an offline-safe fallback.
 
-    litellm.token_counter() calls tiktoken internally. If the encoding file
-    is unavailable (e.g., corrupted cache, misconfigured TIKTOKEN_CACHE_DIR),
-    fall back to a character-length estimate rather than crashing the parse job.
-    Tiktoken files are pre-baked into the Docker image so this path should
-    rarely trigger in production.
-    """
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _load_llm_runtime_config() -> dict[str, Any]:
+    """Load app runtime config lazily so the pageindex library stays importable."""
+    try:
+        from app.core.config import default_llm_model, get_settings
+
+        settings = get_settings()
+        return {
+            "enable_litellm": bool(settings.enable_litellm),
+            "base_url": settings.llm_base_url,
+            "api_key": settings.llm_api_key,
+            "model": default_llm_model(),
+        }
+    except Exception:
+        model = os.getenv("LLM_MODEL") or os.getenv("OPENAI_MODEL") or ""
+        if not model:
+            model = "gpt-4o-2024-11-20"
+        return {
+            "enable_litellm": _env_bool("ENABLE_LITELLM", False),
+            "base_url": os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_API_BASE") or "https://api.openai.com/v1",
+            "api_key": os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or "",
+            "model": model,
+        }
+
+
+def _normalize_litellm_model(model: Any) -> Any:
+    if isinstance(model, str):
+        return model.removeprefix("litellm/")
+    return model
+
+
+def _direct_chat_payload_options(options: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in options.items()
+        if key not in _DIRECT_RUNTIME_PAYLOAD_EXCLUDED_KEYS and value is not None
+    }
+
+
+def _build_direct_chat_runtime(model: Any, request_options: dict[str, Any] | None) -> tuple[Any, dict[str, Any], dict[str, Any]]:
+    runtime = _load_llm_runtime_config()
+    options = dict(request_options or {})
+    selected_model = options.get("model") or model or runtime.get("model")
+    base_url = options.get("api_base") or options.get("base_url") or runtime.get("base_url")
+    api_key = options.get("api_key")
+    if api_key is None:
+        api_key = runtime.get("api_key") or ""
+    extra_headers = options.get("extra_headers") or {}
+    timeout_seconds = options.get("timeout_seconds", options.get("timeout", 120.0))
+    adapter_config = {
+        "base_url": str(base_url or ""),
+        "api_key": str(api_key or ""),
+        "model": str(selected_model or ""),
+        "timeout_seconds": float(timeout_seconds or 120.0),
+        "extra_headers": dict(extra_headers or {}),
+    }
+    return selected_model, adapter_config, _direct_chat_payload_options(options)
+
+
+def _extract_chat_completion_fields(response: Any) -> tuple[str, Any, Any]:
+    choices = response.get("choices") if isinstance(response, dict) else getattr(response, "choices", None)
+    if not choices:
+        raise RuntimeError("LLM completion response did not include choices")
+    choice = choices[0]
+    if isinstance(choice, dict):
+        message = choice.get("message") or {}
+        content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
+        return str(content or ""), choice.get("finish_reason"), response.get("usage") if isinstance(response, dict) else None
+    message = getattr(choice, "message", None)
+    content = getattr(message, "content", "") if message is not None else ""
+    usage = getattr(response, "usage", None)
+    return str(content or ""), getattr(choice, "finish_reason", None), usage
+
+
+def _finish_reason_label(finish_reason: Any) -> str:
+    return "max_output_reached" if finish_reason == "length" else "finished"
+
+
+@lru_cache(maxsize=32)
+def _token_encoding_for_model(model: str | None):
+    try:
+        import tiktoken
+    except Exception:
+        return None
+    normalized_model = (model or "").removeprefix("litellm/").removeprefix("openai/")
+    if normalized_model:
+        try:
+            return tiktoken.encoding_for_model(normalized_model)
+        except Exception:
+            pass
+    try:
+        return tiktoken.get_encoding("cl100k_base")
+    except Exception:
+        return None
+
+
+def _estimate_tokens_by_chars(text: str) -> int:
+    return max(1, len(text)) if text else 0
+
+
+def count_tokens(text, model=None):
+    """Count tokens locally, without entering the LiteLLM runtime path."""
     if not text:
         return 0
-    try:
-        return litellm.token_counter(model=model, text=text)
-    except Exception:
-        # CJK-mixed text: ~3 chars per token is a reasonable approximation.
+    text = str(text)
+    encoding = _token_encoding_for_model(str(model) if model else None)
+    if encoding is not None:
+        try:
+            return len(encoding.encode(text))
+        except Exception:
+            pass
+    global _TOKEN_COUNTER_FALLBACK_WARNED
+    if not _TOKEN_COUNTER_FALLBACK_WARNED:
+        _TOKEN_COUNTER_FALLBACK_WARNED = True
         logging.getLogger(__name__).warning(
-            "token_counter failed (tiktoken unavailable?), using char-length fallback"
+            "local tokenizer unavailable, using conservative char-length token estimate"
         )
-        return max(1, len(text) // 3)
+    return _estimate_tokens_by_chars(text)
 
 
 def _json_safe(value):
@@ -239,17 +390,28 @@ def llm_completion(
     trace_label=None,
     stats_hook=None,
 ):
-    if model:
-        model = model.removeprefix("litellm/")
     max_retries = 10
     messages = list(chat_history) + [{"role": "user", "content": prompt}] if chat_history else [{"role": "user", "content": prompt}]
-    completion_kwargs = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0,
-    }
-    if request_options:
-        completion_kwargs.update(request_options)
+    runtime_config = _load_llm_runtime_config()
+    use_litellm = bool(runtime_config.get("enable_litellm"))
+    if request_options is None:
+        request_options = _llm_request_options_var.get()
+    options = dict(request_options or {})
+    if use_litellm:
+        completion_kwargs = {
+            "model": _normalize_litellm_model(model),
+            "messages": messages,
+            "temperature": 0,
+        }
+        completion_kwargs.update(options)
+    else:
+        selected_model, adapter_config, payload_options = _build_direct_chat_runtime(model, options)
+        completion_kwargs = {
+            "model": selected_model,
+            "messages": messages,
+            "temperature": 0,
+            **payload_options,
+        }
     for i in range(max_retries):
         call_started = time.perf_counter()
         sanitized_request = _redact_sensitive_data(_json_safe(completion_kwargs))
@@ -264,16 +426,25 @@ def llm_completion(
                 }
             )
         try:
-            response = litellm.completion(**completion_kwargs)
-            content = response.choices[0].message.content
+            if use_litellm:
+                response = litellm.completion(**completion_kwargs)
+            else:
+                from app.services.adapters.chat_adapter import DirectChatAdapter
+
+                adapter = DirectChatAdapter(**adapter_config)
+                response = adapter.completion(
+                    messages,
+                    **_direct_chat_payload_options(completion_kwargs),
+                )
+            content, finish_reason, usage = _extract_chat_completion_fields(response)
             if stats_hook:
                 stats_hook(
                     {
                         "label": trace_label or "completion",
                         "ok": True,
                         "duration_ms": int((time.perf_counter() - call_started) * 1000),
-                        "usage": _json_safe(getattr(response, "usage", None)),
-                        "finish_reason": response.choices[0].finish_reason,
+                        "usage": _json_safe(usage),
+                        "finish_reason": finish_reason,
                     }
                 )
             if trace_hook:
@@ -288,12 +459,11 @@ def llm_completion(
                         "request": sanitized_request,
                         "response": _json_safe(response),
                         "response_text": content,
-                        "finish_reason": response.choices[0].finish_reason,
+                        "finish_reason": finish_reason,
                     }
                 )
             if return_finish_reason:
-                finish_reason = "max_output_reached" if response.choices[0].finish_reason == "length" else "finished"
-                return content, finish_reason
+                return content, _finish_reason_label(finish_reason)
             return content
         except Exception as e:
             if stats_hook:
@@ -334,27 +504,29 @@ def llm_completion(
 
 
 
-async def llm_acompletion(model, prompt):
-    if model:
-        model = model.removeprefix("litellm/")
-    max_retries = 10
-    messages = [{"role": "user", "content": prompt}]
-    for i in range(max_retries):
-        try:
-            response = await litellm.acompletion(
-                model=model,
-                messages=messages,
-                temperature=0,
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            print('************* Retrying *************')
-            logging.error(f"Error: {e}")
-            if i < max_retries - 1:
-                await asyncio.sleep(1)
-            else:
-                logging.error('Max retries reached for prompt: ' + prompt)
-                return ""
+async def llm_acompletion(
+    model,
+    prompt,
+    chat_history=None,
+    return_finish_reason=False,
+    raise_on_error=False,
+    request_options=None,
+    trace_hook=None,
+    trace_label=None,
+    stats_hook=None,
+):
+    return await asyncio.to_thread(
+        llm_completion,
+        model,
+        prompt,
+        chat_history=chat_history,
+        return_finish_reason=return_finish_reason,
+        raise_on_error=raise_on_error,
+        request_options=request_options,
+        trace_hook=trace_hook,
+        trace_label=trace_label,
+        stats_hook=stats_hook,
+    )
             
             
 def get_json_content(response):
@@ -673,7 +845,7 @@ def get_page_tokens(pdf_path, model=None, pdf_parser="PyPDF2"):
             for page_num in range(len(pdf_reader.pages)):
                 page = pdf_reader.pages[page_num]
                 page_text = page.extract_text()
-                token_length = litellm.token_counter(model=model, text=page_text)
+                token_length = count_tokens(page_text, model=model)
                 page_list.append((page_text, token_length))
             return tuple(page_list)
         if pdf_parser == "PyMuPDF":
@@ -685,7 +857,7 @@ def get_page_tokens(pdf_path, model=None, pdf_parser="PyPDF2"):
             page_list = []
             for page in doc:
                 page_text = page.get_text()
-                token_length = litellm.token_counter(model=model, text=page_text)
+                token_length = count_tokens(page_text, model=model)
                 page_list.append((page_text, token_length))
             return tuple(page_list)
         raise ValueError(f"Unsupported PDF parser: {pdf_parser}")
