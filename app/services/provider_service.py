@@ -409,6 +409,18 @@ def _endpoint_id(provider_id: str, capability: str) -> str:
     return f"endpoint_{provider_id}_{capability}"[:64]
 
 
+def _payload_get(payload, field: str, default=None):
+    if isinstance(payload, dict):
+        return payload.get(field, default)
+    return getattr(payload, field, default)
+
+
+def _payload_has(payload, field: str) -> bool:
+    if isinstance(payload, dict):
+        return field in payload
+    return hasattr(payload, field)
+
+
 def _sync_provider_endpoints(
     db: Session,
     provider: ModelProvider,
@@ -419,10 +431,10 @@ def _sync_provider_endpoints(
     now = datetime.utcnow()
     kept_ids: set[str] = set()
     for ep_payload in endpoints_payload:
-        ep_capability = getattr(ep_payload, "capability", None)
+        ep_capability = _payload_get(ep_payload, "capability")
         if not ep_capability:
             continue
-        ep_id = getattr(ep_payload, "id", None)
+        ep_id = _payload_get(ep_payload, "id")
         if ep_id:
             existing = db.get(ModelProviderEndpoint, ep_id)
             if existing is None or existing.provider_id != provider.id:
@@ -449,19 +461,20 @@ def _sync_provider_endpoints(
                 )
         # Update fields from payload
         for field in ("capability", "adapter", "base_url", "model", "enabled", "is_default"):
-            val = getattr(ep_payload, field, None)
+            val = _payload_get(ep_payload, field)
             if val is not None:
                 setattr(existing, field, val)
         # Handle api_key: explicit set (including empty to clear)
-        if hasattr(ep_payload, "api_key") and ep_payload.api_key is not None:
-            if ep_payload.api_key.strip():
-                existing.api_key_encrypted = encrypt_text(settings.secret_key, ep_payload.api_key)
+        if _payload_has(ep_payload, "api_key") and _payload_get(ep_payload, "api_key") is not None:
+            ep_api_key = _payload_get(ep_payload, "api_key")
+            if ep_api_key.strip():
+                existing.api_key_encrypted = encrypt_text(settings.secret_key, ep_api_key)
             else:
                 existing.api_key_encrypted = None
-        if hasattr(ep_payload, "extra_headers") and ep_payload.extra_headers is not None:
-            existing.extra_headers_json = json.dumps(ep_payload.extra_headers, ensure_ascii=False)
-        if hasattr(ep_payload, "config") and ep_payload.config is not None:
-            existing.config_json = json.dumps(ep_payload.config, ensure_ascii=False)
+        if _payload_has(ep_payload, "extra_headers") and _payload_get(ep_payload, "extra_headers") is not None:
+            existing.extra_headers_json = json.dumps(_payload_get(ep_payload, "extra_headers"), ensure_ascii=False)
+        if _payload_has(ep_payload, "config") and _payload_get(ep_payload, "config") is not None:
+            existing.config_json = json.dumps(_payload_get(ep_payload, "config"), ensure_ascii=False)
         existing.updated_at = now
         if existing.created_at is None:
             existing.created_at = now
@@ -846,19 +859,32 @@ def _probe_embedding_endpoint(adapter: str, base_url: str, api_key: str | None, 
 def _probe_rerank_endpoint(adapter: str, base_url: str, api_key: str | None, model: str, extra_headers: dict | None = None) -> dict:
     headers = _request_headers(api_key, extra_headers=extra_headers)
     url = base_url.rstrip("/")
-    if url.endswith("/rerank"):
-        url = url[: -len("/rerank")]
-    test_payload = json.dumps({
-        "model": model,
-        "query": "probe",
-        "documents": ["test document"],
-        "top_n": 1,
-    }).encode("utf-8")
-    req = request.Request(f"{url}/rerank", data=test_payload, headers=headers, method="POST")
+    is_dashscope_native = adapter == "dashscope_rerank" or "/services/rerank/" in url.lower()
+    if is_dashscope_native:
+        target_url = url
+        test_payload = json.dumps({
+            "model": model,
+            "input": {
+                "query": "probe",
+                "documents": ["test document"],
+            },
+            "parameters": {"top_n": 1},
+        }).encode("utf-8")
+    else:
+        if url.endswith("/rerank"):
+            url = url[: -len("/rerank")]
+        target_url = f"{url}/rerank"
+        test_payload = json.dumps({
+            "model": model,
+            "query": "probe",
+            "documents": ["test document"],
+            "top_n": 1,
+        }).encode("utf-8")
+    req = request.Request(target_url, data=test_payload, headers=headers, method="POST")
     started = time.perf_counter()
     with request.urlopen(req, timeout=15) as resp:
         body = json.loads(resp.read().decode("utf-8"))
-    results = body.get("results") if isinstance(body, dict) else None
+    results = ((body.get("output") or {}).get("results") if is_dashscope_native else body.get("results")) if isinstance(body, dict) else None
     sample_count = len(results) if isinstance(results, list) else 0
     return {"latency_ms": int((time.perf_counter() - started) * 1000), "sample_count": sample_count}
 

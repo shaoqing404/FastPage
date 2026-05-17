@@ -21,7 +21,25 @@ Defaults:
 - Compose profile: `full`
 - Final-answer runtime: `ENABLE_LITELLM=false`
 
-Set `ENABLE_LITELLM=true` only to roll back final-answer chat to the legacy LiteLLM path.
+Set `ENABLE_LITELLM=true` only to roll back final-answer chat to the legacy LiteLLM path. With the default direct OpenAI-compatible runtime, model names are sent without historical `openai/` or `litellm/` routing hints at the final HTTP boundary.
+
+## Provider Center
+
+After startup, configure user-facing model capabilities in Provider Center:
+
+- `/providers`: capability center entry page.
+- `/providers/api-keys`: workspace API keys.
+- `/providers/llm`: LLM provider templates.
+- `/providers/embedding`: embedding provider templates and Embedding Profile metadata.
+- `/providers/rerank`: rerank provider templates.
+
+Provider templates expose only `API key` and `No auth` as product auth modes.
+`No auth` allows empty API keys and probe/runtime requests do not send an
+`Authorization` header. Custom header auth is intentionally not exposed in this
+phase.
+
+Embedding Profile fields are stored in `model_provider_endpoints.config_json`.
+This does not change Elasticsearch index rebuild behavior by itself.
 
 ## Runtime Modes
 

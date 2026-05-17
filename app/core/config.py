@@ -441,20 +441,21 @@ def default_llm_model() -> str:
     2. Provider-specific default inferred from LLM_BASE_URL
     3. Generic OpenAI default
 
-    For LiteLLM + OpenAI-compatible providers (DashScope, etc.) the model name
-    MUST carry the ``openai/`` prefix so LiteLLM routes via the OpenAI adapter.
+    Historical ``openai/`` model prefixes are still accepted for backend system
+    fallback and LiteLLM rollback compatibility. The direct OpenAI-compatible
+    runtime strips only the historical ``openai/`` / ``litellm/`` routing hints
+    at the final HTTP request boundary.
     """
     settings = get_settings()
     if settings.llm_model:
-        # Honour explicit config.  Ensure openai/ prefix for openai-compatible
-        # endpoints (DashScope, Azure-OpenAI-compatible, etc.) so LiteLLM does
-        # not fall back to its native-provider routing which may reject the name.
+        # Honour explicit config. Keep the legacy openai/ hint for DashScope
+        # system fallback records; DirectChatAdapter removes it before HTTP.
         model = settings.llm_model
         if "dashscope" in settings.llm_base_url.lower() and not model.startswith("openai/"):
             model = f"openai/{model}"
         return model
     if "dashscope" in settings.llm_base_url.lower():
         # Default DashScope model — confirmed available via /v1/models (2026-05-14).
-        # Override with LLM_MODEL=openai/<model-id> in .env to switch models.
+        # Override with LLM_MODEL=<model-id> in .env to switch models.
         return "openai/qwen3.6-plus"
     return "gpt-4o-2024-11-20"

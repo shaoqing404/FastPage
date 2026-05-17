@@ -17,10 +17,25 @@ from app.services.provider_service import (
     _endpoint_config,
     _sanitize_upstream_error,
     _endpoint_id,
+    _probe_rerank_endpoint,
     _request_headers,
     _sync_provider_endpoints,
     resolve_chat_config,
 )
+
+
+class _FakeResponse:
+    def __init__(self, payload: dict):
+        self._payload = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+    def read(self) -> bytes:
+        return self._payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
 
 
 class TestSanitizeUpstreamError(unittest.TestCase):
@@ -152,6 +167,47 @@ class TestEndpointConfig(unittest.TestCase):
         endpoint = db.add.call_args.args[0]
         self.assertIsNone(endpoint.api_key_encrypted)
 
+    def test_sync_endpoint_accepts_dict_payload_from_update_model_dump(self):
+        db = MagicMock()
+        existing = SimpleNamespace(
+            id="endpoint-1",
+            provider_id="provider-1",
+            capability="embedding",
+            adapter="openai_embedding",
+            base_url="https://old.example.com/v1",
+            model="old-model",
+            enabled=True,
+            is_default=True,
+            api_key_encrypted="encrypted",
+            extra_headers_json="{}",
+            config_json="{}",
+            created_at=None,
+            updated_at=None,
+        )
+        db.get.return_value = existing
+        provider = SimpleNamespace(
+            id="provider-1",
+            base_url="https://provider.example.com/v1",
+            default_model="old-model",
+        )
+        payload = {
+            "id": "endpoint-1",
+            "capability": "embedding",
+            "adapter": "openai_embedding",
+            "base_url": "https://new.example.com/v1",
+            "model": "text-embedding-v4",
+            "extra_headers": {},
+            "config": {"dimensions": 1024},
+            "enabled": True,
+            "is_default": True,
+        }
+
+        _sync_provider_endpoints(db, provider, [payload])
+
+        self.assertEqual(existing.base_url, "https://new.example.com/v1")
+        self.assertEqual(existing.model, "text-embedding-v4")
+        self.assertEqual(json.loads(existing.config_json)["dimensions"], 1024)
+
 
 class TestProbeSchemas(unittest.TestCase):
     def test_probe_runtime_request_defaults(self):
@@ -189,6 +245,30 @@ class TestProbeSchemas(unittest.TestCase):
         data = result.model_dump()
         self.assertEqual(data["status"], "healthy")
         self.assertEqual(data["dimensions"], 1536)
+
+    def test_dashscope_rerank_probe_uses_native_endpoint_and_payload(self):
+        seen = {}
+
+        def fake_urlopen(request_obj, timeout=0):
+            seen["url"] = request_obj.full_url
+            seen["body"] = json.loads(request_obj.data.decode("utf-8"))
+            return _FakeResponse({"output": {"results": [{"index": 0, "relevance_score": 0.9}]}})
+
+        with patch("app.services.provider_service.request.urlopen", side_effect=fake_urlopen):
+            result = _probe_rerank_endpoint(
+                "dashscope_rerank",
+                "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank",
+                "sk-test",
+                "gte-rerank-v2",
+            )
+
+        self.assertEqual(
+            seen["url"],
+            "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank",
+        )
+        self.assertEqual(seen["body"]["input"]["query"], "probe")
+        self.assertEqual(seen["body"]["parameters"]["top_n"], 1)
+        self.assertEqual(result["sample_count"], 1)
 
 
 if __name__ == "__main__":

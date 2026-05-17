@@ -94,7 +94,9 @@ cd docker
 cp .env.example .env
 ```
 
-Set the required secrets and provider values:
+Set the required secrets and the backend system fallback provider values. The
+Provider Center UI is the preferred place to create user-facing LLM, embedding,
+and rerank capability templates after startup.
 
 ```env
 APP_ENV=prod
@@ -124,9 +126,33 @@ MINIO_BUCKET=pageindex
 
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_API_KEY=sk-your-key
+LLM_MODEL=gpt-4o-2024-11-20
+ENABLE_LITELLM=false
 ```
 
-### 2. Configure rerank and embedding providers
+`ENABLE_LITELLM=false` is the default. Final-answer SkillChat runtime uses the
+direct OpenAI-compatible HTTP adapter. Set `ENABLE_LITELLM=true` only for
+legacy LiteLLM rollback testing.
+
+Historical `openai/` and `litellm/` model routing hints are tolerated for older
+provider records, but they are stripped only at the final HTTP request boundary.
+Real model namespaces such as `zai/glm-4.7-flash` are preserved.
+
+### 2. Configure Provider Center templates
+
+After the stack starts, open `/providers`. The page is a Provider Center with
+separate management views:
+
+- `/providers/api-keys`: workspace API keys.
+- `/providers/llm`: LLM provider templates.
+- `/providers/embedding`: embedding provider templates and Embedding Profile metadata.
+- `/providers/rerank`: rerank provider templates.
+
+Provider templates support `API key` and `No auth`. `No auth` means runtime and
+probe requests do not send an `Authorization` header. Custom header auth is not
+exposed as a product auth mode in this phase.
+
+### 3. Configure legacy system rerank and embedding fallback
 
 Rerank is strongly recommended for DeepResearch quality:
 
@@ -147,13 +173,18 @@ SYSTEM_EMBEDDING_BASE_URL=https://api.your-embedding-provider.com/v1
 SYSTEM_EMBEDDING_API_KEY=sk-your-embedding-key
 SYSTEM_EMBEDDING_MODEL=text-embedding-v4
 SYSTEM_EMBEDDING_BATCH_SIZE=10
+SYSTEM_EMBEDDING_DIMENSIONS=2048
 
 ROUTING_EMBEDDINGS_BUILD_MODE=enabled
 ```
 
 `SYSTEM_EMBEDDING_BATCH_SIZE=10` is a conservative default for OpenAI-compatible providers with small batch limits.
+Provider Center embedding templates default to `dimensions=2048` and
+`context_window_tokens=16384`. Embedding Profile fields are stored in
+`model_provider_endpoints.config_json` in this phase; changing provider templates
+does not automatically rebuild existing Elasticsearch / Knowledge Base indexes.
 
-### 3. Configure Elasticsearch for B4.2 runtime search
+### 4. Configure Elasticsearch for B4.2 runtime search
 
 Starting with `B4.2`, Elasticsearch is the required runtime search index for Fast Search and DeepResearch context retrieval. ES stores node metadata, searchable `section_text` / page-text fields, lexical fields, embedding vectors, `routing_index_version`, and document/version/tenant metadata where available.
 
@@ -314,6 +345,8 @@ Model providers:
 
 - `LLM_BASE_URL`
 - `LLM_API_KEY`
+- `LLM_MODEL`
+- `ENABLE_LITELLM`
 - `SYSTEM_RERANK_ENABLED`
 - `SYSTEM_RERANK_BASE_URL`
 - `SYSTEM_RERANK_API_KEY`
@@ -323,6 +356,7 @@ Model providers:
 - `SYSTEM_EMBEDDING_API_KEY`
 - `SYSTEM_EMBEDDING_MODEL`
 - `SYSTEM_EMBEDDING_BATCH_SIZE`
+- `SYSTEM_EMBEDDING_DIMENSIONS`
 
 Routing and Fast Search:
 
