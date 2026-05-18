@@ -91,6 +91,7 @@ find /Users/mac/Desktop/pageindex-export/code/PageIndex-Service \
 - Only do this if the user requested it or answered yes to the required question.
 - Prefer `rsync -az --delete` for code-only distribution.
 - For full bundle distribution, confirm enough disk/network budget first.
+- Tell the target AI PM that import defaults to `PAGEINDEX_IMPORT_DATA_POLICY=keep-existing`: existing target MySQL/MinIO data wins, Redis is not imported, and ES snapshots are not automatically replayed.
 - Verify the remote destination path after transfer.
 
 Example:

@@ -93,45 +93,116 @@ cat > "${EXPORT_DIR}/docs/DEPLOY-GUIDE.md" <<'GUIDE'
 # PageIndex-Service Export Deploy Guide
 
 This bundle intentionally does not include private `.env` files or API keys.
+It is designed for local full-mode Docker deployment on a target server after
+the target operator configures `code/PageIndex-Service/docker/.env`.
 
 ## Contents
 
 - `code/PageIndex-Service`: repository snapshot without `.git`, virtualenvs, node modules, specs, or private env files
 - `images/pageindex-images.tar`: Docker image archive when source images were present
+- `images/pageindex-images-amd64.tar`: amd64 distribution image archive, when built
+- `images/pageindex-images-arm64.tar`: arm64 distribution image archive, when built
 - `data/mysql/pageindex_dump.sql`: MySQL dump
 - `data/minio`: MinIO bucket mirror
 - `data/elasticsearch`: Elasticsearch settings, mappings, and best-effort document export
 - `scripts/pageindex_import.sh`: best-effort restore helper
 
-## Restore
+## What Is And Is Not Restored
+
+- MySQL: exported as SQL dump and can be restored by the helper.
+- MinIO: exported as object files and can be restored by the helper.
+- Elasticsearch: exported as settings, mappings, and a best-effort search snapshot. The helper does not replay ES automatically; rebuild ES indexes from application data when possible.
+- Redis: not exported or restored. Redis is treated as queue/cache runtime state, not durable business data.
+- Private env/API keys: not included. Configure them on the target server.
+
+## Default Conflict Policy
+
+The import helper defaults to target-data-first behavior:
+
+```bash
+PAGEINDEX_IMPORT_DATA_POLICY=keep-existing
+```
+
+With this default:
+
+- If the target MySQL database already has tables, MySQL import is skipped.
+- If the target MinIO bucket already has objects, MinIO import is skipped.
+- The exported data is only restored into empty target components.
+
+This is the recommended policy when the target server may already contain real data.
+
+Other explicit policies:
+
+```bash
+# Start services and load images, but never restore MySQL/MinIO data.
+PAGEINDEX_IMPORT_DATA_POLICY=skip-data bash scripts/pageindex_import.sh "$(pwd)" "$(pwd)/code/PageIndex-Service"
+
+# Destructive: reset target MySQL database and replace MinIO bucket contents.
+PAGEINDEX_IMPORT_DATA_POLICY=overwrite PAGEINDEX_IMPORT_CONFIRM=overwrite \
+  bash scripts/pageindex_import.sh "$(pwd)" "$(pwd)/code/PageIndex-Service"
+```
+
+Use `overwrite` only for a fresh test host or after a manual backup.
+
+## One-Command Restore
 
 1. Copy or unpack this export directory on the target machine.
-2. Configure `code/PageIndex-Service/docker/.env` from `.env.example`.
+2. Configure `code/PageIndex-Service/docker/.env` from `docker/.env.example`.
 3. Run:
 
 ```bash
 bash scripts/pageindex_import.sh "$(pwd)" "$(pwd)/code/PageIndex-Service"
 ```
 
-The helper loads images, starts MySQL/Redis/MinIO/Elasticsearch, imports MySQL and MinIO data, then starts API and frontend.
-Elasticsearch document restore is intentionally not automatic yet; rebuild indexes from application data when possible.
+The helper loads local images, starts MySQL/Redis/MinIO/Elasticsearch, restores MySQL/MinIO only according to the data policy above, then starts API and frontend.
+
+## Target Server Checklist For AI PM
+
+1. Confirm Docker and Docker Compose are available.
+2. Confirm whether the target already has PageIndex data.
+3. Configure `code/PageIndex-Service/docker/.env`; do not paste real keys into code or docs.
+4. Choose data policy:
+   - Existing production data: keep default `keep-existing`.
+   - Fresh machine and import desired: keep default; import proceeds if MySQL/MinIO are empty.
+   - Code-only rollout: set `PAGEINDEX_IMPORT_DATA_POLICY=skip-data`.
+   - Full replacement: set `PAGEINDEX_IMPORT_DATA_POLICY=overwrite PAGEINDEX_IMPORT_CONFIRM=overwrite` after backup.
+5. Run the restore helper.
+6. Verify:
+
+```bash
+curl -fsS http://127.0.0.1:22223/healthz
+curl -fsS http://127.0.0.1:5173/providers
+docker compose --env-file code/PageIndex-Service/docker/.env \
+  -f code/PageIndex-Service/docker/docker-compose.yml --profile full ps
+```
+
+7. If ES-backed search results are missing, rebuild indexes through the application flow instead of replaying `data/elasticsearch` directly.
 
 ## Architecture
 
 The default Docker path uses `docker/Dockerfile`, which supports `linux/amd64` and `linux/arm64`.
 Set `API_DOCKERFILE=docker/Dockerfile.arm64` only when you explicitly want the ARM64-tuned file.
+
+## Sensitive Terms
+
+Before distributing outside the current environment, check whether the bundle should redact or exclude customer-specific terms such as operation manuals, airline names, customer names, tenant names, or route identifiers. The export helper excludes private env files, but it does not automatically redact business content stored in MySQL, MinIO, or documents.
 GUIDE
 
 cat > "${EXPORT_DIR}/README.txt" <<EOF
 PageIndex-Service export generated at $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 Private env files and API keys are excluded.
+MySQL and MinIO data are included. Redis is not included. Elasticsearch is included as best-effort metadata/search snapshots and is not automatically replayed.
 
 Start here:
   ${EXPORT_DIR}/docs/DEPLOY-GUIDE.md
 
 Restore helper:
   bash ${EXPORT_DIR}/scripts/pageindex_import.sh ${EXPORT_DIR} ${EXPORT_DIR}/code/PageIndex-Service
+
+Default restore policy:
+  PAGEINDEX_IMPORT_DATA_POLICY=keep-existing
+  Target MySQL/MinIO data wins when conflicts are detected.
 EOF
 
 find "${EXPORT_DIR}" -name ".DS_Store" -delete
