@@ -89,6 +89,16 @@ OPTION_LABELS = {
     "temperature": "answer temperature",
 }
 
+GENERATION_RUNTIME_RESERVED_FIELDS = {
+    "api_key",
+    "api_base",
+    "base_url",
+    "extra_headers",
+    "model",
+    "messages",
+    "stream",
+}
+
 RUN_LOG_PROMPT_PREVIEW_CHARS = 4000
 CHAT_MANUAL_GATE_LIVE_DEFERRED_REASON = "chat_live_disabled"
 CHAT_RETRIEVAL_MODE_DEEP_RESEARCH = "deep_research"
@@ -172,6 +182,8 @@ def _validate_execution_options(
     conversation = {**DEFAULT_CONVERSATION_CONFIG, **dict(conversation_config or {})}
     retrieval = dict(retrieval_config or {})
     generation = dict(generation_config or {})
+    for field in GENERATION_RUNTIME_RESERVED_FIELDS:
+        generation.pop(field, None)
 
     for field in ("query_rewrite_with_history", "include_history", "include_assistant_messages"):
         conversation[field] = bool(conversation.get(field, DEFAULT_CONVERSATION_CONFIG[field]))
@@ -397,7 +409,7 @@ def _extract_stream_chunk_fields(chunk) -> tuple[str, str | None, dict | None]:
 
 
 def _direct_chat_completion_kwargs(completion_kwargs: dict) -> dict:
-    excluded = {"model", "messages", "stream", "api_base", "api_key", "extra_headers"}
+    excluded = {"model", "messages", "stream", "api_base", "api_key", "base_url", "extra_headers"}
     return {key: value for key, value in completion_kwargs.items() if key not in excluded}
 
 
@@ -1773,6 +1785,8 @@ async def run_chat_run(run_id: str) -> None:
         conversation_config = _json_loads(run.conversation_config_json, {})
         retrieval_config = _json_loads(run.retrieval_config_json, {})
         generation_config = _json_loads(run.generation_config_json, {})
+        for field in GENERATION_RUNTIME_RESERVED_FIELDS:
+            generation_config.pop(field, None)
         provider_config = resolve_provider_config(
             db,
             run.tenant_id,

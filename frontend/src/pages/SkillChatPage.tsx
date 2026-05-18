@@ -3,6 +3,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
   Bot,
+  Brain,
+  Database,
+  Gauge,
   History,
   Loader2,
   MoreHorizontal,
@@ -14,8 +17,10 @@ import {
   RefreshCcw,
   Save,
   Send,
+  Settings,
   SlidersHorizontal,
   Square,
+  Timer,
   TextQuote,
   Undo,
   User,
@@ -84,6 +89,10 @@ type SkillConsoleLayoutState = {
   inspectorTab: 'settings' | 'runtime';
 };
 
+type SkillConfigTab = 'basic' | 'model' | 'retrieval' | 'generation' | 'advanced';
+type ThinkingMode = 'default' | 'off' | 'custom';
+type MaxOutputTokenKey = 'max_tokens' | 'max_completion_tokens';
+
 const DEFAULT_CONVERSATION_CONFIG = {
   query_rewrite_with_history: true,
   include_history: true,
@@ -95,13 +104,44 @@ const FAST_SEARCH_TOP_K_RECOMMENDED = 3;
 const FAST_SEARCH_TOP_K_MAX = 10;
 const RECOMMENDED_CONTEXT_TOKEN_BUDGET = 131072;
 const STREAMING_ANSWER_FLUSH_INTERVAL_MS = 75;
+const DEFAULT_TEMPERATURE = '0.2';
+const DEFAULT_THINKING_BUDGET = '1024';
 
 const SELECTION_MODE_OPTIONS = [
   { value: 'outline_llm', label: '模型引导大纲选择' },
   { value: 'lexical_fallback', label: '仅关键词回退' },
 ];
 
-const CUSTOM_MODEL_VALUE = '__custom_model__';
+const CONFIG_TABS: Array<{ value: SkillConfigTab; label: string }> = [
+  { value: 'basic', label: '基础' },
+  { value: 'model', label: '模型' },
+  { value: 'retrieval', label: '检索' },
+  { value: 'generation', label: '生成' },
+  { value: 'advanced', label: '高级' },
+];
+
+const VENDOR_JSON_FORBIDDEN_FIELDS = new Set([
+  'api_key',
+  'api_base',
+  'base_url',
+  'extra_headers',
+  'model',
+  'messages',
+  'stream',
+]);
+
+const GENERATION_FORM_FIELDS = new Set([
+  'temperature',
+  'top_p',
+  'top_k',
+  'max_tokens',
+  'max_completion_tokens',
+  'stream_options',
+  'enable_thinking',
+  'thinking_budget',
+]);
+
+const GENERATION_RESERVED_FIELDS = new Set([...VENDOR_JSON_FORBIDDEN_FIELDS]);
 
 const formatResolutionSource = (source: string | null | undefined) => {
   switch (source) {
@@ -131,6 +171,107 @@ const formatTokenBreakdown = (metrics: ChatRun['metrics'] | undefined) => {
   const input = metrics.input_tokens ?? 'N/A';
   const output = metrics.output_tokens ?? 'N/A';
   return `输入 ${input} · 输出 ${output}；输出可能包含 Provider 统计的隐藏推理/内部 token。`;
+};
+
+const isPlainRecord = (value: unknown): value is Record<string, unknown> => (
+  typeof value === 'object' &&
+  value !== null &&
+  !Array.isArray(value)
+);
+
+const formatOptionalNumber = (value: unknown) => {
+  if (value === undefined || value === null || value === '') return '';
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? String(value) : '';
+};
+
+const coerceOptionalNumber = (label: string, value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${label} 必须是数字。`);
+  }
+  return parsed;
+};
+
+const sanitizeGenerationConfig = (config: Record<string, unknown>) => {
+  const next = { ...config };
+  for (const field of GENERATION_RESERVED_FIELDS) {
+    delete next[field];
+  }
+  return next;
+};
+
+const getSavedTemperature = (config: Record<string, unknown>) => formatOptionalNumber(config.temperature) || DEFAULT_TEMPERATURE;
+
+const getSavedMaxOutputKey = (config: Record<string, unknown>): MaxOutputTokenKey => (
+  config.max_completion_tokens !== undefined && config.max_completion_tokens !== null
+    ? 'max_completion_tokens'
+    : 'max_tokens'
+);
+
+const getSavedMaxOutputValue = (config: Record<string, unknown>) => {
+  const key = getSavedMaxOutputKey(config);
+  return formatOptionalNumber(config[key]);
+};
+
+const hasIncludeUsage = (config: Record<string, unknown>) => {
+  const streamOptions = config.stream_options;
+  return isPlainRecord(streamOptions) && streamOptions.include_usage === true;
+};
+
+const inferThinkingMode = (config: Record<string, unknown>): ThinkingMode => {
+  if (config.enable_thinking === false) return 'off';
+  if (config.enable_thinking === true || config.thinking_budget !== undefined) return 'custom';
+  return 'default';
+};
+
+const getThinkingBudget = (config: Record<string, unknown>) => (
+  formatOptionalNumber(config.thinking_budget) || DEFAULT_THINKING_BUDGET
+);
+
+const extractVendorGenerationConfig = (config: Record<string, unknown>) => {
+  const vendorConfig: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(config)) {
+    if (GENERATION_FORM_FIELDS.has(key) || VENDOR_JSON_FORBIDDEN_FIELDS.has(key)) continue;
+    vendorConfig[key] = value;
+  }
+  return vendorConfig;
+};
+
+const stringifyVendorGenerationConfig = (config: Record<string, unknown>) => {
+  const vendorConfig = extractVendorGenerationConfig(config);
+  return Object.keys(vendorConfig).length ? JSON.stringify(vendorConfig, null, 2) : '{}';
+};
+
+const parseVendorGenerationConfig = (text: string) => {
+  const trimmed = text.trim();
+  if (!trimmed) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (error) {
+    throw new Error(`厂商扩展 JSON 解析失败：${error instanceof Error ? error.message : '格式错误'}`);
+  }
+  if (!isPlainRecord(parsed)) {
+    throw new Error('厂商扩展 JSON 必须是 object。');
+  }
+  const forbidden = Object.keys(parsed).filter((key) => VENDOR_JSON_FORBIDDEN_FIELDS.has(key));
+  if (forbidden.length > 0) {
+    throw new Error(`厂商扩展 JSON 不能包含运行时或密钥字段：${forbidden.join(', ')}`);
+  }
+  const conflicts = Object.keys(parsed).filter((key) => GENERATION_FORM_FIELDS.has(key));
+  if (conflicts.length > 0) {
+    throw new Error(`厂商扩展 JSON 与表单字段冲突：${conflicts.join(', ')}。请使用对应表单项配置。`);
+  }
+  return parsed;
+};
+
+const summarizeThinkingMode = (mode: ThinkingMode) => {
+  if (mode === 'off') return '关闭';
+  if (mode === 'custom') return '自定义';
+  return '默认';
 };
 
 const normalizeFastSearchTopK = (value: unknown) => {
@@ -201,7 +342,6 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   ));
   const [actionsOpen, setActionsOpen] = useState(false);
   const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
-  const [inspectorDrawerOpen, setInspectorDrawerOpen] = useState(false);
   const [question, setQuestion] = useState('');
   const [lastQuestion, setLastQuestion] = useState('');
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
@@ -228,13 +368,29 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   const [maxContextPages, setMaxContextPages] = useState('');
   const [maxContextTokens, setMaxContextTokens] = useState('');
   const [rerankMode, setRerankMode] = useState('');
-  const [temperature, setTemperature] = useState('');
+  const [temperature, setTemperature] = useState(() => getSavedTemperature((skill.generation_config || {}) as Record<string, unknown>));
+  const [topP, setTopP] = useState(() => formatOptionalNumber(((skill.generation_config || {}) as Record<string, unknown>).top_p));
+  const [generationTopK, setGenerationTopK] = useState(() => formatOptionalNumber(((skill.generation_config || {}) as Record<string, unknown>).top_k));
+  const [maxOutputTokenKey, setMaxOutputTokenKey] = useState<MaxOutputTokenKey>(() => getSavedMaxOutputKey((skill.generation_config || {}) as Record<string, unknown>));
+  const [maxOutputTokens, setMaxOutputTokens] = useState(() => getSavedMaxOutputValue((skill.generation_config || {}) as Record<string, unknown>));
+  const [includeStreamUsage, setIncludeStreamUsage] = useState(() => hasIncludeUsage((skill.generation_config || {}) as Record<string, unknown>));
+  const [thinkingMode, setThinkingMode] = useState<ThinkingMode>(() => inferThinkingMode((skill.generation_config || {}) as Record<string, unknown>));
+  const [thinkingBudget, setThinkingBudget] = useState(() => getThinkingBudget((skill.generation_config || {}) as Record<string, unknown>));
+  const [vendorJsonText, setVendorJsonText] = useState(() => stringifyVendorGenerationConfig((skill.generation_config || {}) as Record<string, unknown>));
+  const [configDrawerOpen, setConfigDrawerOpen] = useState(false);
+  const [runtimeDrawerOpen, setRuntimeDrawerOpen] = useState(false);
+  const [configTab, setConfigTab] = useState<SkillConfigTab>('basic');
+  const [useDraftForNextRun, setUseDraftForNextRun] = useState(false);
   const [streamingObservations, setStreamingObservations] = useState<RunObservationEvent[]>([]);
   const [chatAlert, setChatAlert] = useState<AlertState | null>(null);
   const [saveFeedback, setSaveFeedback] = useState<SaveFeedback | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(skill.updated_at);
 
-  const [searchMode, setSearchMode] = useState<'deep_research' | 'fast_search'>('deep_research');
+  const [searchMode, setSearchMode] = useState<'deep_research' | 'fast_search'>(() => (
+    ((skill.retrieval_config || {}) as Record<string, unknown>).retrieval_mode === 'fast'
+      ? 'fast_search'
+      : 'deep_research'
+  ));
   const [fastSearchTopK, setFastSearchTopK] = useState('');
 
   const storedWorkspace = resolveStoredWorkspace();
@@ -276,7 +432,9 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     setLayoutState((current) => ({ ...current, ...nextValue }));
   };
 
-  const resetSavedConfigOverrides = () => {
+  const resetSavedConfigOverrides = (nextSkill: ChatSkill = skill) => {
+    const nextRetrievalDefaults = (nextSkill.retrieval_config || {}) as Record<string, unknown>;
+    const nextGenerationDefaults = (nextSkill.generation_config || {}) as Record<string, unknown>;
     setQueryRewriteWithHistory(null);
     setIncludeHistory(null);
     setIncludeAssistantMessages(null);
@@ -288,7 +446,17 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     setMaxContextTokens('');
     setRerankMode('');
     setFastSearchTopK('');
-    setTemperature('');
+    setSearchMode(nextRetrievalDefaults.retrieval_mode === 'fast' ? 'fast_search' : 'deep_research');
+    setTemperature(getSavedTemperature(nextGenerationDefaults));
+    setTopP(formatOptionalNumber(nextGenerationDefaults.top_p));
+    setGenerationTopK(formatOptionalNumber(nextGenerationDefaults.top_k));
+    setMaxOutputTokenKey(getSavedMaxOutputKey(nextGenerationDefaults));
+    setMaxOutputTokens(getSavedMaxOutputValue(nextGenerationDefaults));
+    setIncludeStreamUsage(hasIncludeUsage(nextGenerationDefaults));
+    setThinkingMode(inferThinkingMode(nextGenerationDefaults));
+    setThinkingBudget(getThinkingBudget(nextGenerationDefaults));
+    setVendorJsonText(stringifyVendorGenerationConfig(nextGenerationDefaults));
+    setUseDraftForNextRun(false);
   };
 
   const applySavedSkillState = (nextSkill: ChatSkill) => {
@@ -298,7 +466,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     setDraftKnowledgeBaseId(nextSkill.knowledge_base_id || null);
     setDraftProviderId(nextSkill.provider_id || '');
     setLastSavedAt(nextSkill.updated_at);
-    resetSavedConfigOverrides();
+    resetSavedConfigOverrides(nextSkill);
   };
 
   const workspaceDefaultProvider = useMemo(
@@ -382,7 +550,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     () => resolveProviderModelOption(draftResolvedProvider, draftModel),
     [draftModel, draftResolvedProvider],
   );
-  const draftModelSelectValue = draftSelectedModelOption || (draftModel.trim() ? CUSTOM_MODEL_VALUE : '');
+  const draftModelSelectValue = draftSelectedModelOption || '';
 
   const savedConfigModel = skill.model || savedResolvedProvider?.default_model || '';
   const savedConfigModelMismatch = Boolean(
@@ -406,7 +574,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     ...((skill.conversation_config || {}) as Record<string, unknown>),
   };
   const skillRetrievalDefaults = (skill.retrieval_config || {}) as Record<string, unknown>;
-  const skillGenerationDefaults = (skill.generation_config || {}) as Record<string, unknown>;
+  const skillGenerationDefaults = sanitizeGenerationConfig((skill.generation_config || {}) as Record<string, unknown>);
   const effectiveQueryRewriteWithHistory = queryRewriteWithHistory ?? (skillConversationDefaults.query_rewrite_with_history !== false);
   const effectiveIncludeHistory = includeHistory ?? (skillConversationDefaults.include_history !== false);
   const effectiveIncludeAssistantMessages = includeAssistantMessages ?? (skillConversationDefaults.include_assistant_messages !== false);
@@ -418,11 +586,12 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   const effectiveMaxContextTokens = maxContextTokens || (skillRetrievalDefaults.max_context_tokens ? String(skillRetrievalDefaults.max_context_tokens) : '');
   const effectiveRerankMode = rerankMode || (typeof skillRetrievalDefaults.rerank_mode === 'string' ? skillRetrievalDefaults.rerank_mode : 'auto');
   const effectiveFastSearchTopK = fastSearchTopK || normalizeFastSearchTopK(skillRetrievalDefaults.node_top_k);
-  const effectiveTemperature = temperature || (
-    skillGenerationDefaults.temperature !== undefined && skillGenerationDefaults.temperature !== null
-      ? String(skillGenerationDefaults.temperature)
-      : '0'
-  );
+  const effectiveTemperature = temperature || getSavedTemperature(skillGenerationDefaults);
+  const effectiveTopP = topP;
+  const effectiveGenerationTopK = generationTopK;
+  const effectiveMaxOutputTokens = maxOutputTokens;
+  const effectiveThinkingMode = thinkingMode;
+  const effectiveThinkingBudget = thinkingBudget;
   const savedQueryRewriteWithHistory = skillConversationDefaults.query_rewrite_with_history !== false;
   const savedIncludeHistory = skillConversationDefaults.include_history !== false;
   const savedIncludeAssistantMessages = skillConversationDefaults.include_assistant_messages !== false;
@@ -434,11 +603,23 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   const savedMaxContextTokens = skillRetrievalDefaults.max_context_tokens ? String(skillRetrievalDefaults.max_context_tokens) : '';
   const savedRerankMode = typeof skillRetrievalDefaults.rerank_mode === 'string' ? skillRetrievalDefaults.rerank_mode : 'auto';
   const savedFastSearchTopK = normalizeFastSearchTopK(skillRetrievalDefaults.node_top_k);
-  const savedTemperature = (
-    skillGenerationDefaults.temperature !== undefined && skillGenerationDefaults.temperature !== null
-      ? String(skillGenerationDefaults.temperature)
-      : '0'
-  );
+  const savedSearchMode = skillRetrievalDefaults.retrieval_mode === 'fast' ? 'fast_search' : 'deep_research';
+  const savedTemperature = getSavedTemperature(skillGenerationDefaults);
+  const savedTopP = formatOptionalNumber(skillGenerationDefaults.top_p);
+  const savedGenerationTopK = formatOptionalNumber(skillGenerationDefaults.top_k);
+  const savedMaxOutputKey = getSavedMaxOutputKey(skillGenerationDefaults);
+  const savedMaxOutputTokens = getSavedMaxOutputValue(skillGenerationDefaults);
+  const savedIncludeStreamUsage = hasIncludeUsage(skillGenerationDefaults);
+  const savedThinkingMode = inferThinkingMode(skillGenerationDefaults);
+  const savedThinkingBudget = getThinkingBudget(skillGenerationDefaults);
+  const savedVendorJsonText = stringifyVendorGenerationConfig(skillGenerationDefaults);
+  const vendorJsonValidation = useMemo(() => {
+    try {
+      return { config: parseVendorGenerationConfig(vendorJsonText), error: '' };
+    } catch (error) {
+      return { config: {}, error: error instanceof Error ? error.message : '厂商扩展 JSON 解析失败。' };
+    }
+  }, [vendorJsonText]);
 
   const isConfigDirty = (
     draftName !== skill.name ||
@@ -457,7 +638,16 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     effectiveMaxContextTokens !== savedMaxContextTokens ||
     effectiveRerankMode !== savedRerankMode ||
     effectiveFastSearchTopK !== savedFastSearchTopK ||
-    effectiveTemperature !== savedTemperature
+    searchMode !== savedSearchMode ||
+    effectiveTemperature !== savedTemperature ||
+    effectiveTopP !== savedTopP ||
+    effectiveGenerationTopK !== savedGenerationTopK ||
+    maxOutputTokenKey !== savedMaxOutputKey ||
+    effectiveMaxOutputTokens !== savedMaxOutputTokens ||
+    includeStreamUsage !== savedIncludeStreamUsage ||
+    effectiveThinkingMode !== savedThinkingMode ||
+    effectiveThinkingBudget !== savedThinkingBudget ||
+    vendorJsonText.trim() !== savedVendorJsonText.trim()
   );
 
   const { data: sessions = [] } = useQuery({
@@ -635,6 +825,74 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     </>
   ), [history, isStreaming, streamingAnswer, streamingStatus]);
 
+  const buildDraftConversationConfig = () => ({
+    query_rewrite_with_history: effectiveQueryRewriteWithHistory,
+    include_history: effectiveIncludeHistory,
+    include_assistant_messages: effectiveIncludeAssistantMessages,
+    history_turn_limit: Number(effectiveHistoryTurnLimit || DEFAULT_CONVERSATION_CONFIG.history_turn_limit),
+    history_token_budget: Number(effectiveHistoryTokenBudget || DEFAULT_CONVERSATION_CONFIG.history_token_budget),
+  });
+
+  const buildSavedConversationConfig = () => ({
+    query_rewrite_with_history: savedQueryRewriteWithHistory,
+    include_history: savedIncludeHistory,
+    include_assistant_messages: savedIncludeAssistantMessages,
+    history_turn_limit: Number(savedHistoryTurnLimit || DEFAULT_CONVERSATION_CONFIG.history_turn_limit),
+    history_token_budget: Number(savedHistoryTokenBudget || DEFAULT_CONVERSATION_CONFIG.history_token_budget),
+  });
+
+  const buildDraftRetrievalConfig = () => ({
+    top_k: Number(effectiveTopK || 5),
+    selection_mode: effectiveSelectionMode,
+    rerank_mode: effectiveRerankMode,
+    retrieval_mode: searchMode === 'fast_search' ? 'fast' : 'deep_research',
+    node_top_k: Number(effectiveFastSearchTopK || FAST_SEARCH_TOP_K_RECOMMENDED),
+    ...(effectiveMaxContextPages.trim() ? { max_context_pages: Number(effectiveMaxContextPages) } : {}),
+    ...(effectiveMaxContextTokens.trim() ? { max_context_tokens: Number(effectiveMaxContextTokens) } : {}),
+  });
+
+  const buildSavedRetrievalConfig = () => ({
+    top_k: Number(savedTopK || 5),
+    selection_mode: savedSelectionMode,
+    rerank_mode: savedRerankMode,
+    retrieval_mode: searchMode === 'fast_search' ? 'fast' : 'deep_research',
+    node_top_k: Number(savedFastSearchTopK || FAST_SEARCH_TOP_K_RECOMMENDED),
+    ...(savedMaxContextPages.trim() ? { max_context_pages: Number(savedMaxContextPages) } : {}),
+    ...(savedMaxContextTokens.trim() ? { max_context_tokens: Number(savedMaxContextTokens) } : {}),
+  });
+
+  const buildDraftGenerationConfig = () => {
+    if (vendorJsonValidation.error) {
+      throw new Error(vendorJsonValidation.error);
+    }
+    const next: Record<string, unknown> = {};
+    const temperatureValue = coerceOptionalNumber('temperature', effectiveTemperature);
+    if (temperatureValue !== undefined) next.temperature = temperatureValue;
+    const topPValue = coerceOptionalNumber('top_p', effectiveTopP);
+    if (topPValue !== undefined) next.top_p = topPValue;
+    const topKValue = coerceOptionalNumber('top_k', effectiveGenerationTopK);
+    if (topKValue !== undefined) next.top_k = topKValue;
+    const maxOutputValue = coerceOptionalNumber(maxOutputTokenKey, effectiveMaxOutputTokens);
+    if (maxOutputValue !== undefined) next[maxOutputTokenKey] = maxOutputValue;
+    if (includeStreamUsage) {
+      next.stream_options = { include_usage: true };
+    }
+    if (effectiveThinkingMode === 'off') {
+      next.enable_thinking = false;
+      next.thinking_budget = 0;
+    } else if (effectiveThinkingMode === 'custom') {
+      const budget = coerceOptionalNumber('thinking_budget', effectiveThinkingBudget);
+      if (budget === undefined) {
+        throw new Error('自定义 Thinking 需要填写 thinking_budget。');
+      }
+      next.enable_thinking = true;
+      next.thinking_budget = budget;
+    }
+    return sanitizeGenerationConfig({ ...next, ...vendorJsonValidation.config });
+  };
+
+  const buildSavedGenerationConfig = () => sanitizeGenerationConfig(skillGenerationDefaults);
+
   const createSessionMutation = useMutation({
     mutationFn: (title: string) => chatApi.createSkillSession(skillId, { title }),
     onSuccess: (session) => {
@@ -670,22 +928,9 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
         provider_id: draftProviderId,
         document_ids: skill.document_ids,
         request_config: skill.request_config || {},
-        conversation_config: {
-          query_rewrite_with_history: effectiveQueryRewriteWithHistory,
-          include_history: effectiveIncludeHistory,
-          include_assistant_messages: effectiveIncludeAssistantMessages,
-          history_turn_limit: Number(effectiveHistoryTurnLimit || DEFAULT_CONVERSATION_CONFIG.history_turn_limit),
-          history_token_budget: Number(effectiveHistoryTokenBudget || DEFAULT_CONVERSATION_CONFIG.history_token_budget),
-        },
-        retrieval_config: {
-          top_k: Number(effectiveTopK || 5),
-          selection_mode: effectiveSelectionMode,
-          rerank_mode: effectiveRerankMode,
-          node_top_k: Number(effectiveFastSearchTopK || FAST_SEARCH_TOP_K_RECOMMENDED),
-          ...(effectiveMaxContextPages.trim() ? { max_context_pages: Number(effectiveMaxContextPages) } : {}),
-          ...(effectiveMaxContextTokens.trim() ? { max_context_tokens: Number(effectiveMaxContextTokens) } : {}),
-        },
-        generation_config: { temperature: Number(effectiveTemperature || 0) },
+        conversation_config: buildDraftConversationConfig(),
+        retrieval_config: buildDraftRetrievalConfig(),
+        generation_config: buildDraftGenerationConfig(),
       });
     },
     onSuccess: (updatedSkill) => {
@@ -712,23 +957,9 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     mutationFn: async ({ q, isDraft }: { q: string; isDraft: boolean }) => {
       const resolvedModel = isDraft ? (draftModel || draftResolvedProvider?.default_model || '') : savedConfigModel;
       if (!resolvedModel) throw new Error('该 Skill 未解析到可用模型');
-      const retrieval_config = {
-        top_k: Number(effectiveTopK || 5),
-        selection_mode: effectiveSelectionMode,
-        rerank_mode: effectiveRerankMode,
-        retrieval_mode: searchMode === 'fast_search' ? 'fast' : 'deep_research',
-        ...(searchMode === 'fast_search' ? { node_top_k: Number(effectiveFastSearchTopK || FAST_SEARCH_TOP_K_RECOMMENDED) } : {}),
-        ...(effectiveMaxContextPages.trim() ? { max_context_pages: Number(effectiveMaxContextPages) } : {}),
-        ...(effectiveMaxContextTokens.trim() ? { max_context_tokens: Number(effectiveMaxContextTokens) } : {}),
-      };
-      const conversation_config = {
-        query_rewrite_with_history: effectiveQueryRewriteWithHistory,
-        include_history: effectiveIncludeHistory,
-        include_assistant_messages: effectiveIncludeAssistantMessages,
-        history_turn_limit: Number(effectiveHistoryTurnLimit || DEFAULT_CONVERSATION_CONFIG.history_turn_limit),
-        history_token_budget: Number(effectiveHistoryTokenBudget || DEFAULT_CONVERSATION_CONFIG.history_token_budget),
-      };
-      const generation_config = { temperature: Number(effectiveTemperature || 0) };
+      const retrieval_config = isDraft ? buildDraftRetrievalConfig() : buildSavedRetrievalConfig();
+      const conversation_config = isDraft ? buildDraftConversationConfig() : buildSavedConversationConfig();
+      const generation_config = isDraft ? buildDraftGenerationConfig() : buildSavedGenerationConfig();
       const controller = new AbortController();
       streamAbortRef.current = controller;
 
@@ -846,12 +1077,6 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
   };
 
   const handleDraftModelSelectChange = (value: string) => {
-    if (value === CUSTOM_MODEL_VALUE) {
-      if (!draftModel.trim()) {
-        setDraftModel(draftResolvedProvider?.default_model || '');
-      }
-      return;
-    }
     setDraftModel(value);
     if (saveFeedback?.tone === 'success') setSaveFeedback(null);
   };
@@ -865,12 +1090,76 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     const trimmedQuestion = question.trim();
     if (!trimmedQuestion || isStreaming) return;
 
-    if (isDraft && !draftResolvedProvider) return;
-    if (isDraft && draftModelMismatch) return;
-    if (!isDraft && savedRunModelMismatch) return;
-    setLastRunWasDraft(isDraft);
-    runSkillMutation.mutate({ q: trimmedQuestion, isDraft });
+    const shouldUseDraft = isDraft || useDraftForNextRun;
+    if (shouldUseDraft && !draftResolvedProvider) return;
+    if (shouldUseDraft && draftModelMismatch) return;
+    if (!shouldUseDraft && savedRunModelMismatch) return;
+    if (shouldUseDraft) {
+      try {
+        buildDraftGenerationConfig();
+      } catch (error) {
+        setSaveFeedback({
+          tone: 'danger',
+          title: '本次运行配置无效',
+          message: error instanceof Error ? error.message : '请检查生成配置。',
+        });
+        setConfigDrawerOpen(true);
+        setConfigTab('advanced');
+        return;
+      }
+    }
+    setUseDraftForNextRun(false);
+    setLastRunWasDraft(shouldUseDraft);
+    runSkillMutation.mutate({ q: trimmedQuestion, isDraft: shouldUseDraft });
   };
+
+  const handleUseDraftForNextRun = () => {
+    if (!draftResolvedProvider || draftModelMismatch) return;
+    try {
+      buildDraftGenerationConfig();
+    } catch (error) {
+      setSaveFeedback({
+        tone: 'danger',
+        title: '草稿配置无效',
+        message: error instanceof Error ? error.message : '请检查生成配置。',
+      });
+      setConfigTab('advanced');
+      return;
+    }
+    setUseDraftForNextRun(true);
+    setConfigDrawerOpen(false);
+    setSaveFeedback({
+      tone: 'success',
+      title: '已设为本次运行草稿',
+      message: '下一次发送会使用当前抽屉里的草稿配置，不会保存到 Skill 或 Provider Center。',
+    });
+  };
+
+  const buildDraftRequestPreview = () => {
+    if (vendorJsonValidation.error) return '修复厂商扩展 JSON 后可预览请求。';
+    try {
+      return JSON.stringify({
+        model: draftModel || draftResolvedProvider?.default_model || '<resolved model>',
+        messages: [{ role: 'user', content: '<redacted prompt>' }],
+        stream: true,
+        ...buildDraftGenerationConfig(),
+      }, null, 2);
+    } catch (error) {
+      return error instanceof Error ? error.message : '请求预览不可用。';
+    }
+  };
+
+  const generationSummary = [
+    `temp ${effectiveTemperature || '默认'}`,
+    effectiveMaxOutputTokens ? `${maxOutputTokenKey} ${effectiveMaxOutputTokens}` : 'max output 默认',
+    `thinking ${summarizeThinkingMode(effectiveThinkingMode)}`,
+  ].join(' · ');
+
+  const savedGenerationSummary = [
+    `temp ${savedTemperature || '默认'}`,
+    savedMaxOutputTokens ? `${savedMaxOutputKey} ${savedMaxOutputTokens}` : 'max output 默认',
+    `thinking ${summarizeThinkingMode(savedThinkingMode)}`,
+  ].join(' · ');
 
   const historyPanelContent = (
     <div className="scroll-area max-h-[760px] space-y-4 overflow-auto pr-1">
@@ -926,273 +1215,325 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
     </div>
   );
 
-  const settingsTabContent = (
-    <div className="space-y-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold text-slate-900">Skill 默认配置</h3>
-          <p className="mt-1 text-sm text-slate-500">
-            Provider、模型、知识库和系统提示词会保存到 Skill。知识库草稿变更需要保存后才会生效。
-          </p>
-          {lastSavedAt && (
-            <p className="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">
-              上次保存 {formatRelativeTime(lastSavedAt)} · {formatDateTime(lastSavedAt)}
-            </p>
-          )}
-        </div>
-        {isConfigDirty && (
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                applySavedSkillState(skill);
-                setSaveFeedback(null);
-              }}
-              className="btn-secondary text-slate-500"
-            >
-              <Undo size={14} />
-              <span>还原</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => saveSkillMutation.mutate()}
-              disabled={saveSkillMutation.isPending || draftModelMismatch || !draftModel.trim() || !draftProviderId}
-              className="btn-primary"
-            >
-              {saveSkillMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-              <span>{saveSkillMutation.isPending ? '保存中…' : '保存 Skill'}</span>
-            </button>
+  const skillConfigDrawerContent = (
+    <div className="flex min-h-[calc(100vh-9rem)] flex-col">
+      <div className="sticky top-0 z-10 space-y-4 bg-white/70 pb-4 backdrop-blur">
+        <SegmentedControl
+          value={configTab}
+          onChange={(value) => setConfigTab(value as SkillConfigTab)}
+          items={CONFIG_TABS}
+        />
+        {saveFeedback && (
+          <InlineAlert tone={saveFeedback.tone} title={saveFeedback.title}>
+            {saveFeedback.message}
+          </InlineAlert>
+        )}
+      </div>
+
+      <div className="scroll-area flex-1 space-y-5 overflow-auto pb-6 pr-1">
+        {configTab === 'basic' && (
+          <div className="grid gap-5 xl:grid-cols-2">
+            <Field label="Skill 名称">
+              <input value={draftName} onChange={(event) => markDraftEdited(setDraftName)(event.target.value)} className="field" />
+            </Field>
+            <Field label="知识库" hint="SkillChat 只绑定知识库；embedding 继承知识库/工作区配置。">
+              <select value={draftKnowledgeBaseId || ''} onChange={(event) => markDraftEdited(setDraftKnowledgeBaseId)(event.target.value || null)} className="field">
+                <option value="">未绑定知识库</option>
+                {knowledgeBases.map((kb) => (
+                  <option key={kb.id} value={kb.id}>{kb.name}</option>
+                ))}
+              </select>
+            </Field>
+            <div className="xl:col-span-2">
+              <Field label="系统提示词" required>
+                <textarea
+                  value={draftSystemPrompt}
+                  onChange={(event) => markDraftEdited(setDraftSystemPrompt)(event.target.value)}
+                  className="field min-h-[180px]"
+                  required
+                />
+              </Field>
+            </div>
+          </div>
+        )}
+
+        {configTab === 'model' && (
+          <div className="space-y-5">
+            <div className="grid gap-4 xl:grid-cols-2">
+              <div className="surface-soft p-4">
+                <p className="metric-label">解析链路</p>
+                <div className="mt-3 space-y-2 text-sm text-slate-600">
+                  <p>Skill：{skillProvider ? `${skillProvider.name} · ${describeProviderOwnership(skillProvider)}` : '未绑定'}</p>
+                  <p>Workspace：{workspaceDefaultProvider ? workspaceDefaultProvider.name : '未配置'}</p>
+                  <p>共享默认：{tenantDefaultProvider ? tenantDefaultProvider.name : '未配置或不可用'}</p>
+                </div>
+              </div>
+              <div className="surface-soft p-4">
+                <p className="metric-label">当前草稿</p>
+                <p className="mt-3 text-sm font-medium text-slate-900">{draftResolvedProvider?.name || '未解析 Provider'}</p>
+                <p className="mt-1 text-sm text-slate-500">{draftResolvedProvider ? `${describeProviderOwnership(draftResolvedProvider)} · ${describeProviderAvailability(draftResolvedProvider)}` : '需要先选择可用 Provider'}</p>
+              </div>
+            </div>
+
+            {isLegacyUnboundSkill && !draftProviderId && (
+              <InlineAlert tone="warning" title="旧版未绑定 Skill">
+                保存前必须显式绑定一个当前工作区可用的 Provider。
+              </InlineAlert>
+            )}
+
+            {providers.length === 0 && (
+              <InlineAlert tone="warning" title="当前工作区没有可用 Provider">
+                请先在 Provider Center 导入或共享 Provider。
+              </InlineAlert>
+            )}
+
+            <div className="grid gap-5 xl:grid-cols-2">
+              <Field label="Provider" hint="只显示当前工作区可绑定的 Provider。">
+                <select value={draftProviderId} onChange={(event) => handleDraftProviderChange(event.target.value)} className="field">
+                  <option value="" disabled>{isLegacyUnboundSkill ? '选择 Provider 并绑定到 Skill' : '选择 Provider'}</option>
+                  {selectableProviders.map((provider) => (
+                    <option key={provider.id} value={provider.id}>
+                      {provider.name} · {provider.scope === 'workspace' ? '工作区自有' : provider.is_default ? '共享默认' : '共享'}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field
+                label="模型"
+                hint={draftModelOptions.length > 0 ? '只能选择 Provider 已探测或声明的模型。' : 'Provider 没有可用模型列表时，只能使用默认模型。'}
+              >
+                {draftModelOptions.length > 0 ? (
+                  <select value={draftModelSelectValue} onChange={(event) => handleDraftModelSelectChange(event.target.value)} className="field">
+                    <option value="" disabled>选择模型</option>
+                    {draftModelOptions.map((model) => (
+                      <option key={model} value={model}>{model}{model === draftResolvedProvider?.default_model ? '（默认）' : ''}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input value={draftResolvedProvider?.default_model || ''} className="field" disabled placeholder="Provider 未声明默认模型" />
+                )}
+              </Field>
+            </div>
+
+            {draftModelMismatch && draftResolvedProvider && (
+              <InlineAlert tone="warning" title="Provider 与模型不匹配">
+                {`模型“${draftModel}”不在 ${draftResolvedProvider.name} 的支持列表中。`}
+              </InlineAlert>
+            )}
+            {savedConfigModelMismatch && savedResolvedProvider && !isConfigDirty && (
+              <InlineAlert tone="warning" title="已保存配置需要检查">
+                {`已保存的模型“${skill.model}”已不在 ${savedResolvedProvider.name} 的支持列表中。`}
+              </InlineAlert>
+            )}
+          </div>
+        )}
+
+        {configTab === 'retrieval' && (
+          <div className="space-y-5">
+            <SegmentedControl
+              value={searchMode}
+              onChange={(value) => setSearchMode(value as 'deep_research' | 'fast_search')}
+              items={[
+                { value: 'deep_research', label: 'DeepResearch' },
+                { value: 'fast_search', label: 'Fast Search' },
+              ]}
+            />
+            <div className="grid gap-4 xl:grid-cols-2">
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <input type="checkbox" checked={effectiveQueryRewriteWithHistory} onChange={(event) => setQueryRewriteWithHistory(event.target.checked)} />
+                <span>按最近历史改写检索问题</span>
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <input type="checkbox" checked={effectiveIncludeHistory} onChange={(event) => setIncludeHistory(event.target.checked)} />
+                <span>回答阶段带入最近历史</span>
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <input type="checkbox" checked={effectiveIncludeAssistantMessages} onChange={(event) => setIncludeAssistantMessages(event.target.checked)} disabled={!effectiveIncludeHistory} />
+                <span>历史中包含助手最终回复</span>
+              </label>
+              <Field label="历史最大用户轮数">
+                <input type="number" min="1" value={effectiveHistoryTurnLimit} onChange={(event) => setHistoryTurnLimit(event.target.value)} className="field" />
+              </Field>
+              <Field label="历史 Token 预算">
+                <input type="number" min="1" value={effectiveHistoryTokenBudget} onChange={(event) => setHistoryTokenBudget(event.target.value)} className="field" />
+              </Field>
+              <Field label="DeepResearch 段落数">
+                <input type="number" min="1" value={effectiveTopK} onChange={(event) => setTopK(event.target.value)} className="field" />
+              </Field>
+              <Field label="Fast Search 节点数" hint={`推荐 ${FAST_SEARCH_TOP_K_RECOMMENDED}，最大 ${FAST_SEARCH_TOP_K_MAX}。`}>
+                <input type="number" min="1" max={FAST_SEARCH_TOP_K_MAX} value={effectiveFastSearchTopK} onChange={(event) => markDraftEdited(setFastSearchTopK)(normalizeFastSearchTopK(event.target.value))} className="field" />
+              </Field>
+              <Field label="段落选择方式">
+                <select value={effectiveSelectionMode} onChange={(event) => setSelectionMode(event.target.value)} className="field">
+                  {SELECTION_MODE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="回答上下文最大 PDF 页数">
+                <input type="number" min="1" value={effectiveMaxContextPages} onChange={(event) => setMaxContextPages(event.target.value)} className="field" placeholder="可选" />
+              </Field>
+              <Field label="回答上下文最大摘录 Token 数" hint={`可选，推荐 ${RECOMMENDED_CONTEXT_TOKEN_BUDGET}。`}>
+                <input type="number" min="1" value={effectiveMaxContextTokens} onChange={(event) => setMaxContextTokens(event.target.value)} className="field" placeholder="可选" />
+              </Field>
+              <Field label="Rerank 模式">
+                <select value={effectiveRerankMode} onChange={(event) => setRerankMode(event.target.value)} className="field">
+                  <option value="auto">自动</option>
+                  <option value="off">关闭</option>
+                  <option value="provider">Provider 重排</option>
+                  <option value="system">系统重排</option>
+                </select>
+              </Field>
+            </div>
+          </div>
+        )}
+
+        {configTab === 'generation' && (
+          <div className="grid gap-5 xl:grid-cols-2">
+            <Field label="Temperature" hint="0 最稳定；2 最发散。">
+              <input type="number" min="0" max="2" step="0.1" value={effectiveTemperature} onChange={(event) => setTemperature(event.target.value)} className="field" />
+            </Field>
+            <Field label="Top P">
+              <input type="number" min="0" max="1" step="0.01" value={effectiveTopP} onChange={(event) => setTopP(event.target.value)} className="field" placeholder="默认" />
+            </Field>
+            <Field label="Top K">
+              <input type="number" min="1" value={effectiveGenerationTopK} onChange={(event) => setGenerationTopK(event.target.value)} className="field" placeholder="默认" />
+            </Field>
+            <Field label="Max output 参数名">
+              <select value={maxOutputTokenKey} onChange={(event) => setMaxOutputTokenKey(event.target.value as MaxOutputTokenKey)} className="field">
+                <option value="max_tokens">max_tokens</option>
+                <option value="max_completion_tokens">max_completion_tokens</option>
+              </select>
+            </Field>
+            <Field label="Max output tokens">
+              <input type="number" min="1" value={effectiveMaxOutputTokens} onChange={(event) => setMaxOutputTokens(event.target.value)} className="field" placeholder="默认" />
+            </Field>
+            <label className="flex items-center gap-2 self-end rounded-2xl border border-white/70 bg-white/60 px-4 py-3 text-sm text-slate-700">
+              <input type="checkbox" checked={includeStreamUsage} onChange={(event) => setIncludeStreamUsage(event.target.checked)} />
+              <span>透传 stream_options.include_usage</span>
+            </label>
+          </div>
+        )}
+
+        {configTab === 'advanced' && (
+          <div className="space-y-5">
+            <div className="grid gap-5 xl:grid-cols-2">
+              <Field label="Thinking 模式" hint="字段是否生效取决于 endpoint。">
+                <select value={thinkingMode} onChange={(event) => setThinkingMode(event.target.value as ThinkingMode)} className="field">
+                  <option value="default">Default：不发送 thinking 字段</option>
+                  <option value="off">Off：enable_thinking=false</option>
+                  <option value="custom">Custom：设置 thinking_budget</option>
+                </select>
+              </Field>
+              <Field label="Thinking budget">
+                <input type="number" min="0" value={effectiveThinkingBudget} onChange={(event) => setThinkingBudget(event.target.value)} className="field" disabled={thinkingMode !== 'custom'} />
+              </Field>
+            </div>
+            <Field label="厂商扩展 JSON" hint="只允许顶层 object；禁止 api_key/api_base/base_url/extra_headers/model/messages/stream。">
+              <textarea value={vendorJsonText} onChange={(event) => setVendorJsonText(event.target.value)} className="field min-h-[170px] font-mono text-xs" spellCheck={false} />
+            </Field>
+            {vendorJsonValidation.error && (
+              <InlineAlert tone="danger" title="厂商扩展 JSON 无效">{vendorJsonValidation.error}</InlineAlert>
+            )}
+            <Field label="请求预览" hint="Prompt 内容已脱敏；密钥和运行时字段不会出现在 payload。">
+              <textarea readOnly value={buildDraftRequestPreview()} className="field min-h-[190px] font-mono text-xs" />
+            </Field>
           </div>
         )}
       </div>
 
+      <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200/70 bg-white/82 pt-4 backdrop-blur">
+        <div className="text-xs uppercase tracking-[0.16em] text-slate-400">
+          {lastSavedAt ? `Saved ${formatRelativeTime(lastSavedAt)}` : 'Not saved yet'}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => {
+              applySavedSkillState(skill);
+              setSaveFeedback(null);
+            }}
+          >
+            <Undo size={14} />
+            <span>重置为已保存</span>
+          </button>
+          <button type="button" className="btn-secondary" onClick={handleUseDraftForNextRun} disabled={draftModelMismatch || !draftModel.trim() || !draftProviderId}>
+            <Bot size={14} />
+            <span>仅用于本次运行</span>
+          </button>
+          <button type="button" className="btn-secondary" onClick={() => setConfigDrawerOpen(false)}>
+            <span>取消</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => saveSkillMutation.mutate()}
+            disabled={saveSkillMutation.isPending || draftModelMismatch || !draftModel.trim() || !draftProviderId || Boolean(vendorJsonValidation.error)}
+            className="btn-primary"
+          >
+            {saveSkillMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+            <span>{saveSkillMutation.isPending ? '保存中…' : '保存默认配置'}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const summaryPanelContent = (
+    <div className="space-y-4">
       {saveFeedback && (
         <InlineAlert tone={saveFeedback.tone} title={saveFeedback.title}>
           {saveFeedback.message}
         </InlineAlert>
       )}
-
-      <div className="rounded-[24px] border border-white/75 bg-white/58 p-4">
-        <p className="text-sm font-medium text-slate-900">Provider 解析链路</p>
-        <div className="mt-3 space-y-2 text-sm text-slate-500">
-          <p>Skill 已保存 Provider：{skillProvider ? `${skillProvider.name} (${describeProviderOwnership(skillProvider)})` : '此 Skill 未绑定'}</p>
-          <p>工作区默认 Provider：{workspaceDefaultProvider ? `${workspaceDefaultProvider.name} (${describeProviderOwnership(workspaceDefaultProvider)})` : '未配置'}</p>
-          <p>共享默认 Provider：{tenantDefaultProvider ? `${tenantDefaultProvider.name} (${describeProviderOwnership(tenantDefaultProvider)})` : '未配置或当前不可用'}</p>
-          <p>系统默认 Provider：仅后端可见的隐藏回退</p>
+      {useDraftForNextRun && (
+        <InlineAlert tone="success" title="下一次运行使用草稿">
+          发送后会自动回到已保存默认配置。
+        </InlineAlert>
+      )}
+      <div className="surface-soft space-y-3 p-4">
+        <div className="flex items-center gap-2 text-blue-600">
+          <Settings size={16} />
+          <p className="metric-label">Skill</p>
+        </div>
+        <p className="text-lg font-semibold text-slate-900">{skill.name}</p>
+        <p className="text-sm text-slate-500">{isConfigDirty ? '存在未保存草稿' : '已保存配置'}</p>
+      </div>
+      <div className="grid gap-3">
+        <div className="surface-soft p-4">
+          <div className="flex items-center gap-2 text-slate-500"><Gauge size={15} /><span className="metric-label">Provider / Model</span></div>
+          <p className="mt-2 break-words text-sm font-medium text-slate-900">{savedRunProvider?.name || '后端系统默认'}</p>
+          <p className="mt-1 break-words text-sm text-slate-500">{savedConfigModel || '未解析模型'}</p>
+        </div>
+        <div className="surface-soft p-4">
+          <div className="flex items-center gap-2 text-slate-500"><Database size={15} /><span className="metric-label">Knowledge Base</span></div>
+          <p className="mt-2 break-words text-sm font-medium text-slate-900">{boundKnowledgeBase?.name || (skillDocuments.length ? `旧版文档 ${skillDocuments.length} 份` : '未绑定')}</p>
+        </div>
+        <div className="surface-soft p-4">
+          <div className="flex items-center gap-2 text-slate-500"><Brain size={15} /><span className="metric-label">Generation</span></div>
+          <p className="mt-2 text-sm text-slate-700">{savedGenerationSummary}</p>
+          {isConfigDirty && <p className="mt-1 text-xs text-amber-600">草稿：{generationSummary}</p>}
+        </div>
+        <div className="surface-soft p-4">
+          <div className="flex items-center gap-2 text-slate-500"><Timer size={15} /><span className="metric-label">最近运行</span></div>
+          <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+            <p><span className="text-slate-500">总耗时</span><br /><span className="font-semibold text-slate-900">{formatMillisecondsAsSeconds(displayRun?.metrics.total_ms)}</span></p>
+            <p><span className="text-slate-500">检索</span><br /><span className="font-semibold text-slate-900">{formatMillisecondsAsSeconds(displayRun?.metrics.retrieve_ms)}</span></p>
+            <p><span className="text-slate-500">首 token</span><br /><span className="font-semibold text-slate-900">{formatMillisecondsAsSeconds(displayRun?.metrics.ttft_ms)}</span></p>
+            <p><span className="text-slate-500">引用</span><br /><span className="font-semibold text-slate-900">{displayRun?.citations.length ?? 0}</span></p>
+          </div>
         </div>
       </div>
-
-      {isLegacyUnboundSkill && !draftProviderId && (
-        <InlineAlert tone="warning" title="旧版未绑定 Skill">
-          这个 Skill 还没有保存 Provider。你仍然可以查看和测试它，但现在保存时必须显式绑定一个当前工作区可用的 Provider。
-        </InlineAlert>
-      )}
-
-      {providers.length === 0 && (
-        <InlineAlert
-          tone="warning"
-          title="当前工作区没有可用 Provider"
-          action={(
-            <div className="flex gap-2">
-              <Link to="/workspace" className="btn-secondary">
-                <span>工作区设置</span>
-              </Link>
-              <Link to="/providers" className="btn-secondary">
-                <span>Provider 管理</span>
-              </Link>
-            </div>
-          )}
-        >
-          保存 Skill 前，请先把租户 Provider 共享到当前工作区、导入共享 Provider，或设置工作区默认 Provider。
-        </InlineAlert>
-      )}
-
-      <Field label="Skill 名称">
-        <input
-          value={draftName}
-          onChange={(event) => markDraftEdited(setDraftName)(event.target.value)}
-          className="field"
-        />
-      </Field>
-
-      <Field label="系统提示词" required>
-        <textarea
-          value={draftSystemPrompt}
-          onChange={(event) => markDraftEdited(setDraftSystemPrompt)(event.target.value)}
-          className="field min-h-[120px]"
-          required
-        />
-      </Field>
-
-      <Field label="知识库" hint="当前只能绑定一个知识库。知识库草稿变更需要保存后才会影响运行。">
-        <select
-          value={draftKnowledgeBaseId || ''}
-          onChange={(event) => markDraftEdited(setDraftKnowledgeBaseId)(event.target.value || null)}
-          className="field"
-        >
-          <option value="">未绑定知识库</option>
-          {knowledgeBases.map((kb) => (
-            <option key={kb.id} value={kb.id}>
-              {kb.name}
-            </option>
-          ))}
-        </select>
-        {skill.knowledge_base_id !== draftKnowledgeBaseId && (
-          <p className="mt-1 text-xs text-amber-600">知识库变更在保存 Skill 前只作为草稿保留。</p>
-        )}
-      </Field>
-
-      <Field label="Provider" hint="该配置会保存到 Skill。这里只显示当前工作区可用的 Provider；系统回退不可手动选择。">
-        <select value={draftProviderId} onChange={(event) => handleDraftProviderChange(event.target.value)} className="field">
-          <option value="" disabled>
-            {isLegacyUnboundSkill ? '选择 Provider 并绑定到 Skill' : '选择 Provider'}
-          </option>
-          {selectableProviders.map((provider) => (
-            <option key={provider.id} value={provider.id}>
-              {provider.name} · {provider.scope === 'workspace' ? '工作区自有' : provider.is_default ? '共享默认' : '共享'}
-            </option>
-          ))}
-        </select>
-        <p className="mt-1 text-xs text-slate-500">
-          如今天仍未绑定，已保存配置会解析为：{draftResolvedProvider?.name || '后端系统默认'}
-        </p>
-        {draftResolvedProvider && (
-          <p className="mt-1 text-xs text-slate-500">
-            当前 Provider：{describeProviderOwnership(draftResolvedProvider)} · {describeProviderAvailability(draftResolvedProvider)}
-          </p>
-        )}
-        {!selectableProviders.length && (
-          <p className="mt-1 text-xs text-amber-600">
-            当前工作区还没有可用 Provider，所以列表为空。
-          </p>
-        )}
-      </Field>
-
-      <Field
-        label="模型"
-        hint={draftResolvedProvider ? `默认模型：${draftResolvedProvider.default_model}` : '请先选择 Provider，系统会根据 Provider 给出可用模型建议。'}
-      >
-        <div className="space-y-3">
-          {draftModelOptions.length > 0 ? (
-            <select
-              value={draftModelSelectValue}
-              onChange={(event) => handleDraftModelSelectChange(event.target.value)}
-              className="field"
-            >
-              <option value="" disabled>选择模型</option>
-              {draftModelOptions.map((model) => (
-                <option key={model} value={model}>
-                  {model}{model === draftResolvedProvider?.default_model ? '（默认）' : ''}
-                </option>
-              ))}
-              <option value={CUSTOM_MODEL_VALUE}>自定义模型…</option>
-            </select>
-          ) : null}
-          {(draftModelOptions.length === 0 || draftModelSelectValue === CUSTOM_MODEL_VALUE) && (
-            <input
-              value={draftModel}
-              onChange={(event) => markDraftEdited(setDraftModel)(event.target.value)}
-              className="field"
-              placeholder={draftResolvedProvider?.default_model || '输入模型名称'}
-            />
-          )}
-        </div>
-      </Field>
-
-      {draftModelMismatch && draftResolvedProvider && (
-        <InlineAlert tone="warning" title="Provider 与模型不匹配">
-          {`模型“${draftModel}”不在 ${draftResolvedProvider.name} 的支持列表中。`}
-        </InlineAlert>
-      )}
-
-      {savedConfigModelMismatch && savedResolvedProvider && !isConfigDirty && (
-        <InlineAlert tone="warning" title="已保存配置需要检查">
-          {`已保存的模型“${skill.model}”已不在 ${savedResolvedProvider.name} 的支持列表中。`}
-        </InlineAlert>
-      )}
-
-      <div className="rounded-[24px] border border-white/75 bg-white/58 p-4">
-        <div className="mb-4">
-          <p className="text-sm font-medium text-slate-900">检索与生成默认配置</p>
-          <p className="mt-1 text-sm text-slate-500">这里的值会立即用于下一次运行；点击“保存 Skill”后，这些值也会保存为该 Skill 的默认配置。Provider 仍然通过上面的已保存 Provider 管理。</p>
-        </div>
-
-        <div className="grid gap-4 xl:grid-cols-2">
-          <label className="flex items-center gap-2 text-sm text-slate-700">
-            <input type="checkbox" checked={effectiveQueryRewriteWithHistory} onChange={(event) => setQueryRewriteWithHistory(event.target.checked)} />
-            <span>根据最近聊天历史改写检索问题</span>
-          </label>
-          <label className="flex items-center gap-2 text-sm text-slate-700">
-            <input type="checkbox" checked={effectiveIncludeHistory} onChange={(event) => setIncludeHistory(event.target.checked)} />
-            <span>在回答提示词中带入最近聊天历史</span>
-          </label>
-          <label className="flex items-center gap-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              checked={effectiveIncludeAssistantMessages}
-              onChange={(event) => setIncludeAssistantMessages(event.target.checked)}
-              disabled={!effectiveIncludeHistory}
-            />
-            <span>在上述历史中包含之前的最终模型回复</span>
-          </label>
-          <Field label="历史最大用户轮数" hint="按最近的用户轮次统计。只有用户问题和最终模型回复会进入下一轮上下文，中间检索过程和遥测不会带入。">
-            <input type="number" min="1" value={effectiveHistoryTurnLimit} onChange={(event) => setHistoryTurnLimit(event.target.value)} className="field" />
-          </Field>
-          <Field label="历史 Token 预算" hint="本次运行中可带入聊天历史的大致 token 上限。">
-            <input type="number" min="1" value={effectiveHistoryTokenBudget} onChange={(event) => setHistoryTokenBudget(event.target.value)} className="field" />
-          </Field>
-          <Field label="检索段落数" hint="在生成答案前，最多从目录/大纲中选出的候选段落数量。">
-            <input type="number" min="1" value={effectiveTopK} onChange={(event) => setTopK(event.target.value)} className="field" />
-          </Field>
-          <Field label="Fast Search 节点数" hint="Fast Search 模式下召回的正文节点数。推荐 3，最大 10；每个节点可能对应一整个章节正文。">
-            <input
-              type="number"
-              min="1"
-              max={FAST_SEARCH_TOP_K_MAX}
-              value={effectiveFastSearchTopK}
-              onChange={(event) => markDraftEdited(setFastSearchTopK)(normalizeFastSearchTopK(event.target.value))}
-              className="field"
-            />
-          </Field>
-          <Field
-            label="段落选择方式"
-            hint="模型引导模式会先让模型选择目录段落；关键词回退模式会跳过这一步，直接按标题做词法匹配。"
-          >
-            <select value={effectiveSelectionMode} onChange={(event) => setSelectionMode(event.target.value)} className="field">
-              {SELECTION_MODE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="回答上下文最大 PDF 页数" hint="可选。限制最终回答阶段最多带入多少页 PDF 内容。">
-            <input type="number" min="1" value={effectiveMaxContextPages} onChange={(event) => setMaxContextPages(event.target.value)} className="field" placeholder="可选" />
-          </Field>
-          <Field label="回答上下文最大摘录 Token 数" hint={`可选。留空表示不设上限；如需限制，推荐 ${RECOMMENDED_CONTEXT_TOKEN_BUDGET}。`}>
-            <input type="number" min="1" value={effectiveMaxContextTokens} onChange={(event) => setMaxContextTokens(event.target.value)} className="field" placeholder={`可选，推荐 ${RECOMMENDED_CONTEXT_TOKEN_BUDGET}`} />
-          </Field>
-          <Field
-            label="Rerank 模式"
-            hint={
-              draftResolvedProvider?.capabilities?.rerank_models?.length
-                ? `当前 Provider 可用的 rerank 模型：${draftResolvedProvider.capabilities.rerank_models.join(', ')}`
-                : 'Auto 会优先使用可用的 rerank；如果系统未配置可用 rerank，则回退为原始检索顺序。'
-            }
-          >
-            <select value={effectiveRerankMode} onChange={(event) => setRerankMode(event.target.value)} className="field">
-              <option value="auto">自动</option>
-              <option value="off">关闭</option>
-              <option value="provider">Provider 重排</option>
-              <option value="system">系统重排</option>
-            </select>
-          </Field>
-        </div>
+      <div className="grid gap-2">
+        <button type="button" className="btn-primary justify-center" onClick={() => setConfigDrawerOpen(true)}>
+          <SlidersHorizontal size={16} />
+          <span>配置 Skill</span>
+        </button>
+        <button type="button" className="btn-secondary justify-center" onClick={() => setRuntimeDrawerOpen(true)}>
+          <Gauge size={16} />
+          <span>运行详情</span>
+        </button>
       </div>
-
-      <Field label="回答温度" hint="0 最稳定。后端接受 0 到 2 之间的数值。">
-        <input type="number" min="0" step="0.1" value={effectiveTemperature} onChange={(event) => setTemperature(event.target.value)} className="field" />
-      </Field>
     </div>
   );
 
@@ -1358,12 +1699,12 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
             className="btn-secondary"
             onClick={() => (
               isCompactLayout
-                ? setInspectorDrawerOpen(true)
+                ? setConfigDrawerOpen(true)
                 : updateLayoutState({ inspectorOpen: !layoutState.inspectorOpen })
             )}
           >
             {isCompactLayout || !layoutState.inspectorOpen ? <PanelRightOpen size={16} /> : <PanelRightClose size={16} />}
-            <span>设置</span>
+            <span>配置</span>
           </button>
           <button type="button" className="icon-button" onClick={() => setActionsOpen(true)} aria-label="打开 Skill 操作">
             <MoreHorizontal size={16} />
@@ -1484,15 +1825,15 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
                     </button>
                   ) : (
                     <div className="flex flex-col gap-2 self-end max-md:self-stretch">
-                      {isConfigDirty && searchMode === 'deep_research' && (
+                      {isConfigDirty && (
                         <button
                           type="button"
                           className="btn-secondary"
-                          onClick={() => handleRun(true)}
+                          onClick={() => setUseDraftForNextRun(true)}
                           disabled={!question.trim() || isStreaming || draftModelMismatch}
                         >
                           <Bot size={16} />
-                          <span>用草稿测试</span>
+                          <span>本次草稿</span>
                         </button>
                       )}
                       <button
@@ -1505,7 +1846,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
                         }
                       >
                         <Send size={16} />
-                        <span>{isConfigDirty ? '发送（已保存配置）' : '发送'}</span>
+                        <span>{useDraftForNextRun ? '发送（本次草稿）' : '发送'}</span>
                       </button>
                     </div>
                   )}
@@ -1519,20 +1860,10 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
           layoutState.inspectorOpen ? (
             <GlassPanel
               className="skill-console-rail skill-console-rail-right"
-              title="设置"
-              subtitle="已保存默认配置和运行数据分开查看。"
-              actions={(
-                <SegmentedControl
-                  value={layoutState.inspectorTab}
-                  onChange={(value) => updateLayoutState({ inspectorTab: value as SkillConsoleLayoutState['inspectorTab'] })}
-                  items={[
-                    { value: 'settings', label: '设置' },
-                    { value: 'runtime', label: '运行' },
-                  ]}
-                />
-              )}
+              title="配置摘要"
+              subtitle="完整配置在抽屉中编辑，运行详情单独查看。"
             >
-              {layoutState.inspectorTab === 'settings' ? settingsTabContent : runtimeTabContent}
+              {summaryPanelContent}
             </GlassPanel>
           ) : (
             <div className="skill-console-rail skill-console-rail-right skill-console-rail-collapsed">
@@ -1547,7 +1878,7 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
                 </div>
                 <div className="space-y-4">
                   <p className="skill-console-rail-label">设置</p>
-                  <p className="text-xs font-medium text-slate-500">{layoutState.inspectorTab === 'settings' ? '已保存配置' : '运行数据'}</p>
+                  <p className="text-xs font-medium text-slate-500">配置摘要</p>
                 </div>
                 <PanelRightOpen size={18} className="text-slate-400" />
               </button>
@@ -1568,24 +1899,25 @@ const SkillChatConsole: React.FC<SkillChatConsoleProps> = ({ skillId, skill, doc
       </ExpertDrawer>
 
       <ExpertDrawer
-        open={isCompactLayout && inspectorDrawerOpen}
-        onClose={() => setInspectorDrawerOpen(false)}
+        open={configDrawerOpen}
+        onClose={() => setConfigDrawerOpen(false)}
         side="right"
-        widthClassName="w-[560px]"
-        title="设置"
-        description="已保存默认配置和运行数据分开查看。"
+        widthClassName="w-[920px] max-w-[calc(100vw-3rem)]"
+        title="配置 Skill"
+        description="保存默认配置，或把当前草稿仅用于下一次运行。"
       >
-        <div className="space-y-4">
-          <SegmentedControl
-            value={layoutState.inspectorTab}
-            onChange={(value) => updateLayoutState({ inspectorTab: value as SkillConsoleLayoutState['inspectorTab'] })}
-            items={[
-              { value: 'settings', label: '设置' },
-              { value: 'runtime', label: '运行' },
-            ]}
-          />
-          {layoutState.inspectorTab === 'settings' ? settingsTabContent : runtimeTabContent}
-        </div>
+        {skillConfigDrawerContent}
+      </ExpertDrawer>
+
+      <ExpertDrawer
+        open={runtimeDrawerOpen}
+        onClose={() => setRuntimeDrawerOpen(false)}
+        side="right"
+        widthClassName="w-[760px] max-w-[calc(100vw-3rem)]"
+        title="运行详情"
+        description="检索、生成和 Provider 首 token 指标分开查看。"
+      >
+        {runtimeTabContent}
       </ExpertDrawer>
 
       {actionsOpen && (

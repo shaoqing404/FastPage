@@ -279,7 +279,7 @@ class TestSkillStreamRuntimeContract(unittest.TestCase):
         )
         self.assertFalse(execution_context["retrieval"]["diagnostics"]["rerank"]["meta"]["applied"])
 
-    def _create_fast_run_session(self, run_id: str):
+    def _create_fast_run_session(self, run_id: str, generation_config: dict | None = None):
         engine = create_engine(
             "sqlite://",
             connect_args={"check_same_thread": False},
@@ -367,7 +367,7 @@ class TestSkillStreamRuntimeContract(unittest.TestCase):
                     request_config_json="{}",
                     conversation_config_json=json.dumps({}),
                     retrieval_config_json=json.dumps({"retrieval_mode": "fast", "node_top_k": 5}),
-                    generation_config_json=json.dumps({"temperature": 0}),
+                    generation_config_json=json.dumps(generation_config if generation_config is not None else {"temperature": 0}),
                     selected_sections_json="[]",
                     citations_json="[]",
                     execution_context_json="{}",
@@ -457,10 +457,13 @@ class TestSkillStreamRuntimeContract(unittest.TestCase):
         publish_side_effect=None,
         interval_side_effect=None,
         enable_litellm: bool = False,
+        generation_config: dict | None = None,
+        return_direct_calls: bool = False,
     ):
-        SessionLocal = self._create_fast_run_session(run_id)
+        SessionLocal = self._create_fast_run_session(run_id, generation_config=generation_config)
         events: list[tuple[str, dict]] = []
         observations: list[dict] = []
+        direct_calls: list[dict] = []
 
         async def record_observation(run, *, event_type: str, step=None, status_value=None, payload=None):
             observations.append(
@@ -517,8 +520,12 @@ class TestSkillStreamRuntimeContract(unittest.TestCase):
                 stack.enter_context(patch("app.services.chat_service.DirectChatAdapter.completion_stream", side_effect=AssertionError("Direct chat should be disabled when ENABLE_LITELLM=true")))
                 stack.enter_context(patch("app.services.chat_service.litellm.completion", return_value=chunks))
             else:
+                def direct_completion_stream(messages, **kwargs):
+                    direct_calls.append({"messages": messages, "kwargs": kwargs})
+                    return chunks
+
                 stack.enter_context(patch("app.services.chat_service.litellm.completion", side_effect=AssertionError("LiteLLM should be disabled by default")))
-                stack.enter_context(patch("app.services.chat_service.DirectChatAdapter.completion_stream", return_value=chunks))
+                stack.enter_context(patch("app.services.chat_service.DirectChatAdapter.completion_stream", side_effect=direct_completion_stream))
             if interval_side_effect:
                 stack.enter_context(patch("app.services.chat_service._chat_stream_interval_seconds", side_effect=interval_side_effect))
 
@@ -533,6 +540,8 @@ class TestSkillStreamRuntimeContract(unittest.TestCase):
                 cancel_requested=stored.cancel_requested,
                 metrics=json.loads(stored.metrics_json),
             )
+        if return_direct_calls:
+            return snapshot, events, observations, direct_calls
         return snapshot, events, observations
 
     def test_final_answer_stream_throttles_heartbeat_for_many_deltas(self):
@@ -556,6 +565,39 @@ class TestSkillStreamRuntimeContract(unittest.TestCase):
 
         self.assertEqual(snapshot.status, "completed")
         self.assertEqual(len([event for event, _data in events if event == "answer_delta"]), 2)
+
+    def test_generation_config_unknown_fields_reach_direct_without_runtime_fields(self):
+        snapshot, _events, _observations, direct_calls = self._run_fast_case(
+            run_id="run_generation_config_contract",
+            chunks=self._delta_chunks(1),
+            generation_config={
+                "temperature": 0.2,
+                "enable_thinking": False,
+                "thinking_budget": 0,
+                "vendor_flag": "x",
+                "stream_options": {"include_usage": True},
+                "api_key": "blocked-key",
+                "api_base": "https://blocked.example/v1",
+                "base_url": "https://blocked.example/base",
+                "extra_headers": {"Authorization": "Bearer blocked"},
+                "model": "blocked-model",
+                "messages": [{"role": "user", "content": "blocked"}],
+                "stream": False,
+            },
+            return_direct_calls=True,
+        )
+
+        self.assertEqual(snapshot.status, "completed")
+        self.assertEqual(len(direct_calls), 1)
+        kwargs = direct_calls[0]["kwargs"]
+        self.assertEqual(kwargs["temperature"], 0.2)
+        self.assertEqual(kwargs["vendor_flag"], "x")
+        self.assertEqual(kwargs["enable_thinking"], False)
+        self.assertEqual(kwargs["thinking_budget"], 0)
+        self.assertEqual(kwargs["stream_options"], {"include_usage": True})
+        for reserved in ("api_key", "api_base", "base_url", "extra_headers", "model", "messages", "stream"):
+            self.assertNotIn(reserved, kwargs)
+        self.assertEqual(direct_calls[0]["messages"][0]["role"], "user")
 
     def test_final_answer_stream_does_not_observe_every_delta(self):
         snapshot, _events, observations = self._run_fast_case(
