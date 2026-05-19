@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-EXPORT_DIR="${1:?Usage: pageindex_import.sh /path/to/pageindex-export /path/to/PageIndex-Service}"
-TARGET_DIR="${2:?Usage: pageindex_import.sh /path/to/pageindex-export /path/to/PageIndex-Service}"
+EXPORT_DIR="${1:?用法：pageindex_import.sh /path/to/pageindex-export /path/to/PageIndex-Service}"
+TARGET_DIR="${2:?用法：pageindex_import.sh /path/to/pageindex-export /path/to/PageIndex-Service}"
 COMPOSE_FILE="${TARGET_DIR}/docker/docker-compose.yml"
 ENV_FILE="${TARGET_DIR}/docker/.env"
 PROJECT_NAME="${PAGEINDEX_COMPOSE_PROJECT_NAME:-docker}"
@@ -13,38 +13,38 @@ case "${DATA_POLICY}" in
   keep-existing|skip-data|overwrite)
     ;;
   *)
-    echo "Unsupported PAGEINDEX_IMPORT_DATA_POLICY=${DATA_POLICY}. Use keep-existing, skip-data, or overwrite." >&2
+    echo "不支持 PAGEINDEX_IMPORT_DATA_POLICY=${DATA_POLICY}。请使用 keep-existing、skip-data 或 overwrite。" >&2
     exit 1
     ;;
 esac
 
 if [ "${DATA_POLICY}" = "overwrite" ] && [ "${OVERWRITE_CONFIRM}" != "overwrite" ]; then
   cat >&2 <<'EOF'
-PAGEINDEX_IMPORT_DATA_POLICY=overwrite is destructive.
-Set PAGEINDEX_IMPORT_CONFIRM=overwrite to confirm that target MySQL and MinIO data may be replaced.
+PAGEINDEX_IMPORT_DATA_POLICY=overwrite 是破坏性操作。
+如确认允许替换目标 MySQL 和 MinIO 数据，请额外设置 PAGEINDEX_IMPORT_CONFIRM=overwrite。
 EOF
   exit 1
 fi
 
 if [ ! -f "${COMPOSE_FILE}" ]; then
-  echo "Missing compose file at ${COMPOSE_FILE}" >&2
+  echo "缺少 compose 文件：${COMPOSE_FILE}" >&2
   exit 1
 fi
 
 if [ ! -f "${ENV_FILE}" ]; then
-  echo "Missing ${ENV_FILE}. Copy docker/.env.example to docker/.env and configure it first." >&2
+  echo "缺少 ${ENV_FILE}。请先从 docker/.env.example 复制并配置 docker/.env。" >&2
   exit 1
 fi
 
 if [ -f "${EXPORT_DIR}/images/pageindex-images.tar" ]; then
-  echo "Loading Docker images"
+  echo "正在加载 Docker 镜像"
   docker load -i "${EXPORT_DIR}/images/pageindex-images.tar"
 fi
 
-echo "Starting infrastructure"
+echo "正在启动基础组件：MySQL / Redis / MinIO / Elasticsearch"
 docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile full up -d mysql redis minio elasticsearch
 
-echo "Waiting for infrastructure health"
+echo "正在等待基础组件健康"
 for _ in $(seq 1 60); do
   unhealthy="$(docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile full ps --format json \
     | grep -E '"(mysql|redis|minio|elasticsearch)"' \
@@ -55,7 +55,7 @@ for _ in $(seq 1 60); do
   sleep 3
 done
 
-echo "Data import policy: ${DATA_POLICY}"
+echo "数据导入策略：${DATA_POLICY}"
 
 mysql_table_count() {
   docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile full exec -T mysql \
@@ -67,16 +67,16 @@ if [ -s "${EXPORT_DIR}/data/mysql/pageindex_dump.sql" ]; then
   table_count="$(mysql_table_count || echo 0)"
   table_count="${table_count:-0}"
   if [ "${DATA_POLICY}" = "skip-data" ]; then
-    echo "Skipping MySQL import because PAGEINDEX_IMPORT_DATA_POLICY=skip-data"
+    echo "跳过 MySQL 导入：PAGEINDEX_IMPORT_DATA_POLICY=skip-data"
   elif [ "${DATA_POLICY}" = "keep-existing" ] && [ "${table_count}" != "0" ]; then
-    echo "Skipping MySQL import because target database already has ${table_count} table(s). Target data is authoritative."
+    echo "跳过 MySQL 导入：目标数据库已有 ${table_count} 张表，按默认策略以目标已有数据为准。"
   else
     if [ "${DATA_POLICY}" = "overwrite" ]; then
-      echo "Resetting target MySQL database before import"
+      echo "正在重置目标 MySQL 数据库后再导入"
       docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile full exec -T mysql \
-        sh -c 'case "${MYSQL_DATABASE}:${MYSQL_USER}" in (*[!A-Za-z0-9_:]*|:*|*:) echo "Unsafe MYSQL_DATABASE or MYSQL_USER" >&2; exit 1;; esac; MYSQL_PWD="${MYSQL_ROOT_PASSWORD}" mysql -uroot -e "DROP DATABASE IF EXISTS ${MYSQL_DATABASE}; CREATE DATABASE ${MYSQL_DATABASE} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; GRANT ALL PRIVILEGES ON ${MYSQL_DATABASE}.* TO '\''${MYSQL_USER}'\''@'\''%'\''; FLUSH PRIVILEGES;"'
+        sh -c 'case "${MYSQL_DATABASE}:${MYSQL_USER}" in (*[!A-Za-z0-9_:]*|:*|*:) echo "MYSQL_DATABASE 或 MYSQL_USER 包含不安全字符" >&2; exit 1;; esac; MYSQL_PWD="${MYSQL_ROOT_PASSWORD}" mysql -uroot -e "DROP DATABASE IF EXISTS ${MYSQL_DATABASE}; CREATE DATABASE ${MYSQL_DATABASE} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; GRANT ALL PRIVILEGES ON ${MYSQL_DATABASE}.* TO '\''${MYSQL_USER}'\''@'\''%'\''; FLUSH PRIVILEGES;"'
     fi
-    echo "Importing MySQL dump"
+    echo "正在导入 MySQL dump"
     docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile full exec -T mysql \
       sh -c 'MYSQL_PWD="${MYSQL_PASSWORD}" mysql -u"${MYSQL_USER}" "${MYSQL_DATABASE}"' \
       < "${EXPORT_DIR}/data/mysql/pageindex_dump.sql"
@@ -85,9 +85,9 @@ fi
 
 if [ -d "${EXPORT_DIR}/data/minio" ]; then
   if [ "${DATA_POLICY}" = "skip-data" ]; then
-    echo "Skipping MinIO import because PAGEINDEX_IMPORT_DATA_POLICY=skip-data"
+    echo "跳过 MinIO 导入：PAGEINDEX_IMPORT_DATA_POLICY=skip-data"
   else
-    echo "Checking target MinIO bucket"
+    echo "正在检查目标 MinIO bucket"
     minio_has_objects="$(
       docker run --rm \
         --network "${PROJECT_NAME}_default" \
@@ -98,9 +98,9 @@ if [ -d "${EXPORT_DIR}/data/minio" ]; then
       2>/dev/null || echo unknown
     )"
     if [ "${DATA_POLICY}" = "keep-existing" ] && [ "${minio_has_objects}" = "yes" ]; then
-      echo "Skipping MinIO import because target bucket already has objects. Target data is authoritative."
+      echo "跳过 MinIO 导入：目标 bucket 已有对象，按默认策略以目标已有数据为准。"
     else
-      echo "Importing MinIO bucket"
+      echo "正在导入 MinIO bucket"
       docker run --rm \
         --network "${PROJECT_NAME}_default" \
         --env-file "${ENV_FILE}" \
@@ -108,21 +108,21 @@ if [ -d "${EXPORT_DIR}/data/minio" ]; then
         --entrypoint /bin/sh \
         minio/mc:latest \
         -c 'mc alias set pageindex http://minio:9000 "${MINIO_ACCESS_KEY}" "${MINIO_SECRET_KEY}" >/dev/null && mc mb --ignore-existing "pageindex/${MINIO_BUCKET}" >/dev/null && if [ "'"${DATA_POLICY}"'" = "overwrite" ]; then mc rm --recursive --force "pageindex/${MINIO_BUCKET}" || true; fi && mc mirror --overwrite /import "pageindex/${MINIO_BUCKET}"' \
-        || echo "MinIO import skipped or incomplete; check bucket/service status." >&2
+        || echo "MinIO 导入被跳过或不完整；请检查 bucket 或服务状态。" >&2
     fi
   fi
 fi
 
-echo "Starting API and frontend"
+echo "正在启动 API 和前端"
 docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile full up -d api frontend
 
-echo "Checking API health"
+echo "正在检查 API 健康状态"
 curl -fsS "http://127.0.0.1:${API_PORT:-22223}/healthz" >/dev/null
 
 cat <<'DONE'
-Import complete.
+导入完成。
 
-Elasticsearch settings/mappings/document snapshots are kept under data/elasticsearch.
-Current restore helper does not replay them automatically; prefer application rebuild flows for ES-backed indexes.
-Redis is intentionally not imported. It is treated as queue/cache runtime state.
+Elasticsearch 的 settings/mapping/文档快照保留在 data/elasticsearch 下。
+当前恢复脚本不会自动 replay Elasticsearch；ES 索引建议通过应用流程重建。
+Redis 不会被导入，它被视为队列/缓存运行态。
 DONE
