@@ -56,6 +56,7 @@ images=(
   "mysql:8.4"
   "redis:7-alpine"
   "minio/minio:RELEASE.2025-02-28T09-55-16Z"
+  "minio/mc:latest"
   "elasticsearch:8.19.15"
 )
 existing_images=()
@@ -105,7 +106,7 @@ cat > "${EXPORT_DIR}/docs/DEPLOY-GUIDE.md" <<'GUIDE'
 ## 目录内容
 
 - `code/PageIndex-Service`：代码快照，不包含 `.git`、虚拟环境、node modules、specs 或私有 env 文件。
-- `images/pageindex-images.tar`：本机架构 Docker 镜像归档。
+- `images/pageindex-images.tar`：本机架构 Docker 镜像归档，包含 API、前端、MySQL、Redis、MinIO、MinIO Client、Elasticsearch。
 - `images/pageindex-images-amd64.tar`：amd64/x86_64 架构分发镜像包，如果已构建。
 - `images/pageindex-images-arm64.tar`：arm64/aarch64 架构分发镜像包，如果已构建。
 - `data/mysql/pageindex_dump.sql`：MySQL 数据库 dump。
@@ -288,6 +289,8 @@ bash scripts/pageindex_import.sh "$(pwd)" "$(pwd)/code/PageIndex-Service"
 4. 将 `pageindex-service-frontend:<arch>` retag 为 `pageindex-service-frontend:local`。
 5. 使用 `--no-build` 启动基础组件、API 和前端。
 6. 按 `PAGEINDEX_IMPORT_DATA_POLICY` 恢复数据。
+
+如果目标机报 `Unable to find image 'minio/mc:latest' locally`，说明导出包里的镜像 tar 不是最新的，或目标机还没有执行 `docker load`。请重新分发最新完整导出包，或至少补传并加载包含 `minio/mc:latest` 的 `images/pageindex-images-<arch>.tar`。
 
 ## 数据冲突策略
 

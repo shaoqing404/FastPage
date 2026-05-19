@@ -117,6 +117,10 @@ if [ -d "${EXPORT_DIR}/data/minio" ]; then
   if [ "${DATA_POLICY}" = "skip-data" ]; then
     echo "跳过 MinIO 导入：PAGEINDEX_IMPORT_DATA_POLICY=skip-data"
   else
+    if ! docker image inspect minio/mc:latest >/dev/null 2>&1; then
+      echo "缺少离线镜像 minio/mc:latest，无法检查或恢复 MinIO。请加载最新的 pageindex-images-${IMAGE_ARCH}.tar，或单独加载 minio/mc:latest。" >&2
+      exit 1
+    fi
     echo "正在检查目标 MinIO bucket"
     minio_has_objects="$(
       docker run --rm \
