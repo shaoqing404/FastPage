@@ -371,15 +371,52 @@ PageIndex-Service 导出包生成时间：$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 Redis 不包含在导出中。
 Elasticsearch 只包含尽力而为的元数据/查询快照，不会自动 replay。
 
+重要原则：
+  1. pageindex-export 整个目录才是完整迁移单元，不要只传 code/PageIndex-Service。
+  2. 目标服务器可能是 amd64/x86_64，也可能是 arm64/aarch64；导入脚本会自动选择镜像包。
+  3. 目标内网机器不要构建镜像；导入脚本会 docker load 并使用 --no-build。
+  4. 默认以目标已有数据为准：MySQL 已有表则不导入，MinIO 已有对象则不导入。
+
 先看这里：
   ${EXPORT_DIR}/docs/DEPLOY-GUIDE.md
   ${EXPORT_DIR}/docs/MIGRATION-RUNBOOK.md
 
-恢复脚本：
-  bash ${EXPORT_DIR}/scripts/pageindex_import.sh ${EXPORT_DIR} ${EXPORT_DIR}/code/PageIndex-Service
-
-内网分发脚本：
+分发到任意内网机器：
   bash ${EXPORT_DIR}/scripts/pageindex_transfer.sh ${EXPORT_DIR} user@host:/data/pageindex-export
+
+等价手动分发：
+  rsync -az --delete --info=progress2 -e "ssh -o StrictHostKeyChecking=accept-new" \\
+    ${EXPORT_DIR}/ user@host:/data/pageindex-export/
+
+目标服务器首次恢复：
+  cd /data/pageindex-export
+  cp -n code/PageIndex-Service/docker/.env.example code/PageIndex-Service/docker/.env
+  vim code/PageIndex-Service/docker/.env
+  bash scripts/pageindex_import.sh "\$(pwd)" "\$(pwd)/code/PageIndex-Service"
+
+目标服务器只需拉起已存在数据时：
+  cd /data/pageindex-export
+  PAGEINDEX_IMPORT_DATA_POLICY=skip-data \\
+    bash scripts/pageindex_import.sh "\$(pwd)" "\$(pwd)/code/PageIndex-Service"
+
+如果目标服务器已经只传了 code 且基础组件已经起来，需要先补传完整导出包的 images/scripts/docs。
+拿到 images 后，可在目标机执行：
+  cd /data/pageindex-export
+  arch="\$(uname -m)"
+  case "\$arch" in
+    x86_64|amd64) image_arch=amd64 ;;
+    aarch64|arm64) image_arch=arm64 ;;
+    *) image_arch=local ;;
+  esac
+  docker load -i "images/pageindex-images-\${image_arch}.tar"
+  docker tag "pageindex-service-api:\${image_arch}" pageindex-service-api:local
+  docker tag "pageindex-service-frontend:\${image_arch}" pageindex-service-frontend:local
+  cd code/PageIndex-Service
+  docker compose --env-file docker/.env -f docker/docker-compose.yml --profile full up -d --no-build api frontend
+
+禁止动作：
+  不要在目标内网机器直接执行 docker compose up -d api frontend。
+  如果缺少 :local 镜像，这会触发内网构建并访问 Docker Hub/npm/pypi。
 
 默认恢复策略：
   PAGEINDEX_IMPORT_DATA_POLICY=keep-existing
