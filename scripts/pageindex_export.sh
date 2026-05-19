@@ -34,6 +34,8 @@ rsync -a --delete \
   --exclude "specs/" \
   --exclude ".tmp_*" \
   --exclude ".tmp_*/" \
+  --include ".env.example" \
+  --include "docker/.env.example" \
   --exclude ".env" \
   --exclude ".env.*" \
   --exclude "docker/.env" \
