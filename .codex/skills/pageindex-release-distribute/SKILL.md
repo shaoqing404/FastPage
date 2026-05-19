@@ -89,12 +89,22 @@ find /Users/mac/Desktop/pageindex-export/code/PageIndex-Service \
 7. 可选内网分发：
 
 - 只有用户明确要求，或对必问问题回答“需要”时才执行。
-- 仅代码分发优先使用 `rsync -az --delete`。
-- 完整导出包分发前，先确认磁盘和网络预算足够。
+- 默认分发完整导出包，而不是只分发 `code/PageIndex-Service`。只分发代码不能满足离线/内网实例化部署。
+- 分发前确认目标 host、账号、目录、机器架构是否未知、是否要带数据、是否需要屏蔽客户限定词。
+- 完整导出包分发前，确认磁盘和网络预算足够；导出包通常包含镜像 tar 和数据。
+- 优先使用导出包自带脚本：
+
+```bash
+bash /Users/mac/Desktop/pageindex-export/scripts/pageindex_transfer.sh \
+  /Users/mac/Desktop/pageindex-export \
+  user@host:/data/pageindex-export
+```
+
+- 告知目标服务器 AI PM：目标机应在完整导出包根目录执行 `bash scripts/pageindex_import.sh "$(pwd)" "$(pwd)/code/PageIndex-Service"`。导入脚本会按目标架构加载 amd64/arm64 镜像、retag 成 `:local`，并使用 `--no-build`，避免内网机器构建镜像。
 - 告知目标服务器 AI PM：导入默认是 `PAGEINDEX_IMPORT_DATA_POLICY=keep-existing`，目标已有 MySQL/MinIO 数据优先，Redis 不导入，ES 快照不自动 replay。
 - 传输后验证远端目标路径。
 
-示例：
+仅代码分发只用于已经确认目标机有正确镜像和数据时：
 
 ```bash
 rsync -az --delete -e "ssh -o StrictHostKeyChecking=accept-new" \

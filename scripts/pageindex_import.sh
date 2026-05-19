@@ -8,6 +8,7 @@ ENV_FILE="${TARGET_DIR}/docker/.env"
 PROJECT_NAME="${PAGEINDEX_COMPOSE_PROJECT_NAME:-docker}"
 DATA_POLICY="${PAGEINDEX_IMPORT_DATA_POLICY:-keep-existing}"
 OVERWRITE_CONFIRM="${PAGEINDEX_IMPORT_CONFIRM:-}"
+IMAGE_ARCH="${PAGEINDEX_IMPORT_IMAGE_ARCH:-}"
 
 case "${DATA_POLICY}" in
   keep-existing|skip-data|overwrite)
@@ -36,13 +37,42 @@ if [ ! -f "${ENV_FILE}" ]; then
   exit 1
 fi
 
-if [ -f "${EXPORT_DIR}/images/pageindex-images.tar" ]; then
-  echo "正在加载 Docker 镜像"
-  docker load -i "${EXPORT_DIR}/images/pageindex-images.tar"
+if [ -z "${IMAGE_ARCH}" ]; then
+  case "$(uname -m)" in
+    x86_64|amd64)
+      IMAGE_ARCH="amd64"
+      ;;
+    aarch64|arm64)
+      IMAGE_ARCH="arm64"
+      ;;
+    *)
+      IMAGE_ARCH="local"
+      ;;
+  esac
+fi
+
+image_tar=""
+if [ -f "${EXPORT_DIR}/images/pageindex-images-${IMAGE_ARCH}.tar" ]; then
+  image_tar="${EXPORT_DIR}/images/pageindex-images-${IMAGE_ARCH}.tar"
+elif [ -f "${EXPORT_DIR}/images/pageindex-images.tar" ]; then
+  image_tar="${EXPORT_DIR}/images/pageindex-images.tar"
+fi
+
+if [ -n "${image_tar}" ]; then
+  echo "正在加载 Docker 镜像：${image_tar}"
+  docker load -i "${image_tar}"
+  if docker image inspect "pageindex-service-api:${IMAGE_ARCH}" >/dev/null 2>&1; then
+    docker tag "pageindex-service-api:${IMAGE_ARCH}" pageindex-service-api:local
+  fi
+  if docker image inspect "pageindex-service-frontend:${IMAGE_ARCH}" >/dev/null 2>&1; then
+    docker tag "pageindex-service-frontend:${IMAGE_ARCH}" pageindex-service-frontend:local
+  fi
+else
+  echo "未找到离线镜像包。请确认 images/pageindex-images-${IMAGE_ARCH}.tar 或 images/pageindex-images.tar 存在。" >&2
 fi
 
 echo "正在启动基础组件：MySQL / Redis / MinIO / Elasticsearch"
-docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile full up -d mysql redis minio elasticsearch
+docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile full up -d --no-build mysql redis minio elasticsearch
 
 echo "正在等待基础组件健康"
 for _ in $(seq 1 60); do
@@ -114,7 +144,7 @@ if [ -d "${EXPORT_DIR}/data/minio" ]; then
 fi
 
 echo "正在启动 API 和前端"
-docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile full up -d api frontend
+docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" --profile full up -d --no-build api frontend
 
 echo "正在检查 API 健康状态"
 curl -fsS "http://127.0.0.1:${API_PORT:-22223}/healthz" >/dev/null
